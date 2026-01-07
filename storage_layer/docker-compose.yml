@@ -1,0 +1,113 @@
+services:
+  # tigergraph:
+  #   image: tigergraph/tigergraph:latest
+  #   container_name: tigergraph
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9000:9000" # REST++ / GSQL Web UI
+  #     - "14240:14240" # GraphStudio
+  #   volumes:
+  #     - tg_data:/tigergraph
+  #     - ./init.sh:/docker-entrypoint-initdb.d/init.sh
+  #     - ./schema.gsql:/schema.gsql
+  #     - ./load.gsql:/load.gsql
+  #     - ./data:/data
+  #   environment:
+  #     - USERNAME=tigergraph
+  #     - PASSWORD=tigergraph
+
+  myapp:
+    image: alpine:3
+    depends_on:
+      janusgraph:
+        condition: service_healthy
+      # arangodb:
+      #  condition: service_healthy
+
+  cassandra:
+    image: cassandra:4.1
+    container_name: cassandra
+    environment:
+      - HEAP_NEWSIZE=128M
+      - MAX_HEAP_SIZE=512M
+    ports:
+      - "9042:9042"
+    healthcheck:
+      test: ["CMD-SHELL", "nodetool status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  janusgraph:
+    image: janusgraph/janusgraph:1.0
+    container_name: janusgraph
+    depends_on:
+      cassandra:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    ports:
+      - "8182:8182"
+    environment:
+      JANUSGRAPH_STORAGE_BACKEND: cassandra
+      JANUSGRAPH_STORAGE_HOSTNAME: cassandra
+      JANUSGRAPH_INDEX_SEARCH_BACKEND: elasticsearch
+      JANUSGRAPH_INDEX_SEARCH_HOSTNAME: elasticsearch
+    volumes:
+      #- ./janusgraph-server.yaml:/opt/janusgraph/conf/janusgraph-server.yaml
+      - ./janusgraph-server.yaml:/etc/opt/janusgraph/janusgraph-server.yaml
+    # environment:
+    #   JANUSGRAPH_SERVER_CONFIG: /opt/janusgraph/conf/janusgraph-server.yaml
+    restart: always
+    healthcheck:
+      test: >
+        curl -sf -X POST http://localhost:8182/gremlin
+        -H "Content-Type: application/json"
+        -d '{"gremlin":"g.V().limit(1)"}' > /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  arangodb:
+    image: arangodb:latest
+    container_name: arangodb
+    environment:
+      ARANGO_ROOT_PASSWORD: rootpassword
+    ports:
+      - 8529:8529
+    volumes:
+      - arangodb_data_container:/var/lib/arangodb3
+      - arangodb_apps_data_container:/var/lib/arangodb3-apps
+    # healthcheck:
+    #   test:
+    #     [
+    #       "CMD",
+    #       "sh",
+    #       "-c",
+    #       'arangosh --server.endpoint tcp://agency1:8531 --server.authentication true --server.username root --server.password rootpassword --javascript.execute ''db._query("RETURN 1").toArray()''',
+    #     ]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 30 # allow up to ~5 minutes
+    #   start_period: 40s # give it warm-up ti
+
+volumes:
+  #janusgraph-default-data:
+  tg_data:
+  arangodb_data_container:
+  arangodb_apps_data_container:
