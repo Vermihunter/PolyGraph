@@ -1,3 +1,6 @@
+#ifndef DB_CURL_UTIL_HPP
+#define DB_CURL_UTIL_HPP
+
 #include <curl/curl.h>
 #include "json.hpp"
 
@@ -34,3 +37,5 @@ inline std::string http_post(const std::string& url, const std::string& body,
     }
     return response;
 }
+
+#endif // DB_CURL_UTIL_HPP

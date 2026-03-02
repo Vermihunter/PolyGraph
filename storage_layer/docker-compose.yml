@@ -1,21 +1,4 @@
 services:
-  # tigergraph:
-  #   image: tigergraph/tigergraph:latest
-  #   container_name: tigergraph
-  #   restart: unless-stopped
-  #   ports:
-  #     - "9000:9000" # REST++ / GSQL Web UI
-  #     - "14240:14240" # GraphStudio
-  #   volumes:
-  #     - tg_data:/tigergraph
-  #     - ./init.sh:/docker-entrypoint-initdb.d/init.sh
-  #     - ./schema.gsql:/schema.gsql
-  #     - ./load.gsql:/load.gsql
-  #     - ./data:/data
-  #   environment:
-  #     - USERNAME=tigergraph
-  #     - PASSWORD=tigergraph
-
   myapp:
     image: alpine:3
     depends_on:

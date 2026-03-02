@@ -4,15 +4,20 @@
 #include <string>
 #include <memory>
 
+#include <query/QueryResult.hpp>
+#include <query/Query.hpp>
+
 class IDatabase {
 
 public:
-    virtual std::string evaluate(const std::string& query) = 0;
+    virtual QueryResult evaluate(const Query& query) = 0;
 };
 
+typedef std::unique_ptr<IDatabase> database_t;
 
-extern "C" {
-    typedef std::unique_ptr<IDatabase> (*create_database_t)();
-}
+
+// extern "C" {
+//     typedef database_t (*create_database_t)();
+// }
 
 #endif // IDATABASE_HPP

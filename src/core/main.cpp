@@ -4,8 +4,12 @@
 #include <termios.h>
 #include <vector>
 #include <curl/curl.h>
-#include "../../include/data_access/IDatabase.hpp"
+#include <unordered_map>
 
+#include <engine/Engine.hpp>
+#include <data_access/IDatabase.hpp>
+#include <data_access/adapters/JanusGraph/janus.hpp>
+#include <data_access/adapters/ArangoDB/arango.hpp>
 
 // ===== util: put terminal into raw mode so keypress works instantly =====
 struct TerminalRawMode {
@@ -19,52 +23,19 @@ struct TerminalRawMode {
     ~TerminalRawMode() { tcsetattr(STDIN_FILENO, TCSANOW, &orig); }
 };
 
-// ===== helper to load a plugin and create a Shape =====
-struct Plugin {
-    void* handle = nullptr;
-    create_database_t create = nullptr;
-    std::unique_ptr<IDatabase> instance = nullptr;
-
-    bool load(const std::string& path) {
-        unload(); // ensure clean state
-
-        handle = dlopen(path.c_str(), RTLD_LAZY);
-        if (!handle) {
-            std::cerr << "dlopen failed: " << dlerror() << "\n";
-            return false;
-        }
-
-        create = (create_database_t)dlsym(handle, "create_database");
-
-        if (!create) {
-            std::cerr << "Failed loading factory functions\n";
-            dlclose(handle);
-            handle = nullptr;
-            return false;
-        }
-
-        instance = create();
-        return true;
-    }
-
-    void unload() {
-        instance = nullptr;
-
-        if (handle) dlclose(handle);
-        handle = nullptr;
-        create = nullptr;
-    }
-
-    ~Plugin() { unload(); }
+std::unordered_map<std::string, DatabaseTypes> strToDBTypeMap {
+    {"janus", DatabaseTypes::JANUS},
+    {"arango", DatabaseTypes::ARANGO},
+    {"mixed", DatabaseTypes::MIXED},
 };
 
 int main(int argc, char ** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
-    if (args.size() != 2) {
-        std::cout << "Usage:" << std::endl;
-        std::cout << "  ./src/core/graph_example [[JANUSGRAPH_DB_IMPLEMENTATION.so]] [[ARANGODB_DB_IMPLEMENTATION.so]]";
-        exit(1);
-    }
+    // if (args.size() != 2) {
+    //     std::cout << "Usage:" << std::endl;
+    //     std::cout << "  ./src/core/graph_example [[JANUSGRAPH_DB_IMPLEMENTATION.so]] [[ARANGODB_DB_IMPLEMENTATION.so]]";
+    //     exit(1);
+    // }
 
     curl_global_init(CURL_GLOBAL_ALL);
 
@@ -72,44 +43,52 @@ int main(int argc, char ** argv) {
     const std::string& janusgraph_so = args[0];
     const std::string& arangodb_so = args[1];
 
-    TerminalRawMode raw; // restore on exit
+    //TerminalRawMode raw; // restore on exit
 
-    Plugin plugin;
+
+    db_context_t db_context = std::make_unique<DatabaseContext>();
+    db_context->planner = std::make_unique<QueryPlanner>();
+    auto db_registry = std::make_unique<DatabaseAdapterRegistry>();
+    db_registry->register_db(DatabaseTypes::ARANGO, std::make_unique<ArangoDB>());
+    db_registry->register_db(DatabaseTypes::JANUS, std::make_unique<JanusGraph>());
+
+    db_context->db_registry = std::move(db_registry);
+    
+    Engine engine { std::move(db_context) };
 
     std::cout << "Controls:\n"
-                 "  j = use JanusGraph DB as storage\n"
-                 "  a = use ArangoDB DB as storage\n"
-                 "  e = evaluate query with currently loaded DB engine"
-                 "  q = quit\n\n";
+                 "  q = send query\n"
+                 "  e = exit\n\n";
 
     std::cout << "Press a key...\n";
 
     while (true) {
         char ch;
-        ssize_t n = read(STDIN_FILENO, &ch, 1);
-        if (n <= 0) continue;
+        std::cin >> ch;
+        if (ch == 'e') break;
 
-        if (ch == 'q') break;
+        if (ch == 'q') {
+            std::string inputQuery;
+            std::string queryTarget;
 
-        const std::string* so;
+            std::cout << "Enter input query: " << std::endl;
+            std::getline(std::cin, inputQuery);
+            std::getline(std::cin, inputQuery);
+            
 
-        if (ch == 'j') {
-            so = &janusgraph_so;
-            std::cout << "Loading JanusGraph...\n";
-        } else if (ch == 'a') {
-            so = &arangodb_so;
-            std::cout << "Loading ArangoDB...\n";
-        } else if (ch == 'e') {
-            std::cout << plugin.instance->evaluate("Query") << std::endl;
-            continue;
-        } else {
-            continue;
-        }
+            std::cout << "Enter target DB:" << std::endl;
+            std::cin >> queryTarget;
 
-        if (!plugin.load(*so)) {
-            std::cout << "Failed to load plugin " << *so << std::endl;
-        } else {
-            std::cout << "Successfully loaded plugin " << *so << std::endl;
+            auto targetDBIt = strToDBTypeMap.find(queryTarget);
+            if (targetDBIt == strToDBTypeMap.end()) {
+                std::cout << "There is no support for such database!" << std::endl;
+                continue;
+            }
+
+            Query query {inputQuery, targetDBIt->second};
+            QueryResult res = engine.evaluate(query);
+
+            std::cout << res.hardCodedResultData << std::endl;
         }
     }
 
