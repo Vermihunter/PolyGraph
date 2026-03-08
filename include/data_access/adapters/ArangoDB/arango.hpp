@@ -12,16 +12,17 @@
 class ArangoDB : public IDatabase {
 
 public:
+    /**
+     * SAMPLE QUERIES:
+     * - FOR u IN users RETURN u
+     * - FOR o IN orders FILTER o.total > 200 RETURN o
+     * - FOR u IN users FILTER u.name == "Alice" FOR o IN OUTBOUND u userPlacedOrder RETURN o
+     * - FOR u IN users LET orders = (FOR o IN OUTBOUND u userPlacedOrder RETURN o) RETURN { user: u.name, orders: orders }
+     * - FOR u IN users LET totalSpent = SUM(FOR o IN OUTBOUND u userPlacedOrder RETURN o.total) SORT totalSpent DESC LIMIT 1 RETURN { user: u.name, totalSpent: totalSpent }
+     */
     virtual QueryResult evaluate(const Query& query) override {
-        // ---- Query ArangoDB (AQL HTTP API)
         json aqlReq;
         aqlReq["query"] = query.query;
-        // aqlReq["query"] = "FOR p IN people RETURN p";
-
-        // // users/u1  --userPlacedOrder-->  orders/*
-        // aqlReq["query"] = 
-        //     "FOR v, e IN 1..1 OUTBOUND \"users/u1\" userPlacedOrder\n"
-        //         "\tRETURN v";
 
         std::string arangoResp = http_post(
             "http://localhost:8529/_api/cursor",
@@ -29,11 +30,14 @@ public:
             "root:rootpassword"
         );
 
-        // std::cout << "Printing names" << std::endl;
-        // json res = json::parse(arangoResp);
-        // for (const auto& item : res["result"]) {
-        //     std::cout << item["name"] << std::endl;
-        // }
+        json arangoJsonResp = json::parse(arangoResp);
+        for(auto && result : arangoJsonResp["result"]) {
+            for (auto& [key, value] : result.items()) {
+                std::cout << key << " : " << value << std::endl;
+            }
+            std::cout << "-------" << std::endl;
+        }
+
         return QueryResult{{}, arangoResp};//"ArangoDB Response:\n" + arangoResp;
     }
 };

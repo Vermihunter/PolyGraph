@@ -11,28 +11,29 @@
  * - dividing the queries into subqueries (how to interact with DBs)
  * - 
  */
+
 class QueryPlanner {
 
 public:
-    QueryEvaluationPlan get_plan_for(const Query& query) {
+    QueryEvaluationPlan get_plan_for(QueryContext&& query) {
+        QueryEvaluationPlan plan;
+
         if (query.targetDB != DatabaseTypes::MIXED) {
-            return QueryEvaluationPlan { std::vector<Query>{query}};
+            plan.subqueries.push_back(std::move(query));
+            return plan;
         }
 
-        QueryEvaluationPlan hardCodedPlan{
-            std::vector<Query>{
-                Query{
-                    "",
-                    DatabaseTypes::ARANGO
-                },
-                Query{
-                    "",
-                    DatabaseTypes::JANUS
-                },
-            }
-        };
+        plan.subqueries.push_back(QueryContext {
+            .query = query.query->clone(),
+            .targetDB = DatabaseTypes::ARANGO,
+        });
 
-        return hardCodedPlan;
+        plan.subqueries.push_back(QueryContext {
+            .query = query.query->clone(),
+            .targetDB = DatabaseTypes::NEO4J,
+        });
+
+        return plan;
     }
 };
 

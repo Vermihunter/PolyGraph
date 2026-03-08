@@ -4,6 +4,9 @@
 enum class DatabaseTypes {
     JANUS,
     ARANGO,
+    NEO4J,
+    CLOUD_NEO4J,
+    CUGRAPH,
 
     MIXED, // Multiple databases 
     COUNT

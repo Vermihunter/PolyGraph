@@ -1,20 +1,46 @@
 {
   "result": [
     {
-      "_key": "o101",
-      "_id": "orders/o101",
-      "_rev": "_lHZ_1oW---",
-      "userKey": "u1",
-      "productIds": ["p3"],
-      "total": 89
+      "_key": "u1",
+      "_id": "users/u1",
+      "_rev": "_lJ0cYQW---",
+      "name": "Alice",
+      "email": "alice@mail.com"
     },
     {
-      "_key": "o100",
-      "_id": "orders/o100",
-      "_rev": "_lHZ_1n6---",
-      "userKey": "u1",
-      "productIds": ["p1", "p2"],
-      "total": 120.5
+      "_key": "u2",
+      "_id": "users/u2",
+      "_rev": "_lJ0cYQ2---",
+      "name": "Bob",
+      "email": "bob@mail.com"
+    },
+    {
+      "_key": "u3",
+      "_id": "users/u3",
+      "_rev": "_lJ0cYRS---",
+      "name": "Charlie",
+      "email": "charlie@mail.com"
+    },
+    {
+      "_key": "u4",
+      "_id": "users/u4",
+      "_rev": "_lJ0cYRy---",
+      "name": "Diana",
+      "email": "diana@mail.com"
+    },
+    {
+      "_key": "u5",
+      "_id": "users/u5",
+      "_rev": "_lJ0cYSO---",
+      "name": "Eva",
+      "email": "eva@mail.com"
+    },
+    {
+      "_key": "u6",
+      "_id": "users/u6",
+      "_rev": "_lJ0cYSq---",
+      "name": "Frank",
+      "email": "frank@mail.com"
     }
   ],
   "hasMore": false,
@@ -26,15 +52,15 @@
       "writesIgnored": 0,
       "documentLookups": 0,
       "seeks": 0,
-      "scannedFull": 0,
-      "scannedIndex": 4,
-      "cursorsCreated": 1,
+      "scannedFull": 6,
+      "scannedIndex": 0,
+      "cursorsCreated": 0,
       "cursorsRearmed": 0,
-      "cacheHits": 1,
+      "cacheHits": 0,
       "cacheMisses": 0,
       "filtered": 0,
       "httpRequests": 0,
-      "executionTime": 4.4021200028510066e-4,
+      "executionTime": 0.0013143500000296626,
       "peakMemoryUsage": 0,
       "intermediateCommits": 0
     }

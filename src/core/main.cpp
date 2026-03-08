@@ -7,9 +7,19 @@
 #include <unordered_map>
 
 #include <engine/Engine.hpp>
-#include <data_access/IDatabase.hpp>
-#include <data_access/adapters/JanusGraph/janus.hpp>
-#include <data_access/adapters/ArangoDB/arango.hpp>
+#include <query/query_types/GetAllVerticesQuery.hpp>
+#include <query/query_types/GetAllEdgesQuery.hpp>
+
+// #include <data_access/IDatabase.hpp>
+// #include <data_access/adapters/JanusGraph/janus.hpp>
+#include <data_access/adapters/ArangoDB/ArangoQueryVisitor.hpp>
+#include <data_access/adapters/Neo4J/Neo4JQueryVisitor.hpp>
+#include <serialization/RecordJsonSerializer.hpp>
+
+#include "data_access/adapters/Neo4J/response_processors/CloudNeo4JAuraDBResponseProcessor.hpp"
+#include "data_access/adapters/Neo4J/response_processors/LocallyDeployedNeo4JResponseProcessor.hpp"
+
+#include <data_access/adapters/cuGraph/cuGraphExample.hpp>
 
 // ===== util: put terminal into raw mode so keypress works instantly =====
 struct TerminalRawMode {
@@ -26,34 +36,45 @@ struct TerminalRawMode {
 std::unordered_map<std::string, DatabaseTypes> strToDBTypeMap {
     {"janus", DatabaseTypes::JANUS},
     {"arango", DatabaseTypes::ARANGO},
+    {"neo", DatabaseTypes::NEO4J},
+    {"cloud-neo", DatabaseTypes::CLOUD_NEO4J},
     {"mixed", DatabaseTypes::MIXED},
 };
 
 int main(int argc, char ** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
-    // if (args.size() != 2) {
-    //     std::cout << "Usage:" << std::endl;
-    //     std::cout << "  ./src/core/graph_example [[JANUSGRAPH_DB_IMPLEMENTATION.so]] [[ARANGODB_DB_IMPLEMENTATION.so]]";
-    //     exit(1);
-    // }
-
     curl_global_init(CURL_GLOBAL_ALL);
-
-
-    const std::string& janusgraph_so = args[0];
-    const std::string& arangodb_so = args[1];
-
-    //TerminalRawMode raw; // restore on exit
-
 
     db_context_t db_context = std::make_unique<DatabaseContext>();
     db_context->planner = std::make_unique<QueryPlanner>();
     auto db_registry = std::make_unique<DatabaseAdapterRegistry>();
-    db_registry->register_db(DatabaseTypes::ARANGO, std::make_unique<ArangoDB>());
-    db_registry->register_db(DatabaseTypes::JANUS, std::make_unique<JanusGraph>());
+
+    // ARANGO
+    auto arango_ctx = std::make_unique<ExternalDatabaseContext>();
+    arango_ctx->config = std::make_unique<ExternalDatabaseConfig>();
+    arango_ctx->queryVisitor = std::make_unique<ArangoQueryVisitor>();
+    db_registry->register_db(DatabaseTypes::ARANGO, std::move(arango_ctx));
+
+
+    // NEO4J
+    auto neo4j_ctx = std::make_unique<ExternalDatabaseContext>();
+    neo4j_ctx->config = std::make_unique<ExternalDatabaseConfig>();
+    neo4j_ctx->queryVisitor = std::make_unique<Neo4JQueryVisitor>(Neo4JConfig{
+        .endpoint = "http://localhost:7474/db/neo4j/tx/commit",
+        .response_processor = std::make_unique<LocallyDeployedNeo4JResponseProcessor>()
+    });
+    db_registry->register_db(DatabaseTypes::NEO4J, std::move(neo4j_ctx));
+
+    auto cloud_neo4j_ctx = std::make_unique<ExternalDatabaseContext>();
+    cloud_neo4j_ctx->config = std::make_unique<ExternalDatabaseConfig>();
+    cloud_neo4j_ctx->queryVisitor = std::make_unique<Neo4JQueryVisitor>(Neo4JConfig{
+        .endpoint = "http://localhost:9696/db/cloud-neo4j/tx/commit",
+        .response_processor = std::make_unique<LocallyDeployedNeo4JResponseProcessor>()//std::make_unique<CloudNeo4JAuraDBResponseProcessor>()
+    });
+    db_registry->register_db(DatabaseTypes::CLOUD_NEO4J, std::move(cloud_neo4j_ctx));
+
 
     db_context->db_registry = std::move(db_registry);
-    
     Engine engine { std::move(db_context) };
 
     std::cout << "Controls:\n"
@@ -70,13 +91,23 @@ int main(int argc, char ** argv) {
         if (ch == 'q') {
             std::string inputQuery;
             std::string queryTarget;
+            
+            std::cout << "Enter input query: "; 
+            std::getline(std::cin, inputQuery);
+            std::getline(std::cin, inputQuery);
 
-            std::cout << "Enter input query: " << std::endl;
-            std::getline(std::cin, inputQuery);
-            std::getline(std::cin, inputQuery);
+            query_t query;
+            if (inputQuery == "edges") {
+                query = std::make_unique<GetAllEdgesQuery>();
+            } else if (inputQuery == "nodes") {
+                query = std::make_unique<GetAllVerticesQuery>();
+            } else {
+                std::cout << "There is no support for such query. Supported query types: [\"nodes\", \"edges\"]" << std::endl;
+                continue;
+            }
             
 
-            std::cout << "Enter target DB:" << std::endl;
+            std::cout << "Enter target DB: ";
             std::cin >> queryTarget;
 
             auto targetDBIt = strToDBTypeMap.find(queryTarget);
@@ -85,10 +116,27 @@ int main(int argc, char ** argv) {
                 continue;
             }
 
-            Query query {inputQuery, targetDBIt->second};
-            QueryResult res = engine.evaluate(query);
+            //Query<> query {inputQuery, targetDBIt->second};
+            //auto query = std::make_unique<GetAllEdgesQuery>();
+            //auto query = std::make_unique<GetAllVerticesQuery>();
 
-            std::cout << res.hardCodedResultData << std::endl;
+            auto query_start_time = std::chrono::high_resolution_clock::now();
+            auto res = engine.evaluate(QueryContext {
+                .query = std::move(query),
+                .targetDB = targetDBIt->second
+            });
+            auto query_end_time = std::chrono::high_resolution_clock::now();
+            json res_json = res->data;
+            auto json_convert_end_time = std::chrono::high_resolution_clock::now();
+
+            auto query_time = std::chrono::duration_cast<std::chrono::milliseconds>(query_end_time - query_start_time).count();
+            std::cout << "Query execution time: " << query_time << "ms" << std::endl;
+
+            auto json_convert_time = std::chrono::duration_cast<std::chrono::milliseconds>(json_convert_end_time - query_end_time).count();
+            std::cout << "JSON convertion execution time: " << json_convert_time << "ms" << std::endl;
+            //execute();
+
+            //std::cout << res_json << std::endl;
         }
     }
 

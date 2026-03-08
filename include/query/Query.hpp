@@ -1,13 +1,20 @@
 #ifndef QUERY_HPP
 #define QUERY_HPP
 
-#include <string>
+#include <memory>
 
-#include <data_access/DatabaseTypes.hpp>
+#include <query/QueryVisitor.hpp>
+
+struct Query;
+using query_t = std::unique_ptr<Query>;
 
 struct Query {
-    std::string query;
-    DatabaseTypes targetDB;
+    virtual ~Query() = default;
+
+    virtual query_result_t accept(QueryVisitor&) const = 0;
+    virtual query_t clone() const = 0;
 };
+
+
 
 #endif // QUERY_HPP

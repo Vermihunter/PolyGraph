@@ -4,7 +4,7 @@
 #include <curl/curl.h>
 #include "json.hpp"
 
-using json = nlohmann::json;
+
 
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
 {
@@ -32,6 +32,22 @@ inline std::string http_post(const std::string& url, const std::string& body,
         if(!auth.empty())
             curl_easy_setopt(curl, CURLOPT_USERPWD, auth.c_str());
 
+        curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+    }
+    return response;
+}
+
+inline std::string http_get(const std::string& url, const std::string& auth = "") {
+    CURL* curl = curl_easy_init();
+    std::string response;
+    if (curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+        if(!auth.empty())
+            curl_easy_setopt(curl, CURLOPT_USERPWD, auth.c_str());
+        
         curl_easy_perform(curl);
         curl_easy_cleanup(curl);
     }

@@ -6,13 +6,20 @@
 #include <variant>
 #include <string>
 
+#include <data_model/Edge.hpp>
+#include <data_model/Node.hpp>
+#include <data_model/Path.hpp>
 
 struct Node;
 struct Edge;
 struct Path;
 
-using Map  = std::unordered_map<std::string, struct Value>;
-using List = std::vector<struct Value>;
+struct Value;
+using value_t = std::unique_ptr<Value>;
+
+
+using Map  = std::unordered_map<std::string, value_t>;
+using List = std::vector<value_t>;
 
 struct Value {
   using Variant = std::variant<

@@ -7,7 +7,7 @@
 
 // Very not final
 struct QueryEvaluationPlan {
-    std::vector<Query> subqueries;
+    std::vector<QueryContext> subqueries;
 };
 
 
