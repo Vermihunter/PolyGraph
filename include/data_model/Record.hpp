@@ -9,10 +9,14 @@
 struct Record {
   //std::shared_ptr<const std::vector<std::string>> keys;
   std::vector<Value> fields;
-  //std::unordered_map<std::string, size_t> index;
+
+  Record() = default;
+  Record(const Record&) = delete;
+  Record& operator=(const Record&) = delete;
+  Record(Record&&) = default;
+  Record& operator=(Record&&) = default;
 
   const Value& operator[](size_t i) const { return fields[i]; }
-  //const Value& operator[](const std::string& key) const { return fields.at(index.at(key)); }
 };
 
 using record_t = std::unique_ptr<Record>;

@@ -97,7 +97,7 @@ inline void from_json(const json& j, Value& v) {
         if (j.is_binary()) {
             v.data = j.get_binary();
         } else {
-            v.data = j.get<std::vector<std::unique_ptr<Value>>>();
+            v.data = j.get<List>();
         }
     } else if (j.is_object()) {
         if (j.contains("nodes") && j.contains("edges")) {

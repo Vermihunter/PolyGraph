@@ -19,7 +19,7 @@ public:
     // Return by rvalue reference to allow moving the unique_ptr out
     T&& get() && { return std::move(**storage_); }
 
-    tf::Task node() const { return node_; }
+    [[nodiscard]] tf::Task node() const { return node_; }
 
 private:
     tf::Task node_;

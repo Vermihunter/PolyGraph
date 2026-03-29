@@ -3,8 +3,8 @@
 
 #include <memory>
 
+#include <query/QueryContext.hpp>
 #include <planner/QueryEvaluationPlan.hpp>
-#include <query/Query.hpp>
 
 /**
  * Decides how to execute a given query including - creates a graph of execution instance:

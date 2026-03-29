@@ -3,10 +3,12 @@
 
 #include <memory>
 
-#include <query/QueryVisitor.hpp>
+//#include <query/QueryVisitor.hpp>
 
 struct Query;
 using query_t = std::unique_ptr<Query>;
+
+class QueryVisitor;
 
 struct Query {
     virtual ~Query() = default;

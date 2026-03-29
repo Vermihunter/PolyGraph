@@ -6,6 +6,10 @@ set(CMAKE_CUDA_STANDARD 17)
 
 set(CMAKE_CUDA_ARCHITECTURES 86)
 
+find_package(Boost CONFIG REQUIRED)
+
+
+
 include(FetchContent)
 
 FetchContent_Declare(
@@ -37,10 +41,30 @@ add_executable(graph_db main.cpp
         ../../include/engine/pipeline/QueryResultJoinTask.hpp
         ../../include/GPU/GPU_Graph.hpp
         ../../include/GPU/DataModelToGPUGraphConverter.hpp
+        ../../include/engine/pipeline/DataToGPUTask.hpp
+        ../../include/engine/pipeline/GPUPageRanksTask.hpp
+        ../../include/GPU/CPU_GPU_ConversionType.hpp
+        ../../include/engine/pipeline/PageRanksResultCopyBackTask.hpp
+        ../../include/engine/pipeline/GPUConnectedComponentsTask.hpp
+        ../../include/algorithms/bfs.hpp
+        ../../include/algorithms/NeighborFinder.hpp
+        ../../include/algorithms/RowByRowNeighborFinder.hpp
+        ../../include/algorithms/BfsOptions.hpp
+        ../../include/engine/NodeLocator.hpp
+        ../../include/engine/GraphPartitioner.hpp
+        ../../include/query/query_types/GetNeighborsForVertexQuery.hpp
+        ../../include/query/query_types/GetVertexByIdQuery.hpp
+        ../../include/utilities/uuid.hpp
+        ../../include/domain/graph/Node.hpp
+        ../../include/domain/graph/Property.hpp
+        ../../include/domain/graph/PropertyType.hpp
+        ../../include/domain/graph/Edge.hpp
+        ../../include/domain/graph/Graph.hpp
 )
 
 target_link_libraries(graph_db
         CURL::libcurl
+        Boost::headers
         CUDA::cudart
         raft::raft
         rmm::rmm

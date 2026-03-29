@@ -12,6 +12,7 @@ struct Value;
 
 struct Edge {
   EntityId id;
+  GlobalId global_id;
   std::string type;
   EntityId src;
   EntityId dst;

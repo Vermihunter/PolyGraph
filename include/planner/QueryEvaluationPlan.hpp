@@ -3,7 +3,7 @@
 
 #include <vector>
 
-#include <query/Query.hpp>
+#include "query/QueryContext.hpp"
 
 // Very not final
 struct QueryEvaluationPlan {

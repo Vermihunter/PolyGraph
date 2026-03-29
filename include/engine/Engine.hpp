@@ -2,18 +2,35 @@
 #define ENGINE_HPP
 
 #include <query/QueryResult.hpp>
-#include <query/Query.hpp>
-#include <query/QueryContext.hpp>
-#include <engine/DatabaseContext.hpp>
-#include <raft/core/handle.hpp>
+//#include <query/Query.hpp>
 
+#include <query/QueryContext.hpp>
+
+#include "DatabaseContext.hpp"
 #include "GPU/DataModelToGPUGraphConverter.hpp"
 #include "pipeline/QueryExecutionTask.hpp"
 #include "pipeline/QueryResultJoinTask.hpp"
+#include "pipeline/DataToGPUTask.hpp"
+#include "pipeline/GPUPageRanksTask.hpp"
 #include "pipeline/Scheduler.hpp"
+
 #include "query/query_types/GetAllVerticesQuery.hpp"
 
 #include "data_access/adapters/cuGraph/cuGraphExample.hpp"
+#include "pipeline/GPUConnectedComponentsTask.hpp"
+#include "pipeline/PageRanksResultCopyBackTask.hpp"
+
+
+using vertex_t = int32_t;
+using edge_t = int32_t;
+using weight_t = float;
+using result_t = float;
+constexpr bool STORE_TRANSPOSED = false;
+constexpr bool MULTI_GPU = false;
+
+// PageRanks -> result_t
+// BFS -> vertex_t
+using res_t = vertex_t;
 
 class Engine {
     db_context_t ctx;
@@ -22,18 +39,6 @@ public:
 
     query_result_t evaluate(QueryContext&& query_ctx) {
         std::cout << "Evaluating in engine" << std::endl;
-
-        /*
-        auto plan = ctx->planner->get_plan_for(std::move(query_ctx));
-
-        auto res = std::make_unique<QueryResult>();
-        for (auto&& subquery : plan.subqueries) {
-            auto& db_ctx = ctx->db_registry->get(subquery.targetDB);
-            res->combine(subquery.query->accept(*db_ctx->queryVisitor));
-        }
-        */
-
-
         Scheduler scheduler;
 
         auto load_nodes_neo_local = scheduler.emplace([&]() {
@@ -57,9 +62,11 @@ public:
             );
         });
 
+
         auto join_results = scheduler.then(
             [](auto... args) {
                 // args are unique_ptrs moved from the tasks
+                std::cout << "Got results from databases - combining started" << std::endl;
                 return combine_all(std::move(args)...);
             },
             load_nodes_neo_local,
@@ -67,65 +74,59 @@ public:
             load_nodes_arango
         );
 
+        auto gpu_data_converter = scheduler.then(
+            data_to_gpu<vertex_t, edge_t, weight_t, result_t, STORE_TRANSPOSED, MULTI_GPU>,
+            join_results
+        );
+
+        /*
+        auto gpu_pageranks_task = scheduler.then(
+            gpu_pageranks<vertex_t, edge_t, weight_t, result_t, STORE_TRANSPOSED, MULTI_GPU>,
+            gpu_data_converter
+        );
+        */
+
+
+        auto gpu_bfs_task = scheduler.then(
+            gpu_bfs<vertex_t, edge_t, weight_t, result_t, STORE_TRANSPOSED, MULTI_GPU>,
+            gpu_data_converter
+        );
+
+
+        /*
+        // Invalid input arguments: triangle_count currently supports undirected graphs only.
+        auto gpu_triangle_count_task = scheduler.then(
+            gpu_triangle_count<vertex_t, edge_t, weight_t, result_t, STORE_TRANSPOSED, MULTI_GPU>,
+            gpu_data_converter
+        );
+        */
+
+        auto gpu_pageranks_data_copyback_task = scheduler.then(
+            pagerank_result_to_cpu<res_t, vertex_t, edge_t, weight_t, result_t, STORE_TRANSPOSED, MULTI_GPU>,
+            gpu_bfs_task // gpu_pageranks_task
+        );
+
 
         scheduler.run();
 
 
-        raft::handle_t handle;
-        DataModelToGPUGraphConverter converter;
-        auto results = std::move(join_results).get();
-
-        auto gpudata =
-            converter.convert<int32_t, int32_t, float, float>(handle, results->data);
-
-
-        using result_t = float;
-        auto [pageranks, metadata] =
-            cugraph::pagerank<
-                int32_t,
-                int32_t,
-                float,
-                result_t,
-                false
-            >(
-                gpudata->handle_,
-                gpudata->graph_view_,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                result_t{0.85},
-                result_t{1e-6},
-                100,
-                true
-            );
-
-        std::vector<result_t> h_pr(gpudata->id_to_string_.size());
-
-        auto stream = gpudata->handle_.get_stream();
-        cuda_check(cudaMemcpyAsync(
-            h_pr.data(),
-            pageranks.data(),
-            h_pr.size()*sizeof(result_t),
-            cudaMemcpyDeviceToHost,
-            stream), "copy pagerank");
-
-        cuda_check(cudaStreamSynchronize(stream), "sync D2H");
+        auto & h_pr = gpu_pageranks_data_copyback_task.get();
 
         // ----------------------------
         // Print
         // ----------------------------
 
-        for(size_t i=0;i<h_pr.size();i++)
-        {
+        /*
+        for(size_t i=0;i<h_pr.size();i++) {
             std::cout << "vertex "
                       << i
-                      << " pagerank = "
+                      << " component = "
                       << h_pr[i]
                       << std::endl;
         }
+        */
 
-        return results;
+        return std::make_unique<QueryResult>();
     }
 };
 

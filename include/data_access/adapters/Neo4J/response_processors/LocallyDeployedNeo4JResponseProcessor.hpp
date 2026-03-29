@@ -5,6 +5,9 @@
 #ifndef CPGDB_LOCALLYDEPLOYEDNEO4JRESPONSEPROCESSOR_HPP
 #define CPGDB_LOCALLYDEPLOYEDNEO4JRESPONSEPROCESSOR_HPP
 
+#include <boost/lexical_cast.hpp>
+
+
 #include "Neo4JResponseProcessor.hpp"
 
 class LocallyDeployedNeo4JResponseProcessor : public Neo4JResponseProcessor {
@@ -55,8 +58,9 @@ private:
     }
 
     static Edge json_to_edge(const json& row) {
-        return Edge{
+        return Edge {
             .id = row["id"],
+            .global_id = boost::lexical_cast<uuid>(row["properties"]["uuid"]),
             .type = row["type"],
             .src = row["start"],
             .dst = row["end"],
@@ -65,8 +69,12 @@ private:
     }
 
     static Node json_to_node(const json& row) {
-        return Node{
+        const auto json_str = row.dump();
+        const auto uuid_str = row["properties"]["uuid"].get<std::string>();
+
+        return Node {
             .id = row["id"],
+            .global_id = boost::lexical_cast<uuid>(row["properties"]["uuid"].get<std::string>()),
             .labels = row["labels"],
             .properties = row["properties"]
         };

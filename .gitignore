@@ -1,1 +1,7 @@
 build/
+**/*.env
+**/*.json
+
+tools/my-venv/
+.idea/
+cmake-build-debug/

@@ -73,7 +73,7 @@ def commit():
             #print(f"Got response: {data}")
             results.append({"data": data})
     
-    print(f"Sending response: {results}")
+    #print(f"Sending response: {results}")
 
     return jsonify({
         "results": results,

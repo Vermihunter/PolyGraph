@@ -9,8 +9,8 @@
 #include <GPU/GPU_Graph.hpp>
 
 struct DataModelToGPUGraphConverter {
-    template <typename v_t ,typename e_t, typename w_t, typename r_t>
-    static gpu_graph_t<v_t, e_t, w_t, r_t> convert(raft::handle_t& handle, const std::vector<record_t>& data) {
+    template <typename v_t ,typename e_t, typename w_t, typename r_t, bool s_t, bool m_gpu>
+    gpu_graph_t<v_t, e_t, w_t, r_t, s_t, m_gpu> convert(raft::handle_t& handle, const std::vector<record_t>& data) {
         std::vector<v_t> h_src;
         std::vector<v_t> h_dst;
 
@@ -74,7 +74,7 @@ struct DataModelToGPUGraphConverter {
         }
 
         // 5. Create via Factory
-        auto graph =  GPU_Graph<v_t, e_t, w_t, r_t>::from_edge_list(
+        auto graph =  GPU_Graph<v_t, e_t, w_t, r_t, s_t, m_gpu>::from_edge_list(
             handle,
             std::move(d_src),      // Explicitly move
             std::move(d_dst),      // Explicitly move
@@ -87,6 +87,7 @@ struct DataModelToGPUGraphConverter {
 
         return graph;
     }
+
 };
 
 #endif //CPGDB_DATAMODELTOGPUGRAPHCONVERTER_HPP
