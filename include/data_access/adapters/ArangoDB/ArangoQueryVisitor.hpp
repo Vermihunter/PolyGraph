@@ -29,6 +29,7 @@
 class ArangoQueryVisitor : public QueryVisitor {
     const BackendConnectionConfig& config_;
     DataModelJsonSerializer serializer_;
+    mutable CurlHttpClient http_;
 
     enum class collection_t : std::size_t {
         NODE = 2,
@@ -39,7 +40,10 @@ public:
     ArangoQueryVisitor(DatabaseContext& db_context,
                        const BackendConnectionConfig& config)
         : QueryVisitor(db_context),
-          config_(config) {}
+          config_(config),
+          http_(config.credentials.has_value()
+                    ? config.credentials->username + ":" + config.credentials->password
+                    : "") {}
 
     query_result_t visit(const GetAllEdgesQuery& q) override {
         return evaluate(
@@ -262,17 +266,9 @@ private:
             {"batchSize", 1000000}
         };
 
-        std::string auth;
-
-        if (config_.credentials.has_value()) {
-            auth = config_.credentials->username + ":" +
-                   config_.credentials->password;
-        }
-
-        std::string res = http_post(
+        std::string res = http_.post(
             config_.endpoint,
-            req.dump(),
-            auth
+            req.dump()
         );
 
         json response = json::parse(res);
@@ -300,7 +296,7 @@ private:
             const std::string next_url =
                 config_.endpoint + "/" + response["id"].get<std::string>();
 
-            std::string next_res = http_put(next_url, "{}", auth);
+            std::string next_res = http_.put(next_url, "{}");
             response = json::parse(next_res);
 
             if (response.contains("error") &&

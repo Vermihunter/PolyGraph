@@ -1,6 +1,9 @@
 build/
+
 **/*.env
 **/*.json
+**/*.csv
+**/*.txt
 
 tools/my-venv/
 .idea/

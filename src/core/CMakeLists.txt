@@ -111,6 +111,7 @@ add_executable(graph_db main.cpp
         ../../include/gpu/algorithms/CuGraphOneHopExpandExecutor.hpp
         ../../include/utilities/Profiling.hpp
         ../../include/data_access/adapters/Neo4J/Neo4JQueryVisitorOld.hpp
+        ../../include/data_model/MinimalAdjacencyRow.hpp
 )
 
 target_link_libraries(graph_db

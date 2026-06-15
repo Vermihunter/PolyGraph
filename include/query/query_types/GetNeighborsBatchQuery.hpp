@@ -4,6 +4,7 @@
 #include "query/QueryResult.hpp"
 #include "query/QueryVisitor.hpp"
 #include "algorithms/ExpandSpec.hpp"
+#include "data_model/NodeRef.hpp"
 #include "query/Query.hpp"
 
 class GetNeighborsBatchQuery : public Query {

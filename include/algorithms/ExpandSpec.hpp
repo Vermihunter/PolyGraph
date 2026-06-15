@@ -16,6 +16,10 @@ struct ExpandSpec {
     std::vector<TypeId> allowed_target_node_types;
     Direction direction = Direction::Both;
 
+    // Fast algorithms such as BFS only need neighbor vertices.
+    // Set this to true only when the caller really needs EdgeRef metadata.
+    bool return_edge_refs = false;
+
     [[nodiscard]] bool allows_edge_type(TypeId edge_type) const {
         return allowed_edge_types.empty() ||
                std::find(

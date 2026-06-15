@@ -11,8 +11,11 @@
 
 #include "algorithms/ExpandSpec.hpp"
 #include "algorithms/bfs/BfsOptions.hpp"
+#include "algorithms/bfs/BfsResult.hpp"
 #include "data_model/AdjacencyRow.hpp"
+#include "data_model/MinimalAdjacencyRow.hpp"
 #include "data_model/EntityId.hpp"
+#include "data_model/NodeRef.hpp"
 #include "infrastructure/BackendCapabilities.hpp"
 #include "infrastructure/BackendDescriptor.hpp"
 #include "infrastructure/BackendKind.hpp"
@@ -27,6 +30,29 @@ public:
     virtual std::vector<AdjacencyRow>
     get_neighbors_batch(std::span<const NodeRef> frontier,
                         const ExpandSpec& spec) = 0;
+
+    virtual std::vector<MinimalAdjacencyRow>
+    get_minimal_neighbors_batch(std::span<const NodeRef> frontier,
+                                const ExpandSpec& spec) {
+        auto rich_rows = get_neighbors_batch(frontier, spec);
+
+        std::vector<MinimalAdjacencyRow> minimal_rows;
+        minimal_rows.reserve(rich_rows.size());
+
+        for (auto& row : rich_rows) {
+            MinimalAdjacencyRow minimal;
+            minimal.source = row.source;
+            minimal.neighbors.reserve(row.neighbors.size());
+
+            for (const auto& neighbor : row.neighbors) {
+                minimal.neighbors.push_back(neighbor.vertex);
+            }
+
+            minimal_rows.push_back(std::move(minimal));
+        }
+
+        return minimal_rows;
+    }
 
     virtual bool can_run_native_bfs(const NodeRef& source,
                                     const ExpandSpec& spec,
