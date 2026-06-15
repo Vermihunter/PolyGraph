@@ -5,3 +5,6 @@ build/
 tools/my-venv/
 .idea/
 cmake-build-debug/
+/cmake-build-relwithdebinfo/
+/build-profile/
+/tools/measurement/native_bfs_results/

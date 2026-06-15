@@ -5,7 +5,7 @@
 #ifndef CPGDB_PAGERANKSRESULTCOPYBACKTASK_HPP
 #define CPGDB_PAGERANKSRESULTCOPYBACKTASK_HPP
 
-#include "GPU/GPU_Graph.hpp"
+#include "gpu/GPU_Graph.hpp"
 
 template <
     typename T,

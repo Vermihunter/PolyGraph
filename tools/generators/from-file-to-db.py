@@ -109,9 +109,9 @@ def parse_relationships(raw_rels: List[Dict[str, Any]]) -> List[RelationshipReco
 
 
 def relationship_touches_source(
-    rel: RelationshipRecord,
-    node_index: Dict[str, NodeRecord],
-    source_name: str,
+        rel: RelationshipRecord,
+        node_index: Dict[str, NodeRecord],
+        source_name: str,
 ) -> bool:
     from_node = node_index.get(rel.from_uuid)
     to_node = node_index.get(rel.to_uuid)
@@ -121,8 +121,8 @@ def relationship_touches_source(
 
 
 def is_cross_source_relationship(
-    rel: RelationshipRecord,
-    node_index: Dict[str, NodeRecord],
+        rel: RelationshipRecord,
+        node_index: Dict[str, NodeRecord],
 ) -> bool:
     from_node = node_index.get(rel.from_uuid)
     to_node = node_index.get(rel.to_uuid)
@@ -153,10 +153,10 @@ class DatabaseAdapter(ABC):
 
     @abstractmethod
     def insert_relationship(
-        self,
-        rel: RelationshipRecord,
-        from_node: NodeRecord,
-        to_node: NodeRecord,
+            self,
+            rel: RelationshipRecord,
+            from_node: NodeRecord,
+            to_node: NodeRecord,
     ) -> None:
         pass
 
@@ -184,13 +184,13 @@ class ArangoDBAdapter(DatabaseAdapter):
     """
 
     def __init__(
-        self,
-        base_url: str,
-        username: str,
-        password: str,
-        database: str,
-        source_name: str = "ArangoDB",
-        timeout: int = 30,
+            self,
+            base_url: str,
+            username: str,
+            password: str,
+            database: str,
+            source_name: str = "ArangoDB",
+            timeout: int = 30,
     ):
         super().__init__(source_name)
         self.base_url = base_url.rstrip("/")
@@ -271,10 +271,17 @@ class ArangoDBAdapter(DatabaseAdapter):
         node_types = sorted({sanitize_name(n.type) for n in nodes if n.source == self.source_name})
         rel_types = sorted({sanitize_name(r.type) for r in relationships if r.source == self.source_name})
 
+        # A backend needs Proxy documents when it is the authoritative
+        # relationship store for an edge whose endpoint node lives elsewhere.
+        # Do NOT decide this from endpoint ownership alone; relationship.source
+        # is the authoritative physical placement used by graph_db.
         needs_proxy_collection = any(
-            relationship_touches_source(r, node_index, self.source_name)
-            and is_cross_source_relationship(r, node_index)
+            r.source == self.source_name and (
+                    node_index[r.from_uuid].source != self.source_name
+                    or node_index[r.to_uuid].source != self.source_name
+            )
             for r in relationships
+            if r.from_uuid in node_index and r.to_uuid in node_index
         )
         if needs_proxy_collection:
             node_types.append(sanitize_name(PROXY_NODE_TYPE))
@@ -284,10 +291,10 @@ class ArangoDBAdapter(DatabaseAdapter):
 
         for rel_type in rel_types:
             self.ensure_collection(rel_type, edge=True)
-            
+
         graph_name = "UnifiedGraph"
         self.ensure_graph(graph_name, sorted(set(node_types)), rel_types)
-        
+
     def ensure_graph(self, graph_name: str, vertex_collections: List[str], edge_collections: List[str]) -> None:
         edge_definitions = [
             {
@@ -356,10 +363,10 @@ class ArangoDBAdapter(DatabaseAdapter):
         return proxy_node
 
     def insert_relationship(
-        self,
-        rel: RelationshipRecord,
-        from_node: NodeRecord,
-        to_node: NodeRecord,
+            self,
+            rel: RelationshipRecord,
+            from_node: NodeRecord,
+            to_node: NodeRecord,
     ) -> None:
         edge_collection = sanitize_name(rel.type)
         from_collection = sanitize_name(from_node.type)
@@ -412,11 +419,11 @@ class Neo4jAdapter(DatabaseAdapter):
     """
 
     def __init__(
-        self,
-        uri: str,
-        username: str,
-        password: str,
-        source_name: str = "Neo4J",
+            self,
+            uri: str,
+            username: str,
+            password: str,
+            source_name: str = "Neo4J",
     ):
         super().__init__(source_name)
         self.driver = GraphDatabase.driver(uri, auth=(username, password))
@@ -446,10 +453,16 @@ class Neo4jAdapter(DatabaseAdapter):
 
         node_types = {sanitize_name(n.type) for n in nodes if n.source == self.source_name}
 
+        # A backend needs Proxy nodes when it is the authoritative
+        # relationship store for an edge whose endpoint node lives elsewhere.
+        # relationship.source must match the C++ Placement backend.
         needs_proxy_label = any(
-            relationship_touches_source(r, node_index, self.source_name)
-            and is_cross_source_relationship(r, node_index)
+            r.source == self.source_name and (
+                    node_index[r.from_uuid].source != self.source_name
+                    or node_index[r.to_uuid].source != self.source_name
+            )
             for r in relationships
+            if r.from_uuid in node_index and r.to_uuid in node_index
         )
         if needs_proxy_label:
             node_types.add(sanitize_name(PROXY_NODE_TYPE))
@@ -490,10 +503,10 @@ class Neo4jAdapter(DatabaseAdapter):
         return proxy_node
 
     def insert_relationship(
-        self,
-        rel: RelationshipRecord,
-        from_node: NodeRecord,
-        to_node: NodeRecord,
+            self,
+            rel: RelationshipRecord,
+            from_node: NodeRecord,
+            to_node: NodeRecord,
     ) -> None:
         from_label = sanitize_name(from_node.type)
         to_label = sanitize_name(to_node.type)
@@ -556,9 +569,9 @@ class AdapterRegistry:
 # ----------------------------
 
 def initialize_databases(
-    adapters: AdapterRegistry,
-    nodes: List[NodeRecord],
-    relationships: List[RelationshipRecord]
+        adapters: AdapterRegistry,
+        nodes: List[NodeRecord],
+        relationships: List[RelationshipRecord]
 ) -> None:
     for source_name, adapter in adapters.items():
         logger.info("Initializing database for source: %s", source_name)
@@ -566,8 +579,8 @@ def initialize_databases(
 
 
 def insert_nodes(
-    adapters: AdapterRegistry,
-    nodes: List[NodeRecord],
+        adapters: AdapterRegistry,
+        nodes: List[NodeRecord],
 ) -> None:
     for node in nodes:
         adapter = adapters.get(node.source)
@@ -577,42 +590,52 @@ def insert_nodes(
         adapter.insert_node(node)
 
 
-def insert_cross_source_relationship(
-    adapters: AdapterRegistry,
-    rel: RelationshipRecord,
-    from_node: NodeRecord,
-    to_node: NodeRecord,
+def insert_authoritative_relationship(
+        adapters: AdapterRegistry,
+        rel: RelationshipRecord,
+        from_node: NodeRecord,
+        to_node: NodeRecord,
 ) -> None:
-    logger.info(
-        "Relationship %s spans %s -> %s. Mirroring it into both databases using proxy nodes.",
-        rel.uuid,
-        from_node.source,
-        to_node.source,
+    """
+    Insert the relationship into rel.source, because rel.source is the
+    authoritative physical placement used by the C++ PlacementCatalog.
+
+    Endpoint source tells us where the real node lives. If an endpoint lives
+    outside the authoritative relationship backend, represent it there as a
+    Proxy node with the same uuid and remote-type metadata.
+
+    GPU is not loaded through Neo4j/ArangoDB; GPU relationships are consumed
+    directly from the JSON file by GpuProjectionBuilder.
+    """
+    if rel.source == "GPU":
+        return
+
+    adapter = adapters.get(rel.source)
+    if adapter is None:
+        logger.warning(
+            "No adapter registered for authoritative relationship source %s, skipping relationship %s",
+            rel.source,
+            rel.uuid,
+        )
+        return
+
+    local_from = (
+        from_node
+        if from_node.source == rel.source
+        else adapter.upsert_proxy_node(from_node)
+    )
+    local_to = (
+        to_node
+        if to_node.source == rel.source
+        else adapter.upsert_proxy_node(to_node)
     )
 
-    # Store the relationship in the source database of each endpoint:
-    # - local endpoint stays real
-    # - remote endpoint becomes a proxy
-    for local_source in (from_node.source, to_node.source):
-        adapter = adapters.get(local_source)
-        if adapter is None:
-            logger.warning(
-                "No adapter registered for cross-source endpoint source %s, skipping one side of relationship %s",
-                local_source,
-                rel.uuid,
-            )
-            continue
-
-        local_from = from_node if from_node.source == local_source else adapter.upsert_proxy_node(from_node)
-        local_to = to_node if to_node.source == local_source else adapter.upsert_proxy_node(to_node)
-
-        adapter.insert_relationship(rel, local_from, local_to)
-
+    adapter.insert_relationship(rel, local_from, local_to)
 
 def insert_relationships(
-    adapters: AdapterRegistry,
-    relationships: List[RelationshipRecord],
-    node_index: Dict[str, NodeRecord],
+        adapters: AdapterRegistry,
+        relationships: List[RelationshipRecord],
+        node_index: Dict[str, NodeRecord],
 ) -> None:
     for rel in relationships:
         from_node = node_index.get(rel.from_uuid)
@@ -625,33 +648,7 @@ def insert_relationships(
             )
             continue
 
-        if from_node.source != to_node.source:
-            insert_cross_source_relationship(adapters, rel, from_node, to_node)
-            continue
-
-        # Normal same-database relationship.
-        # Prefer rel.source, but fall back to the shared endpoint source if rel.source is inconsistent.
-        target_source = rel.source
-        if target_source != from_node.source:
-            logger.warning(
-                "Relationship %s has source %s but both endpoints are in %s. Falling back to %s.",
-                rel.uuid,
-                rel.source,
-                from_node.source,
-                from_node.source,
-            )
-            target_source = from_node.source
-
-        adapter = adapters.get(target_source)
-        if adapter is None:
-            logger.warning(
-                "No adapter registered for relationship source %s, skipping relationship %s",
-                target_source,
-                rel.uuid,
-            )
-            continue
-
-        adapter.insert_relationship(rel, from_node, to_node)
+        insert_authoritative_relationship(adapters, rel, from_node, to_node)
 
 
 def main() -> int:

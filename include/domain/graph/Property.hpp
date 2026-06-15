@@ -13,6 +13,7 @@ namespace domain {
     struct Property {
         std::string name;
         PropertyType type;
+        bool indexed = false;
     };
 }
 

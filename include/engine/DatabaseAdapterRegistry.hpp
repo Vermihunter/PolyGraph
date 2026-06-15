@@ -5,17 +5,17 @@
 #include <memory>
 
 #include <data_access/ExternalDatabaseContext.hpp>
-#include <data_access/DatabaseTypes.hpp>
+#include "../infrastructure/BackendKind.hpp"
 
 class DatabaseAdapterRegistry {
-    std::array<external_db_ctx_t, size_t(DatabaseTypes::COUNT)> registry;
+    std::array<external_db_ctx_t, size_t(BackendKind::COUNT)> registry;
         
 public:
-    void register_db(DatabaseTypes type, external_db_ctx_t dbAdapter) {
+    void register_db(BackendKind type, external_db_ctx_t dbAdapter) {
         registry[size_t(type)] = std::move(dbAdapter);
     }
 
-    external_db_ctx_t& get(DatabaseTypes db) {
+    external_db_ctx_t& get(BackendKind db) {
         return registry[size_t(db)];
     }
 };

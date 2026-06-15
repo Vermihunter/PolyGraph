@@ -6,8 +6,8 @@
 
 #include <query/QueryContext.hpp>
 
-#include "DatabaseContext.hpp"
-#include "GPU/DataModelToGPUGraphConverter.hpp"
+#include "../infrastructure/DatabaseContext.hpp"
+#include "gpu/DataModelToGPUGraphConverter.hpp"
 #include "pipeline/QueryExecutionTask.hpp"
 #include "pipeline/QueryResultJoinTask.hpp"
 #include "pipeline/DataToGPUTask.hpp"
@@ -44,21 +44,21 @@ public:
         auto load_nodes_neo_local = scheduler.emplace([&]() {
             return execute_query(
                 *query_ctx.query,
-                *ctx->db_registry->get(DatabaseTypes::NEO4J)->queryVisitor
+                *ctx->db_registry->get(BackendKind::NEO4J)->queryVisitor
             );
         });
 
         auto load_nodes_neo_cloud = scheduler.emplace([&]() {
             return execute_query(
             *query_ctx.query,
-            *ctx->db_registry->get(DatabaseTypes::CLOUD_NEO4J)->queryVisitor
+            *ctx->db_registry->get(BackendKind::CLOUD_NEO4J)->queryVisitor
             );
         });
 
         auto load_nodes_arango = scheduler.emplace([&]() {
             return execute_query(
                 *query_ctx.query,
-                *ctx->db_registry->get(DatabaseTypes::ARANGO)->queryVisitor
+                *ctx->db_registry->get(BackendKind::ARANGO)->queryVisitor
             );
         });
 

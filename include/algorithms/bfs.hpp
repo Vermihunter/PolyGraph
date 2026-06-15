@@ -60,11 +60,12 @@ public:
                 continue;
             }
 
+
             auto neighbor_find_start = std::chrono::high_resolution_clock::now();
             auto neighbors = neighborFinder_.find_neighbors(*node);
             auto neighbor_find_end = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(neighbor_find_end - neighbor_find_start);
-            //std::cout << "Neighbor Find request for node " << node->global_id << " has resulted in " << neighbors.size() << "neighbors in time " << elapsed.count() << " ms" << std::endl;
+            std::cout << "Neighbor Find request for node " << node->global_id << " has resulted in " << neighbors.size() << " neighbors in time " << elapsed.count() << " ms" << std::endl;
 
             for (auto&& neighbor : neighbors) {
                 auto [it, inserted] = results.insert({

@@ -6,14 +6,14 @@
 #define CPGDB_GRAPHPARTITIONER_HPP
 
 #include <utilities/uuid.hpp>
-#include <data_access/DatabaseTypes.hpp>
+#include "../infrastructure/BackendKind.hpp"
 
 class GraphPartitioner {
     using uuid_range = std::pair<uuid, uuid>;
 
-    std::vector<std::pair<uuid_range, DatabaseTypes>> ranges;
+    std::vector<std::pair<uuid_range, BackendKind>> ranges;
 public:
-    void add_range_safe(uuid_range range, DatabaseTypes database) {
+    void add_range_safe(uuid_range range, BackendKind database) {
         auto&& [new_low, new_high] = range;
         if (new_low > new_high) {
             throw std::invalid_argument{"Invalid range - low has to be lower than high"};

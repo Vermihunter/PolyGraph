@@ -12,14 +12,16 @@
 
 enum class PARSE_TYPE {
     NODE,
-    RELATIONSHIP
+    RELATIONSHIP,
+    ADJACENCY_ROW,
 };
 
 class Neo4JResponseProcessor {
 public:
+    Neo4JResponseProcessor() = default;
     virtual ~Neo4JResponseProcessor() = default;
 
-    virtual query_result_t process(const json&, PARSE_TYPE parse_type) = 0;
+    virtual query_result_t process(const json&, PARSE_TYPE parse_type) const = 0;
 };
 
 using neo_response_processor_t = std::unique_ptr<Neo4JResponseProcessor>;

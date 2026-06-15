@@ -7,7 +7,7 @@
 
 #include <cugraph/algorithms.hpp>
 
-#include "GPU/GPU_Graph.hpp"
+#include "gpu/GPU_Graph.hpp"
 
 template <
     typename vertex_t,

@@ -7,7 +7,7 @@
 
 #include <raft/core/handle.hpp>
 
-#include "GPU/DataModelToGPUGraphConverter.hpp"
+#include "gpu/DataModelToGPUGraphConverter.hpp"
 #include "query/QueryResult.hpp"
 
 template <

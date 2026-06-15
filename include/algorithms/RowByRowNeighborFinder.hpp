@@ -5,10 +5,10 @@
 #ifndef CPGDB_ROWBYROWNEIGHBORFINDER_HPP
 #define CPGDB_ROWBYROWNEIGHBORFINDER_HPP
 
-#include <data_access/DatabaseTypes.hpp>
+#include <../infrastructure/BackendKind.hpp>
 #include <algorithms/NeighborFinder.hpp>
 
-#include <engine/DatabaseContext.hpp>
+#include <../infrastructure/DatabaseContext.hpp>
 #include <engine/NodeLocator.hpp>
 #include <query/query_types/GetNeighborsForVertexQuery.hpp>
 

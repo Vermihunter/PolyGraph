@@ -5,9 +5,9 @@ from collections import deque
 
 """
 python3 bfs.py \
-  --input-json ../generators/small-university.json \
+  --input-json ../generators/large-university.json \
   --output-csv bfs_output.csv \
-  --start-uuid 047fbced-eed8-430b-8c70-e1ed54c96030
+  --start-uuid 11a96cb7-c043-4aa7-aa35-2297e9be7f06
 """
 
 
@@ -32,7 +32,7 @@ class Graph:
         if undirected:
             self.adj[to_uuid].append(from_uuid)
 
-    def bfs_depths(self, start_uuid):
+    def bfs_depths(self, start_uuid, max_depth=None):
         if start_uuid not in self.adj:
             raise ValueError(f"Start node {start_uuid} not found in graph.")
 
@@ -42,6 +42,9 @@ class Graph:
 
         while queue:
             current = queue.popleft()
+
+            if max_depth is not None and depths[current] >= max_depth:
+                continue
 
             for neighbor in self.adj[current]:
                 if neighbor not in visited:
@@ -71,10 +74,10 @@ def load_graph_from_json(json_path, undirected=True):
 
 def save_depths_to_csv(depths, csv_path):
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["uuid", "depth"])
+        writer = csv.writer(f, delimiter=';')
+        writer.writerow(["vertex_id", "distance"])
 
-        for node_uuid, depth in depths.items():
+        for node_uuid, depth in depths:
             writer.writerow([node_uuid, depth])
 
 
@@ -115,7 +118,9 @@ def main():
         undirected=not args.directed
     )
 
-    depths = graph.bfs_depths(args.start_uuid)
+    depths = graph.bfs_depths(args.start_uuid, max_depth=7)
+    depths = sorted(depths.items(), key=lambda x: (x[1],x[0]))
+    #print (depths)
     save_depths_to_csv(depths, args.output_csv)
 
     print(f"BFS completed from {args.start_uuid}")

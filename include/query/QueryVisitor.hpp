@@ -5,12 +5,14 @@
 
 #include <query/QueryResult.hpp>
 
+
 //#include "engine/DatabaseContext.hpp"
 
 class GetAllEdgesQuery;
 class GetAllVerticesQuery;
 class GetNeighborsForVertexQuery;
 class GetVertexByIdQuery;
+class GetNeighborsBatchQuery;
 
 class DatabaseContext;
 
@@ -20,12 +22,13 @@ protected:
 public:
     virtual ~QueryVisitor() = default;
 
-    QueryVisitor(DatabaseContext& db_context) : db_context_(db_context) {}
+    explicit QueryVisitor(DatabaseContext& db_context) : db_context_(db_context) {}
 
     virtual query_result_t visit(const GetAllEdgesQuery&) = 0;
     virtual query_result_t visit(const GetAllVerticesQuery&) = 0;
     virtual query_result_t visit(const GetNeighborsForVertexQuery&) = 0;
     virtual query_result_t visit(const GetVertexByIdQuery&) = 0;
+    virtual query_result_t visit(const GetNeighborsBatchQuery&) = 0;
 };
 
 using query_visitor_t = std::unique_ptr<QueryVisitor>;

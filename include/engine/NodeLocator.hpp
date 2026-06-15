@@ -7,7 +7,7 @@
 
 
 #include <utilities/uuid.hpp>
-#include <data_access/DatabaseTypes.hpp>
+#include "../infrastructure/BackendKind.hpp"
 #include <engine/GraphPartitioner.hpp>
 
 class NodeLocator {
@@ -16,7 +16,7 @@ public:
     NodeLocator(graph_partitioner_t graph_partitioner) :
         graph_partitioner_(std::move(graph_partitioner)) {}
 
-    DatabaseTypes locate(GlobalId id) {
+    BackendKind locate(GlobalId id) {
         for (auto&& [range, db_type] : *graph_partitioner_) {
             auto&& [id_range_low, id_range_high] = range;
 

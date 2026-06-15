@@ -1,83 +1,58 @@
 services:
-  # myapp:
-  #   image: alpine:3
-  #   depends_on:
-  #     janusgraph:
-  #       condition: service_healthy
-  # arangodb:
-  #  condition: service_healthy
 
-  # cassandra:
-  #   image: cassandra:4.1
-  #   container_name: cassandra
-  #   environment:
-  #     - HEAP_NEWSIZE=128M
-  #     - MAX_HEAP_SIZE=512M
+  #janusgraph:
+  #  image: janusgraph/janusgraph:latest
+  #  container_name: janusgraph
+  #  ports:
+  #    - "8182:8182"
+  #  environment:
+  #    JANUS_PROPS_TEMPLATE: berkeleyje-lucene
+  #
+  #    # Important: allow both WebSocket and HTTP requests
+  #    gremlinserver.channelizer: org.apache.tinkerpop.gremlin.server.channel.WsAndHttpChannelizer
+  #
+  #    # Expose inside container network
+  #    gremlinserver.host: 0.0.0.0
+  #    gremlinserver.port: 8182
+  #  volumes:
+  #    - janusgraph-data:/var/lib/janusgraph
+  #  restart: unless-stopped
+
+  # tigergraph:
+  #   image: tigergraph/community:4.2.2
+  #   container_name: tigergraph
+  #   platform: linux/amd64
+  #   ulimits:
+  #     nofile:
+  #       soft: 1000000
+  #       hard: 1000000
   #   ports:
-  #     - "9042:9042"
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "nodetool status"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 5
-
-  # elasticsearch:
-  #   image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
-  #   container_name: elasticsearch
-  #   environment:
-  #     - discovery.type=single-node
-  #     - ES_JAVA_OPTS=-Xms512m -Xmx512m
-  #   ports:
-  #     - "9200:9200"
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "curl -f http://localhost:9200 || exit 1"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 5
-
-  # janusgraph:
-  #   image: janusgraph/janusgraph:1.0
-  #   container_name: janusgraph
-  #   depends_on:
-  #     cassandra:
-  #       condition: service_healthy
-  #     elasticsearch:
-  #       condition: service_healthy
-  #   ports:
-  #     - "8182:8182"
-  #   environment:
-  #     JANUSGRAPH_STORAGE_BACKEND: cassandra
-  #     JANUSGRAPH_STORAGE_HOSTNAME: cassandra
-  #     JANUSGRAPH_INDEX_SEARCH_BACKEND: elasticsearch
-  #     JANUSGRAPH_INDEX_SEARCH_HOSTNAME: elasticsearch
-  #     JANUSGRAPH_STORAGE_BERKELEYJE_FREE_DISK: 1073741824
-  #     JANUSGRAPH_SERVER_CHANNELIZER: org.apache.tinkerpop.gremlin.server.channel.WsAndHttpChannelizer
-
-  #     #JANUSGRAPH_SERVER_CONFIG: /opt/janusgraph/conf/janusgraph-server.yaml
-
-  #   # volumes:
-  #   #   #  - ./janusgraph-server.yaml:/conf/janusgraph-server.yaml
-  #   #   - ./janusgraph-server.yaml:/opt/janusgraph/conf/janusgraph-server.yaml:ro
-  #   restart: always
-  #   healthcheck:
-  #     test: ["CMD", "bin/gremlin.sh", "-e", "scripts/remote-connect.groovy"]
-  #     interval: 20s
-  #     timeout: 10s
-  #     retries: 5
+  #     - "14022:22"
+  #     - "9000:9000"
+  #     - "14240:14240"
+  #   volumes:
+  #     - tigergraph-home:/home/tigergraph
+  #     - ./tigergraph-data:/home/tigergraph/mydata
+  #   tty: true
+  #   restart: unless-stopped
 
   neo4j:
     image: neo4j:5
     container_name: neo4j
     restart: unless-stopped
     ports:
-      - "7474:7474" # HTTP (Neo4j Browser)
+      - "7474:7474" # HTTP (Neo4j Browser / transaction API)
       - "7687:7687" # Bolt
     environment:
       - NEO4J_AUTH=neo4j/password
       - NEO4J_server_http_enabled=true
       - NEO4J_server_http_listen__address=0.0.0.0:7474
       - NEO4J_server_bolt_listen__address=0.0.0.0:7687
-      - NEO4J_AUTH=none
+      # Needed by tools/native_bfs/native_bfs_component.py neo4j-bfs.
+      # The component uses apoc.path.expandConfig(... bfs:true, uniqueness:'NODE_GLOBAL').
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
@@ -93,40 +68,29 @@ services:
       - arangodb_data_container:/var/lib/arangodb3
       - arangodb_apps_data_container:/var/lib/arangodb3-apps
 
-  memgraph:
-    image: memgraph/memgraph:latest
-    container_name: memgraph
-    ports:
-      - "7688:7687"
-      - "7444:7444"
-    volumes:
-      - memgraph_data:/var/lib/memgraph
-    restart: unless-stopped
 
-  memgraph-lab:
-    image: memgraph/lab:latest
-    container_name: memgraph-lab
-    ports:
-      - "3000:3000"
-    depends_on:
-      - memgraph
-    restart: unless-stopped
-    # healthcheck:
-    #   test:
-    #     [
-    #       "CMD",
-    #       "sh",
-    #       "-c",
-    #       'arangosh --server.endpoint tcp://agency1:8531 --server.authentication true --server.username root --server.password rootpassword --javascript.execute ''db._query("RETURN 1").toArray()''',
-    #     ]
-    #   interval: 10s
-    #   timeout: 5s
-    #   retries: 30 # allow up to ~5 minutes
-    #   start_period: 40s # give it warm-up ti
+  #memgraph:
+  #  image: memgraph/memgraph:latest
+  #  container_name: memgraph
+  #  ports:
+  #    - "7688:7687"
+  #    - "7444:7444"
+  #  volumes:
+  #    - memgraph_data:/var/lib/memgraph
+  #  restart: unless-stopped
+  #
+  #memgraph-lab:
+  #  image: memgraph/lab:latest
+  #  container_name: memgraph-lab
+  #  ports:
+  #    - "3000:3000"
+  #  depends_on:
+  #    - memgraph
+  #  restart: unless-stopped
 
 volumes:
-  #janusgraph-default-data:
-  tg_data:
+  janusgraph-data:
+  tigergraph-home:
   arangodb_data_container:
   arangodb_apps_data_container:
   neo4j_data:

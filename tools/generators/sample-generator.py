@@ -8,10 +8,16 @@ from datetime import date, datetime, timedelta
 from typing import Dict, List, Tuple, Any
 
 
+"""
+python3 sample-generator.py ../../storage_layer/sample-university-domain.graph-shape.json ../../storage_layer/sample-university-domain.config.json ../../storage_layer/sample-university-domain.sample-values.json -p large -s 123 -o large-university.json
+"""
+
+
 SOURCE_CODE_TO_ID = {
     "Neo4J": 0,
     "ArangoDB": 1,
     "JanusGraph": 2,
+    "GPU": 3,
 }
 
 SOURCE_ID_TO_NAME = {v: k for k, v in SOURCE_CODE_TO_ID.items()}
@@ -534,7 +540,7 @@ def generate_dataset(
     generated_nodes_by_type: Dict[str, List[Dict[str, Any]]] = {}
     all_nodes: List[Dict[str, Any]] = []
 
-    print(schema_nodes)
+
     for node_type, count in node_counts.items():
         if node_type not in schema_nodes:
             continue

@@ -10,6 +10,7 @@
 #include <data_model/Record.hpp>
 #include <data_model/Value.hpp>
 #include <utilities/json.hpp>
+#include <boost/uuid/string_generator.hpp>
 
 //using json = nlohmann::json;
 // Forward declarations for the compiler
@@ -31,20 +32,28 @@ namespace nlohmann {
 
 inline void to_json(json& j, const Node& n) {
     j = json::object(); // Explicitly create object to avoid ambiguity
-    j["id"] = n.id;
+    j["id"] = n.global_id;
     j["labels"] = n.labels;
     j["properties"] = n.properties;
 }
 
+
+
+inline boost::uuids::uuid json_to_uuid(const json& j) {
+    return boost::uuids::string_generator{}(j.get<std::string>());
+}
+
 inline void from_json(const json& j, Node& n) {
-    n.id = j.at("id").get<decltype(n.id)>();
+    n.global_id = json_to_uuid(j.at("id"));
+
     n.labels = j.at("labels").get<std::vector<std::string>>();
     n.properties = j.at("properties").get<std::unordered_map<std::string, std::unique_ptr<Value>>>();
 }
 
+
 inline void to_json(json& j, const Edge& e) {
     j = json::object();
-    j["id"] = e.id;
+    j["global_id"] = e.global_id;
     j["type"] = e.type;
     j["src"] = e.src;
     j["dst"] = e.dst;
@@ -52,11 +61,11 @@ inline void to_json(json& j, const Edge& e) {
 }
 
 inline void from_json(const json& j, Edge& e) {
-    e.id = j.at("id").get<decltype(e.id)>();
-    e.type = j.at("type").get<std::string>();
-    e.src = j.at("src").get<decltype(e.src)>();
-    e.dst = j.at("dst").get<decltype(e.dst)>();
-    e.properties = j.at("properties").get<std::unordered_map<std::string, std::unique_ptr<Value>>>();
+    e.global_id = json_to_uuid(j.at("global_id"));
+    e.type = j.at("type").get<TypeId>();
+    e.src = json_to_uuid( j.at("src"));
+    e.dst = json_to_uuid( j.at("dst"));
+    e.properties = j.at("properties").get<Map>();
 }
 
 inline void to_json(json& j, const Path& p) {
@@ -120,6 +129,5 @@ inline void to_json(json& j, const Record& r) {
 inline void from_json(const json& j, Record& r) {
     r.fields = j.at("fields").get<std::vector<Value>>();
 }
-
 
 #endif //CPGDB_RECORDJSONSERIALIZER_HPP

@@ -2,11 +2,11 @@
 #define QUERY_CONTEXT_HPP
 
 #include <query/Query.hpp>
-#include <data_access/DatabaseTypes.hpp>
+#include "../infrastructure/BackendKind.hpp"
 
 struct QueryContext {
     query_t query;
-    DatabaseTypes targetDB;
+    BackendKind targetDB;
 };
 
 #endif // QUERY_CONTEXT_HPP

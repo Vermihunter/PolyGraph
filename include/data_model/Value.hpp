@@ -21,29 +21,6 @@ using value_t = std::unique_ptr<Value>;
 using Map  = std::unordered_map<std::string, value_t>;
 using List = std::vector<value_t>;
 
-/*
-struct Map : std::unordered_map<std::string, value_t> {
-    using Base = std::unordered_map<std::string, value_t>;
-    using Base::Base;
-
-    Map() = default;
-    Map(const Map&) = delete;
-    Map& operator=(const Map&) = delete;
-    Map(Map&&) = default;
-    Map& operator=(Map&&) = default;
-};
-struct List : std::vector<value_t> {
-    using Base = std::vector<value_t>;
-    using Base::Base;
-
-    List() = default;
-    List(const List&) = delete;
-    List& operator=(const List&) = delete;
-    List(List&&) = default;
-    List& operator=(List&&) = default;
-};
-*/
-
 struct Value {
   using Variant = std::variant<
       std::monostate,          // null

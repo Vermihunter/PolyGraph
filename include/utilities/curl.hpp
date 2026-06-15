@@ -54,4 +54,31 @@ inline std::string http_get(const std::string& url, const std::string& auth = ""
     return response;
 }
 
+inline std::string http_put(const std::string& url, const std::string& body = "{}",
+                            const std::string& auth = "")
+{
+    CURL* curl = curl_easy_init();
+    std::string response;
+
+    if (curl)
+    {
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+        if(!auth.empty())
+            curl_easy_setopt(curl, CURLOPT_USERPWD, auth.c_str());
+
+        curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+    }
+    return response;
+}
+
 #endif // DB_CURL_UTIL_HPP
