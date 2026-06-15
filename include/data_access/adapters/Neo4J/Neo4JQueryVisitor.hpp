@@ -428,6 +428,12 @@ private:
         return false;
     }
 
+    static bool is_infrastructure_label(const std::string& label) {
+        return label == "Proxy" ||
+               label == "CPGDBVertex" ||
+               label == "__GraphNode";
+    }
+
     static std::optional<std::string>
     first_logical_label_opt(const json& labels_value) {
         if (!labels_value.is_array()) {
@@ -445,7 +451,7 @@ private:
                 continue;
             }
 
-            if (label == "Proxy" || label == "CPGDBVertex") {
+            if (is_infrastructure_label(label)) {
                 continue;
             }
 
@@ -684,10 +690,16 @@ private:
         }
 
         std::string response_body;
+        std::string auth;
+
+        if (config_.credentials.has_value()) {
+            auth = config_.credentials->username + ":" +
+                   config_.credentials->password;
+        }
 
         {
             CPGDB_PROFILE_SCOPE("Neo4J send_req: HTTP POST");
-            response_body = http_post(config_.endpoint, request_body);
+            response_body = http_post(config_.endpoint, request_body, auth);
         }
 
         json parsed;
