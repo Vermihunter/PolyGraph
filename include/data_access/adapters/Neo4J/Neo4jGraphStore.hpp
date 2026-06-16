@@ -20,7 +20,6 @@
 #include "algorithms/bfs/BfsResult.hpp"
 #include "data_access/IGraphStore.hpp"
 #include "data_model/AdjacencyRow.hpp"
-#include "data_model/MinimalAdjacencyRow.hpp"
 #include "data_model/Edge.hpp"
 #include "data_model/Node.hpp"
 #include "data_model/Value.hpp"
@@ -87,25 +86,6 @@ public:
         }
 
         return parse_adjacency_rows(*raw, frontier);
-    }
-
-
-    std::vector<MinimalAdjacencyRow>
-    get_minimal_neighbors_batch(std::span<const NodeRef> frontier,
-                                const ExpandSpec& spec) override {
-        CPGDB_PROFILE_FUNCTION();
-
-        if (frontier.empty()) {
-            return {};
-        }
-
-        if (auto* neo4j_visitor =
-                dynamic_cast<Neo4JQueryVisitor*>(visitor_.get())) {
-            CPGDB_PROFILE_SCOPE("Neo4jGraphStore: fast get_minimal_neighbors_batch");
-            return neo4j_visitor->get_minimal_neighbors_batch_fast(frontier, spec);
-        }
-
-        return IGraphStore::get_minimal_neighbors_batch(frontier, spec);
     }
 
     BfsResult

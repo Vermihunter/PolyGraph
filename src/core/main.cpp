@@ -320,7 +320,9 @@ auto build_context(const std::string& domainGraphPath, const std::string& dataPa
         .credentials = DatabaseCredentials{
             .username = "neo4j",
             .password = "password"
-        }
+        },
+        .transport = "bolt",
+        .bolt_endpoint = "bolt://localhost:7687"
     });
 
     ctx->register_backend_config(BackendConnectionConfig {

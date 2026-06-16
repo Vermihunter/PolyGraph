@@ -23,6 +23,12 @@ struct BackendConnectionConfig {
 
     std::optional<DatabaseCredentials> credentials;
 
+    // Neo4j can use either HTTP transaction API or Bolt.
+    // transport: "http" or "bolt".  Environment variable
+    // CPGDB_NEO4J_TRANSPORT=bolt overrides this field.
+    std::string transport = "http";
+    std::string bolt_endpoint;
+
     // For Neo4j/Arango/Memgraph clusters or replicas
     std::vector<std::string> replica_endpoints;
 };

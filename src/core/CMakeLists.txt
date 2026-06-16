@@ -112,6 +112,7 @@ add_executable(graph_db main.cpp
         ../../include/utilities/Profiling.hpp
         ../../include/data_access/adapters/Neo4J/Neo4JQueryVisitorOld.hpp
         ../../include/data_model/MinimalAdjacencyRow.hpp
+        ../../include/data_access/adapters/Neo4J/Neo4JBoltClient.hpp
 )
 
 target_link_libraries(graph_db
