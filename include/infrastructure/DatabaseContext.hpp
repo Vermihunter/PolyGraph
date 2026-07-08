@@ -10,6 +10,7 @@
 #include "domain/graph/LogicalGraphSchema.hpp"
 #include "gpu/GpuRuntime.hpp"
 #include "infrastructure/BackendConnectionConfig.hpp"
+#include "infrastructure/BackendDescriptor.hpp"
 #include "infrastructure/BackendId.hpp"
 #include "infrastructure/BackendRegistry.hpp"
 #include "infrastructure/GraphVersion.hpp"
@@ -81,7 +82,6 @@ struct DatabaseContext {
     void register_backend_config(BackendConnectionConfig config) {
         connection_configs[config.id] = std::move(config);
     }
-
 
     void register_store(std::shared_ptr<IGraphStore> store) {
         backend_registry->register_store(std::move(store));

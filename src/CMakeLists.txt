@@ -1,2 +1,6 @@
 
-add_subdirectory(core)
+
+
+
+add_subdirectory(bfs)
+add_subdirectory(http_server)

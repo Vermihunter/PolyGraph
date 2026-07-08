@@ -7,7 +7,7 @@
 
 namespace domain {
     enum class PropertyType {
-        string ,integer, boolean, // ...
+        string ,integer, boolean, _float, date, datetime// ...
     };
 }
 

@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <future>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -14,6 +15,7 @@
 #include <boost/container_hash/hash.hpp>
 
 #include "BfsResult.hpp"
+#include "algorithms/bfs/BfsLayer.hpp"
 #include "algorithms/ExpandSpec.hpp"
 #include "data_access/IGraphStore.hpp"
 #include "data_model/MinimalAdjacencyRow.hpp"
@@ -27,6 +29,23 @@ public:
     explicit BfsExecutor(const PlacementCatalog& catalog)
         : catalog_(catalog) {}
 
+
+
+    [[nodiscard]] BfsResult run_streaming(const NodeRef& source,
+                                          const ExpandSpec& spec,
+                                          const BfsOptions& options,
+                                          const std::function<void(const BfsLayerEvent&)>& on_layer) const {
+        if (options.allow_native_pushdown) {
+            /*
+             * Native pushdown BFS usually returns the whole result at once.
+             * For true layer-by-layer streaming, use the distributed frontier loop.
+             * Keep this disabled for streaming unless the backend exposes a native
+             * streaming BFS API later.
+             */
+        }
+
+        return run_distributed_frontier_bfs_streaming(source, spec, options, on_layer);
+    }
     [[nodiscard]] BfsResult run(const NodeRef& source,
                                 const ExpandSpec& spec,
                                 const BfsOptions& options) const {
@@ -123,6 +142,116 @@ private:
 
                     next_frontier.push_back(neighbor);
                 }
+            }
+
+            frontier = std::move(next_frontier);
+            ++depth;
+        }
+
+        BfsResult result;
+        result.distance.reserve(state.to_global.size());
+
+        for (std::uint32_t dense = 0;
+             dense < static_cast<std::uint32_t>(state.to_global.size());
+             ++dense) {
+            if (state.distance[dense] < 0) {
+                continue;
+            }
+
+            result.distance.emplace(
+                state.to_global[dense],
+                static_cast<std::uint32_t>(state.distance[dense])
+            );
+
+            if (options.return_predecessors &&
+                state.predecessor[dense] != DenseBfsState::no_predecessor) {
+                result.predecessor.emplace(
+                    state.to_global[dense],
+                    state.to_global[state.predecessor[dense]]
+                );
+            }
+        }
+
+        return result;
+    }
+
+
+
+    BfsResult run_distributed_frontier_bfs_streaming(
+        const NodeRef& source,
+        const ExpandSpec& spec,
+        const BfsOptions& options,
+        const std::function<void(const BfsLayerEvent&)>& on_layer
+    ) const {
+        CPGDB_PROFILE_FUNCTION();
+
+        DenseBfsState state;
+        state.to_dense.reserve(65536);
+        state.to_global.reserve(65536);
+        state.distance.reserve(65536);
+        state.predecessor.reserve(65536);
+
+        const std::uint32_t source_dense = state.get_or_add(source.global_id);
+        state.distance[source_dense] = 0;
+
+        std::vector<NodeRef> frontier;
+        frontier.push_back(source);
+
+        BfsLayerEvent source_layer;
+        source_layer.depth = 0;
+        source_layer.vertices.push_back(source);
+        on_layer(source_layer);
+
+        std::uint32_t depth = 0;
+
+        while (!frontier.empty()) {
+            if (options.max_depth.has_value() &&
+                depth >= *options.max_depth) {
+                break;
+            }
+
+            auto layer_plan =
+                catalog_.plan_frontier_expansion(frontier, spec, options);
+
+            auto rows = expand_layer_parallel(layer_plan, spec);
+
+            std::vector<NodeRef> next_frontier;
+            BfsLayerEvent layer;
+            layer.depth = depth + 1;
+
+            for (const auto& row : rows) {
+                const std::uint32_t source_row_dense =
+                    state.get_or_add(row.source.global_id);
+
+                for (const auto& neighbor : row.neighbors) {
+                    if (!spec.allows_target_type(neighbor.type)) {
+                        continue;
+                    }
+
+                    const std::uint32_t neighbor_dense =
+                        state.get_or_add(neighbor.global_id);
+
+                    if (state.distance[neighbor_dense] != -1) {
+                        continue;
+                    }
+
+                    state.distance[neighbor_dense] = static_cast<int>(depth + 1);
+
+                    if (options.return_predecessors) {
+                        state.predecessor[neighbor_dense] = source_row_dense;
+                    }
+
+                    next_frontier.push_back(neighbor);
+                    layer.vertices.push_back(neighbor);
+                    layer.tree_edges.push_back(BfsTreeEdgeRef{
+                        .source = row.source,
+                        .target = neighbor
+                    });
+                }
+            }
+
+            if (!layer.vertices.empty()) {
+                on_layer(layer);
             }
 
             frontier = std::move(next_frontier);

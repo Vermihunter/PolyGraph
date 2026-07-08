@@ -68,6 +68,7 @@ public:
         std::unordered_map<BackendId, std::vector<NodeRef>> backend_frontiers;
     };
 
+    /*
     [[nodiscard]] LayerExpansionPlan
     plan_frontier_expansion(std::span<const NodeRef> frontier,
                             const ExpandSpec& spec,
@@ -85,6 +86,32 @@ public:
 
             for (BackendId backend_id : backend_ids) {
                 plan.backend_frontiers[backend_id].push_back(vertex);
+            }
+        }
+
+        return plan;
+    }
+    */
+
+    [[nodiscard]] LayerExpansionPlan
+    plan_frontier_expansion(std::span<const NodeRef> frontier,
+                        const ExpandSpec& spec,
+                        const BfsOptions& options) const {
+        LayerExpansionPlan plan;
+
+        for (const auto& vertex : frontier) {
+            auto backend_ids = choose_expansion_backends_for_vertex(
+                vertex,
+                spec,
+                options
+            );
+
+            std::unordered_set<BackendId> seen_backends;
+
+            for (BackendId backend_id : backend_ids) {
+                if (seen_backends.insert(backend_id).second) {
+                    plan.backend_frontiers[backend_id].push_back(vertex);
+                }
             }
         }
 

@@ -196,6 +196,98 @@ public:
         });
     }
 
+    /*
+     * Previous get_neighbors_batch_fast implementation.
+     *
+     * It used direct one-hop Cypher expansion:
+     *     UNWIND $frontier AS source_uuid
+     *     MATCH (source:<label> {uuid: source_uuid})
+     *     MATCH (source)-[r]-(neighbor)
+     *
+     * Kept here commented out while the active implementation below uses
+     * APOC built-in BFS with minLevel=maxLevel=1.
+     *
+        std::vector<AdjacencyRow>
+        get_neighbors_batch_fast(std::span<const NodeRef> frontier,
+                                 const ExpandSpec& spec) const {
+            CPGDB_PROFILE_FUNCTION();
+
+            if (frontier.empty()) {
+                return {};
+            }
+
+            std::vector<AdjacencyRow> rows;
+            rows.reserve(frontier.size());
+
+            std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> row_by_source;
+            row_by_source.reserve(frontier.size());
+
+            for (const auto& source : frontier) {
+                auto [it, inserted] = row_by_source.emplace(source.global_id, rows.size());
+
+                if (inserted) {
+                    rows.push_back(AdjacencyRow{
+                        .source = source,
+                        .neighbors = {}
+                    });
+                }
+            }
+
+            const auto grouped_frontier = group_frontier_by_physical_source_label(frontier);
+            const auto edge_type_names = edge_type_names_for_spec(spec);
+            const std::string type_pattern = relationship_type_pattern(edge_type_names);
+
+            for (const auto& [source_label, group] : grouped_frontier) {
+                if (group.empty()) {
+                    continue;
+                }
+
+                json frontier_json = json::array();
+                for (const auto& source : group) {
+                    frontier_json.push_back(boost::uuids::to_string(source.global_id));
+                }
+
+                const std::string edge_match =
+                    build_edge_match(spec.direction, type_pattern);
+
+                const std::string query =
+                    "UNWIND $frontier AS source_uuid "
+                    "MATCH (source:" + escape_cypher_identifier(source_label) + " {uuid: source_uuid}) "
+                    + edge_match +
+                    "RETURN "
+                    "source.uuid AS source_uuid, "
+                    "neighbor.uuid AS neighbor_uuid, "
+                    "neighbor.`remote-uuid` AS neighbor_remote_uuid, "
+                    "coalesce(neighbor.is_proxy, false) AS neighbor_is_proxy, "
+                    "neighbor.`remote-type` AS neighbor_remote_type, "
+                    "neighbor.type AS neighbor_type_property, "
+                    "labels(neighbor) AS neighbor_labels, "
+                    "r.uuid AS edge_uuid, "
+                    "type(r) AS edge_type, "
+                    "startNode(r).uuid AS edge_from_uuid, "
+                    "endNode(r).uuid AS edge_to_uuid";
+
+                const json parameters{
+                    {"frontier", frontier_json}
+                };
+
+                json response;
+
+                {
+                    CPGDB_PROFILE_SCOPE("Neo4J fast BFS: send_req grouped label query");
+                    response = send_req(query, parameters);
+                }
+
+                {
+                    CPGDB_PROFILE_SCOPE("Neo4J fast BFS: parse scalar adjacency rows");
+                    parse_fast_response_into_rows(response, rows, row_by_source, spec);
+                }
+            }
+
+            return rows;
+        }
+     */
+
     std::vector<AdjacencyRow>
     get_neighbors_batch_fast(std::span<const NodeRef> frontier,
                              const ExpandSpec& spec) const {
@@ -224,7 +316,8 @@ public:
 
         const auto grouped_frontier = group_frontier_by_physical_source_label(frontier);
         const auto edge_type_names = edge_type_names_for_spec(spec);
-        const std::string type_pattern = relationship_type_pattern(edge_type_names);
+        const std::string relationship_filter =
+            apoc_relationship_filter_for_spec(edge_type_names, spec.direction);
 
         for (const auto& [source_label, group] : grouped_frontier) {
             if (group.empty()) {
@@ -236,13 +329,17 @@ public:
                 frontier_json.push_back(boost::uuids::to_string(source.global_id));
             }
 
-            const std::string edge_match =
-                build_edge_match(spec.direction, type_pattern);
-
             const std::string query =
                 "UNWIND $frontier AS source_uuid "
                 "MATCH (source:" + escape_cypher_identifier(source_label) + " {uuid: source_uuid}) "
-                + edge_match +
+                "CALL apoc.path.expandConfig(source, { "
+                "  minLevel: 1, "
+                "  maxLevel: 1, "
+                "  relationshipFilter: $relationshipFilter, "
+                "  bfs: true, "
+                "  uniqueness: 'NODE_GLOBAL' "
+                "}) YIELD path "
+                "WITH source, last(nodes(path)) AS neighbor, relationships(path)[0] AS r "
                 "RETURN "
                 "source.uuid AS source_uuid, "
                 "neighbor.uuid AS neighbor_uuid, "
@@ -257,13 +354,14 @@ public:
                 "endNode(r).uuid AS edge_to_uuid";
 
             const json parameters{
-                {"frontier", frontier_json}
+                {"frontier", frontier_json},
+                {"relationshipFilter", relationship_filter}
             };
 
             json response;
 
             {
-                CPGDB_PROFILE_SCOPE("Neo4J fast BFS: send_req grouped label query");
+                CPGDB_PROFILE_SCOPE("Neo4J fast BFS: send_req grouped APOC BFS length 1 query");
                 response = send_req(query, parameters);
             }
 
@@ -336,6 +434,50 @@ private:
             }
 
             result += escape_cypher_identifier(edge_type_names[i]);
+        }
+
+        return result;
+    }
+
+    static std::string
+    apoc_relationship_filter_for_spec(const std::vector<std::string>& edge_type_names,
+                                      Direction direction) {
+        std::string result;
+
+        for (std::size_t i = 0; i < edge_type_names.size(); ++i) {
+            const auto& edge_type_name = edge_type_names[i];
+
+            if (edge_type_name.empty()) {
+                continue;
+            }
+
+            if (edge_type_name.find('|') != std::string::npos ||
+                edge_type_name.find('<') != std::string::npos ||
+                edge_type_name.find('>') != std::string::npos) {
+                throw std::runtime_error(
+                    "Neo4J APOC relationshipFilter cannot safely encode edge type name: " +
+                    edge_type_name
+                );
+            }
+
+            if (!result.empty()) {
+                result += "|";
+            }
+
+            switch (direction) {
+                case Direction::Directed:
+                    // Same semantics as build_edge_match(Direction::Directed):
+                    // MATCH (source)-[r:TYPE]->(neighbor)
+                    result += edge_type_name + ">";
+                    break;
+
+                case Direction::Undirected:
+                case Direction::Both:
+                    // Same semantics as build_edge_match(Direction::Both/Undirected):
+                    // MATCH (source)-[r:TYPE]-(neighbor)
+                    result += edge_type_name;
+                    break;
+            }
         }
 
         return result;
