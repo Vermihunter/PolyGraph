@@ -11,7 +11,9 @@
 #include "cli/BfsCli.hpp"
 #include "cli/CurlGlobalGuard.hpp"
 #include "cli/GraphRuntimeBuilder.hpp"
+#include "logging/LoggingSetup.hpp"
 #include "utilities/Profiling.hpp"
+#include "utilities/logging.hpp"
 
 int main(int argc, char** argv) {
     cpgdb::runtime::CurlGlobalGuard curl;
@@ -28,7 +30,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    CPGDB_PROFILE_FUNCTION();
+    cpgdb::cli::parse_log_options(program);
 
     try {
         cpgdb::cli::GraphRuntimeBuilder builder;
@@ -43,7 +45,7 @@ int main(int argc, char** argv) {
         const auto result = bfs.run(source, expand_spec, options);
         cpgdb::cli::write_bfs_distances_csv(std::cout, result);
 
-        cpgdb::prof::Profiler::dump(std::cerr);
+        //cpgdb::prof::Profiler::dump(std::cerr);
         return 0;
     } catch (...) {
         cpgdb::prof::Profiler::dump(std::cerr);

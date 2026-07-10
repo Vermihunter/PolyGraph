@@ -34,6 +34,8 @@ namespace cpgdb::cli {
 
     [[nodiscard]] BfsOptions parse_bfs_options(const argparse::ArgumentParser& args);
 
+    void parse_log_options(const argparse::ArgumentParser& args);
+
     template <class BfsResultLike>
     void write_bfs_distances_csv(std::ostream& out, const BfsResultLike& result) {
         out << "vertex_id;distance\n";

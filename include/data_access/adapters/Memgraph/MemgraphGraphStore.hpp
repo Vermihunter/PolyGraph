@@ -18,7 +18,7 @@ public:
 
     std::vector<AdjacencyRow>
     get_neighbors_batch(std::span<const NodeRef> frontier,
-                        const ExpandSpec& spec) override {
+                        const ExpandSpec& spec, int depth) override {
         /*
          * Build a Cypher query similar to:
          *

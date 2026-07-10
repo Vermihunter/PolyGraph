@@ -29,12 +29,12 @@ public:
 
     virtual std::vector<AdjacencyRow>
     get_neighbors_batch(std::span<const NodeRef> frontier,
-                        const ExpandSpec& spec) = 0;
+                        const ExpandSpec& spec, int depth) = 0;
 
     virtual std::vector<MinimalAdjacencyRow>
     get_minimal_neighbors_batch(std::span<const NodeRef> frontier,
-                                const ExpandSpec& spec) {
-        auto rich_rows = get_neighbors_batch(frontier, spec);
+                                const ExpandSpec& spec, int depth) {
+        auto rich_rows = get_neighbors_batch(frontier, spec, depth);
 
         std::vector<MinimalAdjacencyRow> minimal_rows;
         minimal_rows.reserve(rich_rows.size());

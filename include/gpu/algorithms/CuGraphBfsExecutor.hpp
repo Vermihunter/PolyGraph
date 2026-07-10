@@ -17,7 +17,7 @@
 class CuGraphBfsExecutor {
 public:
     template <typename vertex_t, typename edge_t, bool MULTI_GPU = false>
-    static BfsResult run(CsrGraphProjection<vertex_t, edge_t>& projection,
+    static BfsResult    run(CsrGraphProjection<vertex_t, edge_t>& projection,
                          const GlobalId& source_id,
                          const BfsOptions& options) {
         if (!projection.mapper().contains(source_id)) {
@@ -36,6 +36,8 @@ public:
         if (n == 0) {
             throw std::runtime_error("GPU projection has zero vertices");
         }
+
+        EVENT_SCOPE(_, "cugraph.bfs");
 
         rmm::device_uvector<vertex_t> d_distances(n, stream);
         rmm::device_uvector<vertex_t> d_predecessors(n, stream);
@@ -109,6 +111,7 @@ private:
         const std::vector<vertex_t>& h_predecessors,
         bool has_predecessors
     ) {
+        EVENT_SCOPE(_, "cugraph.bfs_to_intermediate_conversion");
         BfsResult result;
 
         for (std::size_t dense = 0; dense < h_distances.size(); ++dense) {

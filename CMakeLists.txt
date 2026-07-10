@@ -2,8 +2,7 @@ cmake_minimum_required(VERSION 3.26)
 
 project(CPGDB)
 
-#set(CMAKE_CXX_STANDARD 23)
-
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 # ------------------------------------------------------------
 # Global language settings
@@ -144,18 +143,14 @@ add_library(cpgdb_common INTERFACE
         include/cli/CurlGlobalGuard.hpp
         include/cli/GraphRuntimeBuilder.hpp
         include/algorithms/bfs/BfsLayer.hpp
-        include/server/grpc/GrpcTraversalService.hpp)
-#        include/server/http/JsonResponse.hpp
-#        include/server/http/ErrorMapper.hpp
-#        include/server/http/RequestParsing.hpp
-#        include/server/controllers/TraversalController.hpp
-#        include/server/services/ServicesPlugin.hpp
-#        include/server/services/TraversalService.hpp
-#        include/server/dto/BfsRequest.hpp
-#        include/serialization/BfsResultJsonSerializer.hpp
-#
-#)
+        include/server/grpc/GrpcTraversalService.hpp
+        include/logging/EventLogger.hpp
+        include/logging/EventScope.hpp
+        include/utilities/logging.hpp
+        include/logging/LoggingSetup.hpp
+)
 
+include(Uftrace)
 
 target_include_directories(cpgdb_common INTERFACE
         "${PROJECT_SOURCE_DIR}/include"
@@ -175,6 +170,11 @@ target_link_libraries(cpgdb_common INTERFACE
         cugraph::cugraph
         argparse
 )
+
+cpgdb_enable_uftrace(cpgdb_common)
+
+
+#include("${CMAKE_SOURCE_DIR}/cmake/Uftrace.cmake")
 
 
 # ------------------------------------------------------------

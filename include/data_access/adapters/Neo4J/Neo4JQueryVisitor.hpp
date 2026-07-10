@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <optional>
 #include <cstdlib>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -38,6 +39,7 @@
 #include "infrastructure/DatabaseContext.hpp"
 #include "response_processors/LocallyDeployedNeo4JResponseProcessor.hpp"
 #include "utilities/BackendIds.hpp"
+#include "utilities/logging.hpp"
 #include "utilities/Profiling.hpp"
 
 class Neo4JQueryVisitor : public QueryVisitor {
@@ -134,7 +136,8 @@ public:
     }
 
     query_result_t visit(const GetNeighborsBatchQuery& q) override {
-        CPGDB_PROFILE_FUNCTION();
+        //CPGDB_PROFILE_FUNCTION();
+        EVENT_SCOPE(_, "");
 
         json frontier = json::array();
         for (const auto& v : q.frontier()) {
@@ -288,14 +291,32 @@ public:
         }
      */
 
+
+
     std::vector<AdjacencyRow>
     get_neighbors_batch_fast(std::span<const NodeRef> frontier,
-                             const ExpandSpec& spec) const {
-        CPGDB_PROFILE_FUNCTION();
+                             const ExpandSpec& spec,
+                             int depth) const {
 
+        return get_neighbors_batch_fast_async(frontier, spec, depth);
+        //return get_neighbors_batch_fast_sequential(frontier, spec, depth);
+    }
+
+private:
+    std::vector<AdjacencyRow> get_neighbors_batch_fast_sequential(
+        std::span<const NodeRef> frontier,
+        const ExpandSpec& spec,
+        int depth
+        ) const
+    {
         if (frontier.empty()) {
             return {};
         }
+
+        EVENT_SCOPE(total_span, "neo4j.get_neighbors_batch_fast",
+            {"depth", depth},
+            {"frontier_size", frontier.size()}
+        );
 
         std::vector<AdjacencyRow> rows;
         rows.reserve(frontier.size());
@@ -315,6 +336,9 @@ public:
         }
 
         const auto grouped_frontier = group_frontier_by_physical_source_label(frontier);
+
+        total_span.add_end_field("label_group_count", grouped_frontier.size());
+
         const auto edge_type_names = edge_type_names_for_spec(spec);
         const std::string relationship_filter =
             apoc_relationship_filter_for_spec(edge_type_names, spec.direction);
@@ -324,7 +348,15 @@ public:
                 continue;
             }
 
+            EVENT_SCOPE(group_span, "neo4j.label_group_neighbor_query",
+                {"depth", depth},
+                {"source_label", source_label},
+                {"group_size", group.size()},
+                {"relationship_filter", relationship_filter}
+            );
+
             json frontier_json = json::array();
+
             for (const auto& source : group) {
                 frontier_json.push_back(boost::uuids::to_string(source.global_id));
             }
@@ -361,20 +393,159 @@ public:
             json response;
 
             {
-                CPGDB_PROFILE_SCOPE("Neo4J fast BFS: send_req grouped APOC BFS length 1 query");
+                EVENT_SCOPE(http_span, "neo4j.bfs_http_query",
+                    {"depth", depth},
+                    {"source_label", source_label},
+                    {"group_size", group.size()}
+                );
+
                 response = send_req(query, parameters);
             }
 
             {
-                CPGDB_PROFILE_SCOPE("Neo4J fast BFS: parse scalar adjacency rows");
+                EVENT_SCOPE(parse_span, "neo4j.json_to_intermediate_conversion",
+                    {"depth", depth},
+                    {"source_label", source_label},
+                    {"group_size", group.size()}
+                );
+
                 parse_fast_response_into_rows(response, rows, row_by_source, spec);
+
+                parse_span.add_end_field("source_rows", rows.size());
             }
         }
+
+        total_span.add_end_field("result_source_rows", rows.size());
 
         return rows;
     }
 
-private:
+    struct Neo4jGroupResponse {
+        std::string source_label;
+        std::size_t group_size{};
+        nlohmann::json response;
+    };
+
+    std::vector<AdjacencyRow> get_neighbors_batch_fast_async(
+        std::span<const NodeRef> frontier,
+        const ExpandSpec& spec,
+        int depth) const
+    {
+        if (frontier.empty()) {
+            return {};
+        }
+
+        EVENT_SCOPE(total_span, "neo4j.get_neighbors_batch_fast",
+            {"frontier_size", frontier.size()}
+        );
+
+        std::vector<AdjacencyRow> rows;
+        rows.reserve(frontier.size());
+
+        std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> row_by_source;
+        row_by_source.reserve(frontier.size());
+
+        for (const auto& source : frontier) {
+            auto [it, inserted] = row_by_source.emplace(source.global_id, rows.size());
+
+            if (inserted) {
+                rows.push_back(AdjacencyRow{
+                    .source = source,
+                    .neighbors = {}
+                });
+            }
+        }
+
+        const auto grouped_frontier = group_frontier_by_physical_source_label(frontier);
+        const auto edge_type_names = edge_type_names_for_spec(spec);
+
+        const std::string relationship_filter =
+            apoc_relationship_filter_for_spec(edge_type_names, spec.direction);
+
+        total_span.add_end_field("label_group_count", grouped_frontier.size());
+
+        std::vector<std::future<Neo4jGroupResponse>> futures;
+
+        for (const auto& [source_label, group] : grouped_frontier) {
+            if (group.empty()) {
+                continue;
+            }
+
+            json frontier_json = json::array();
+
+            for (const auto& source : group) {
+                frontier_json.push_back(boost::uuids::to_string(source.global_id));
+            }
+
+            const std::string query =
+                "UNWIND $frontier AS source_uuid "
+                "MATCH (source:" + escape_cypher_identifier(source_label) + " {uuid: source_uuid}) "
+                "CALL apoc.path.expandConfig(source, { "
+                "  minLevel: 1, "
+                "  maxLevel: 1, "
+                "  relationshipFilter: $relationshipFilter, "
+                "  bfs: true, "
+                "  uniqueness: 'NODE_GLOBAL' "
+                "}) YIELD path "
+                "WITH source, last(nodes(path)) AS neighbor, relationships(path)[0] AS r "
+                "RETURN "
+                "source.uuid AS source_uuid, "
+                "neighbor.uuid AS neighbor_uuid, "
+                "neighbor.`remote-uuid` AS neighbor_remote_uuid, "
+                "coalesce(neighbor.is_proxy, false) AS neighbor_is_proxy, "
+                "neighbor.`remote-type` AS neighbor_remote_type, "
+                "neighbor.type AS neighbor_type_property, "
+                "labels(neighbor) AS neighbor_labels, "
+                "r.uuid AS edge_uuid, "
+                "type(r) AS edge_type, "
+                "startNode(r).uuid AS edge_from_uuid, "
+                "endNode(r).uuid AS edge_to_uuid";
+
+            const json parameters{
+                {"frontier", frontier_json},
+                {"relationshipFilter", relationship_filter}
+            };
+
+            futures.push_back(std::async(
+                std::launch::async,
+                [this,
+                 source_label,
+                 group_size = group.size(),
+                 query,
+                 parameters]() -> Neo4jGroupResponse {
+                    EVENT_SCOPE(span, "neo4j.parallel_label_group_http_query",
+                        {"source_label", source_label},
+                        {"group_size", group_size}
+                    );
+
+                    json response = send_req(query, parameters);
+
+                    return Neo4jGroupResponse{
+                        .source_label = source_label,
+                        .group_size = group_size,
+                        .response = std::move(response)
+                    };
+                }
+            ));
+        }
+
+        for (auto& future : futures) {
+            Neo4jGroupResponse result = future.get();
+
+            EVENT_SCOPE(parse_span, "neo4j.json_to_intermediate_conversion",
+                {"source_label", result.source_label},
+                {"group_size", result.group_size}
+            );
+
+            parse_fast_response_into_rows(result.response, rows, row_by_source, spec);
+        }
+
+        total_span.add_end_field("result_source_rows", rows.size());
+
+        return rows;
+    }
+
+
     static std::string escape_cypher_identifier(const std::string& name) {
         std::string escaped;
         escaped.reserve(name.size() + 2);
@@ -817,18 +988,20 @@ private:
 
     json send_req(const std::string& query,
                   const json& parameters) const {
-        CPGDB_PROFILE_FUNCTION();
+        //CPGDB_PROFILE_FUNCTION();
 
         if (use_bolt_) {
-            CPGDB_PROFILE_SCOPE("Neo4J send_req: Bolt RUN/PULL");
+            //CPGDB_PROFILE_SCOPE("Neo4J send_req: Bolt RUN/PULL");
+            EVENT_SCOPE(_, "neo4j.bfs_bolt_query");
             return send_req_bolt(query, parameters);
         }
+        EVENT_SCOPE(_, "neo4j.bfs_http_query");
 
         json req;
 
         {
-            CPGDB_PROFILE_SCOPE("Neo4J send_req: build request JSON");
-
+            //CPGDB_PROFILE_SCOPE("Neo4J send_req: build request JSON");
+            EVENT_SCOPE(_, "neo4j.bfs_req_construct");
             req = json{
                 {"statements", json::array({
                     {
@@ -842,7 +1015,8 @@ private:
         std::string request_body;
 
         {
-            CPGDB_PROFILE_SCOPE("Neo4J send_req: dump request JSON");
+            //CPGDB_PROFILE_SCOPE("Neo4J send_req: dump request JSON");
+            EVENT_SCOPE(_, "neo4j.bfs_json_req_dump");
             request_body = req.dump();
         }
 
@@ -855,14 +1029,16 @@ private:
         }
 
         {
-            CPGDB_PROFILE_SCOPE("Neo4J send_req: HTTP POST");
+            //CPGDB_PROFILE_SCOPE("Neo4J send_req: HTTP POST");
+            EVENT_SCOPE(_, "neo4j.bfs_http_post");
             response_body = http_post(config_.endpoint, request_body, auth);
         }
 
         json parsed;
 
         {
-            CPGDB_PROFILE_SCOPE("Neo4J send_req: parse response JSON");
+            //CPGDB_PROFILE_SCOPE("Neo4J send_req: parse response JSON");
+            EVENT_SCOPE(_, "neo4j.bfs_response_to_json_parse");
             parsed = json::parse(response_body);
         }
 
@@ -916,17 +1092,17 @@ private:
     evaluate(const std::string& query,
              PARSE_TYPE parse_type,
              const json& parameters) const {
-        CPGDB_PROFILE_FUNCTION();
+        //CPGDB_PROFILE_FUNCTION();
 
         json response;
 
         {
-            CPGDB_PROFILE_SCOPE("Neo4J evaluate: send_req");
+            EVENT_SCOPE(_, "neo4j.http_bfs_query");
             response = send_req(query, parameters);
         }
 
         {
-            CPGDB_PROFILE_SCOPE("Neo4J evaluate: response_processor.process");
+            EVENT_SCOPE(_, "neo4j.json_to_intermediate_conversion");
             return response_processor_.process(response, parse_type);
         }
     }

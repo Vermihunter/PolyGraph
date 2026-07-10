@@ -202,17 +202,19 @@ inline BackendConnectionConfig parse_connection_config(const json& backend_json,
         .endpoint = conn.value("endpoint", backend_json.value("endpoint", std::string{})),
         .database_name = conn.value("database", conn.value("database_name", backend_json.value("database_name", std::string{}))),
         .credentials = std::nullopt,
-        .replica_endpoints = {}
+        .transport = conn.value( "transport",backend_json.value("transport", std::string{"http"})),
+        .bolt_endpoint = conn.value("bolt_endpoint", backend_json.value("bolt_endpoint", std::string{}) ),
+        .replica_endpoints = {},
     };
 
     if (conn.contains("credentials") && !conn["credentials"].is_null()) {
-        const json credentials = conn["credentials"];
+        const json& credentials = conn["credentials"];
         config.credentials = DatabaseCredentials{
             .username = credentials.value("username", std::string{}),
             .password = credentials.value("password", std::string{})
         };
     } else if (backend_json.contains("credentials") && !backend_json["credentials"].is_null()) {
-        const json credentials = backend_json["credentials"];
+        const json& credentials = backend_json["credentials"];
         config.credentials = DatabaseCredentials{
             .username = credentials.value("username", std::string{}),
             .password = credentials.value("password", std::string{})

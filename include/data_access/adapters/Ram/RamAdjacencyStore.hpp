@@ -24,7 +24,7 @@ public:
 
     std::vector<AdjacencyRow>
     get_neighbors_batch(std::span<const NodeRef> frontier,
-                        const ExpandSpec& spec) override {
+                        const ExpandSpec& spec, int depth) override {
         std::vector<AdjacencyRow> rows;
 
         for (const auto& source : frontier) {

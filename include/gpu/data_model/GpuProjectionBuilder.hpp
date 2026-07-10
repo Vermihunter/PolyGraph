@@ -109,8 +109,8 @@ public:
         const std::size_t num_vertices = h_vertices.size();
         const std::size_t num_edges = h_src.size();
 
-        std::cout << "GPU projection vertices: " << num_vertices << '\n';
-        std::cout << "GPU projection edges: " << num_edges << '\n';
+        //std::cout << "GPU projection vertices: " << num_vertices << '\n';
+        //std::cout << "GPU projection edges: " << num_edges << '\n';
 
         if (num_vertices == 0) {
             throw std::runtime_error("Cannot build cuGraph projection: no vertices");

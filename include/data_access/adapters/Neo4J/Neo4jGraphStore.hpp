@@ -47,7 +47,7 @@ public:
 
     std::vector<AdjacencyRow>
     get_neighbors_batch(std::span<const NodeRef> frontier,
-                        const ExpandSpec& spec) override {
+                        const ExpandSpec& spec, int depth) override {
         CPGDB_PROFILE_FUNCTION();
 
         if (frontier.empty()) {
@@ -68,7 +68,7 @@ public:
         if (auto* neo4j_visitor =
                 dynamic_cast<Neo4JQueryVisitor*>(visitor_.get())) {
             CPGDB_PROFILE_SCOPE("Neo4jGraphStore: fast get_neighbors_batch");
-            return neo4j_visitor->get_neighbors_batch_fast(frontier, spec);
+            return neo4j_visitor->get_neighbors_batch_fast(frontier, spec, depth);
         }
 
         /*

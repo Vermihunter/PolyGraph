@@ -12,6 +12,8 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid.hpp>
 
+#include "logging/LoggingSetup.hpp"
+
 namespace cpgdb::cli {
 namespace {
 
@@ -89,6 +91,23 @@ void add_runtime_arguments(argparse::ArgumentParser& program) {
         .help("Path to JSON config describing enabled backends and connections")
         .default_value(std::string{});
 
+    program.add_argument("--log-dir")
+        .default_value(std::string{"logs"})
+        .help("Directory for event logs.");
+
+    program.add_argument("--log-name")
+        .default_value(std::string{})
+        .help("Log filename without extension. If omitted, current date/time is used.");
+
+    program.add_argument("--log-file")
+        .default_value(std::string{})
+        .help("Exact log file path. Overrides --log-dir and --log-name.");
+
+    program.add_argument("--no-event-log")
+        .default_value(false)
+        .implicit_value(true)
+        .help("Disable structured event logging.");
+
     program.add_argument("-v", "--verbose")
         .help("Enable verbose output")
         .default_value(false)
@@ -151,6 +170,21 @@ GraphRuntimeConfig parse_runtime_config(const argparse::ArgumentParser& args) {
         .graph_version = 1,
         .verbose = args.get<bool>("--verbose")
     };
+}
+
+void parse_log_options(const argparse::ArgumentParser& args) {
+    cpgdb::logging::LoggingOptions log_options;
+
+    log_options.enabled = !args.get<bool>("--no-event-log");
+    log_options.log_dir = args.get<std::string>("--log-dir");
+    log_options.log_name = args.get<std::string>("--log-name");
+
+    const auto explicit_log_file = args.get<std::string>("--log-file");
+    if (!explicit_log_file.empty()) {
+        log_options.log_file = explicit_log_file;
+    }
+
+    logger = cpgdb::logging::create_event_logger(log_options);
 }
 
 NodeRef parse_source(const argparse::ArgumentParser& args,

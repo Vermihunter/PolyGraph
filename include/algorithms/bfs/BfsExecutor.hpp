@@ -22,6 +22,7 @@
 #include "data_model/Node.hpp"
 #include "data_model/Value.hpp"
 #include "infrastructure/PlacementCatalog.hpp"
+#include "utilities/logging.hpp"
 #include "utilities/Profiling.hpp"
 
 class BfsExecutor {
@@ -89,7 +90,7 @@ private:
     BfsResult run_distributed_frontier_bfs(const NodeRef& source,
                                            const ExpandSpec& spec,
                                            const BfsOptions& options) const {
-        CPGDB_PROFILE_FUNCTION();
+        //CPGDB_PROFILE_FUNCTION();
 
         DenseBfsState state;
         state.to_dense.reserve(65536);
@@ -114,33 +115,38 @@ private:
             auto layer_plan =
                 catalog_.plan_frontier_expansion(frontier, spec, options);
 
-            auto rows = expand_layer_parallel(layer_plan, spec);
+            auto rows = expand_layer_parallel(layer_plan, spec, depth);
 
             std::vector<NodeRef> next_frontier;
+            {
+                EVENT_SCOPE(layer_span, "bfs.row_processing",
+                    {"depth", depth},
+                    {"row_size", rows.size()}
+                );
+                for (const auto& row : rows) {
+                    const std::uint32_t source_row_dense =
+                        state.get_or_add(row.source.global_id);
 
-            for (const auto& row : rows) {
-                const std::uint32_t source_row_dense =
-                    state.get_or_add(row.source.global_id);
+                    for (const auto& neighbor : row.neighbors) {
+                        if (!spec.allows_target_type(neighbor.type)) {
+                            continue;
+                        }
 
-                for (const auto& neighbor : row.neighbors) {
-                    if (!spec.allows_target_type(neighbor.type)) {
-                        continue;
+                        const std::uint32_t neighbor_dense =
+                            state.get_or_add(neighbor.global_id);
+
+                        if (state.distance[neighbor_dense] != -1) {
+                            continue;
+                        }
+
+                        state.distance[neighbor_dense] = static_cast<int>(depth + 1);
+
+                        if (options.return_predecessors) {
+                            state.predecessor[neighbor_dense] = source_row_dense;
+                        }
+
+                        next_frontier.push_back(neighbor);
                     }
-
-                    const std::uint32_t neighbor_dense =
-                        state.get_or_add(neighbor.global_id);
-
-                    if (state.distance[neighbor_dense] != -1) {
-                        continue;
-                    }
-
-                    state.distance[neighbor_dense] = static_cast<int>(depth + 1);
-
-                    if (options.return_predecessors) {
-                        state.predecessor[neighbor_dense] = source_row_dense;
-                    }
-
-                    next_frontier.push_back(neighbor);
                 }
             }
 
@@ -213,7 +219,7 @@ private:
             auto layer_plan =
                 catalog_.plan_frontier_expansion(frontier, spec, options);
 
-            auto rows = expand_layer_parallel(layer_plan, spec);
+            auto rows = expand_layer_parallel(layer_plan, spec, depth);
 
             std::vector<NodeRef> next_frontier;
             BfsLayerEvent layer;
@@ -287,12 +293,12 @@ private:
 
     std::vector<MinimalAdjacencyRow>
     expand_layer_sequential(const PlacementCatalog::LayerExpansionPlan& plan,
-                            const ExpandSpec& spec) const {
+                            const ExpandSpec& spec, int depth) const {
         std::vector<MinimalAdjacencyRow> merged;
 
         for (const auto& [backend_id, backend_frontier] : plan.backend_frontiers) {
             auto store = catalog_.store(backend_id);
-            auto partial = store->get_minimal_neighbors_batch(backend_frontier, spec);
+            auto partial = store->get_minimal_neighbors_batch(backend_frontier, spec, depth);
 
             merged.insert(
                 merged.end(),
@@ -306,7 +312,7 @@ private:
 
     std::vector<MinimalAdjacencyRow>
     expand_layer_parallel(const PlacementCatalog::LayerExpansionPlan& plan,
-                          const ExpandSpec& spec) const {
+                          const ExpandSpec& spec, int depth) const {
         if (plan.backend_frontiers.empty()) {
             return {};
         }
@@ -314,7 +320,7 @@ private:
         if (plan.backend_frontiers.size() == 1) {
             const auto& [backend_id, backend_frontier] = *plan.backend_frontiers.begin();
             auto store = catalog_.store(backend_id);
-            return store->get_minimal_neighbors_batch(backend_frontier, spec);
+            return store->get_minimal_neighbors_batch(backend_frontier, spec, depth);
         }
 
         std::vector<std::future<std::vector<MinimalAdjacencyRow>>> futures;
@@ -325,8 +331,8 @@ private:
 
             futures.push_back(std::async(
                 std::launch::async,
-                [store, backend_frontier, spec]() {
-                    return store->get_minimal_neighbors_batch(backend_frontier, spec);
+                [store, backend_frontier, spec, depth]() {
+                    return store->get_minimal_neighbors_batch(backend_frontier, spec, depth);
                 }
             ));
         }

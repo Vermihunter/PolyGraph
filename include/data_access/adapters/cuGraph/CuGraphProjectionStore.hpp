@@ -74,6 +74,8 @@ public:
             options);
         */
 
+
+
         return CuGraphBfsExecutor::run(
             *projection_,
             source.global_id,
@@ -97,13 +99,14 @@ public:
 
     std::vector<AdjacencyRow>
     get_neighbors_batch(std::span<const NodeRef> frontier,
-                        const ExpandSpec& spec) override {
+                        const ExpandSpec& spec, int depth) override {
         if (!host_index_) {
             throw std::runtime_error(
                 "CuGraphProjectionStore requires HostAdjacencyIndex to hydrate GPU expansion results"
             );
         }
 
+        EVENT_SCOPE(_, "cugraph.get_neighbors");
         std::vector<AdjacencyRow> rows;
         rows.reserve(frontier.size());
 

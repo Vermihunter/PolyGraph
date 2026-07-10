@@ -24,6 +24,7 @@
 #include "query/query_types/GetNeighborsForVertexQuery.hpp"
 #include "query/query_types/GetVertexByIdQuery.hpp"
 #include "utilities/BackendIds.hpp"
+#include "utilities/logging.hpp"
 #include "utilities/Profiling.hpp"
 
 class ArangoQueryVisitor : public QueryVisitor {
@@ -99,7 +100,9 @@ public:
     }
 
     query_result_t visit(const GetNeighborsBatchQuery& q) override {
-        CPGDB_PROFILE_FUNCTION();
+        //CPGDB_PROFILE_FUNCTION();
+
+        EVENT_SCOPE(_, "arango.neighbor_query", {"frontier_size", q.frontier().size()});
         auto grouped_frontier = group_frontier_by_collection(q.frontier());
 
         auto combined = std::make_unique<QueryResult>();
