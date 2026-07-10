@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CPGDB gRPC BFS Stream</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+
+  <body>
+    <div id="app">
+      <aside id="panel">
+        <div class="brand">
+          <div class="brand-mark"></div>
+          <div>
+            <h1>CPGDB BFS Stream</h1>
+            <p>Interactive gRPC-Web server-streaming BFS visualizer</p>
+          </div>
+        </div>
+
+        <label>
+          <span>gRPC-Web URL</span>
+          <input id="endpoint" value="http://localhost:8081" />
+        </label>
+
+        <label>
+          <span>Graph ID</span>
+          <input id="graphId" value="university" />
+        </label>
+
+        <label>
+          <span>Source UUID</span>
+          <input id="sourceVertexId" placeholder="boost uuid" />
+        </label>
+
+        <label>
+          <span>Source type</span>
+          <input id="sourceType" value="Faculty" />
+        </label>
+
+        <label>
+          <span>Max depth</span>
+          <input id="maxDepth" type="number" min="0" max="32" value="4" />
+        </label>
+
+        <div class="buttons">
+          <button id="run" type="button">Run streaming BFS</button>
+          <button id="stop" type="button">Stop</button>
+          <button id="resetView" type="button">Reset view</button>
+        </div>
+
+        <pre id="status">Idle</pre>
+
+        <div class="hint">
+          <b>Controls:</b><br />
+          Mouse wheel = zoom<br />
+          Drag empty space = pan<br />
+          Drag node = move node<br />
+          Double-click canvas = reset view
+        </div>
+      </aside>
+
+      <main id="canvasHost">
+        <div id="watermark">CPGDB</div>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
