@@ -2,13 +2,24 @@ build/
 
 **/*.env
 **/*.json
-**/*.csv
-**/*.txt
+**/*.csv*.txt
+!CMakeLists.txt
+*.log
+*.jsonl
+
+
 
 tools/my-venv/
 .idea/
-cmake-build-debug/
-/cmake-build-relwithdebinfo/
-/build-profile/
-/tools/measurement/native_bfs_results/
-/web/grpc-bfs-viewer-interactive/node_modules/
+
+**/node_modules/
+
+/build*/
+/out/
+/logs/
+compile_commands.json
+.vscode/
+
+tests/
+include/insertion/
+src/insertion/
