@@ -1,65 +1,64 @@
-//
-// Created by akos on 7. 7. 2026.
-//
+/**
+ * @file src/server/services/TraversalService.cpp
+ * @brief Implementation for traversal service in the server frontend module.
+ */
 
 #include "server/services/TraversalService.hpp"
 
+#include "algorithms/ExpandSpec.hpp"
+#include "algorithms/bfs/BfsExecutor.hpp"
+#include "algorithms/bfs/BfsOptions.hpp"
+
 #include <boost/lexical_cast.hpp>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_io.hpp>
 
-#include "server/services/ServicesPlugin.hpp"
+namespace cpgdb::services {
 
-BfsResult services::TraversalService::runBfs(
-            const std::string& graphId,
-            const dto::BfsRequest& request
-        ) {
+    TraversalService::TraversalService(DatabaseContext &context) noexcept :
+        context_(context), expander_(*context.placement_catalog) {}
 
+    BfsResult TraversalService::runBfs(const std::string &source_vertex_uuid, const dto::BfsRequest &request) {
+        BfsExecutor bfs(*context_.placement_catalog);
+        const NodeRef source{.global_id = boost::lexical_cast<boost::uuids::uuid>(source_vertex_uuid),
+                             .type = context_.schema->node_type_id("Faculty")};
+        const BfsOptions options{.max_depth = static_cast<std::uint32_t>(request.maxDepth),
+                                 .return_predecessors = true,
+                                 .allow_native_pushdown = false,
+                                 .allow_partial_acceleration = true};
+        return bfs.run(source, ExpandSpec{}, options);
+    }
 
-    BfsExecutor bfs(*ctx_.placement_catalog);
+    std::vector<MinimalAdjacencyRow> TraversalService::getNeighbors(const std::string &source_vertex_uuid,
+                                                                    TypeId source_vertex_type) {
+        const NodeRef source{.global_id = boost::lexical_cast<boost::uuids::uuid>(source_vertex_uuid),
+                             .type = source_vertex_type};
+        std::vector frontier{source};
 
-    const NodeRef source {
-        .global_id =  boost::lexical_cast<boost::uuids::uuid>(request.sourceVertexId),
-        .type = ctx_.schema->node_type_id("Faculty")
-    };
-    const ExpandSpec expand_spec{
+        const ExpandSpec spec{};
+        const BfsOptions options{.max_depth = 1,
+                                 .return_predecessors = false,
+                                 .allow_native_pushdown = false,
+                                 .allow_partial_acceleration = true};
 
-    };
-    const BfsOptions options {
-        .max_depth = request.maxDepth,
-        .return_predecessors = true,
-        .allow_native_pushdown = false,
-        .allow_partial_acceleration = true
-    };
+        return expander_.expand_layer(frontier, spec, 0, options.allow_partial_acceleration);
+    }
 
-    return bfs.run(source, expand_spec, options);
-}
+    BfsResult TraversalService::streamBfs(const std::string &graph_id, const std::string &source_vertex_id,
+                                          const std::string &source_type, std::uint32_t max_depth,
+                                          bool return_predecessors, bool allow_native_pushdown,
+                                          bool allow_partial_acceleration,
+                                          const std::function<void(const BfsLayerEvent &)> &on_layer) {
+        (void) graph_id;
+        BfsExecutor bfs(*context_.placement_catalog);
+        const NodeRef source{.global_id = boost::lexical_cast<boost::uuids::uuid>(source_vertex_id),
+                             .type = context_.schema->node_type_id(source_type.empty() ? "Faculty" : source_type)};
+        return bfs.run_streaming(source, ExpandSpec{},
+                                 BfsOptions{.max_depth = max_depth,
+                                            .return_predecessors = return_predecessors,
+                                            .allow_native_pushdown = allow_native_pushdown,
+                                            .allow_partial_acceleration = allow_partial_acceleration},
+                                 on_layer);
+    }
 
-BfsResult services::TraversalService::streamBfs(
-    const std::string& graphId,
-    const std::string& sourceVertexId,
-    const std::string& sourceType,
-    std::uint32_t maxDepth,
-    bool returnPredecessors,
-    bool allowNativePushdown,
-    bool allowPartialAcceleration,
-    const std::function<void(const BfsLayerEvent&)>& onLayer
-) {
-    (void) graphId;
-
-    BfsExecutor bfs(*ctx_.placement_catalog);
-
-    const NodeRef source {
-        .global_id = boost::lexical_cast<boost::uuids::uuid>(sourceVertexId),
-        .type = ctx_.schema->node_type_id(sourceType.empty() ? "Faculty" : sourceType)
-    };
-
-    const ExpandSpec expand_spec{};
-
-    BfsOptions options {
-        .max_depth = maxDepth,
-        .return_predecessors = returnPredecessors,
-        .allow_native_pushdown = allowNativePushdown,
-        .allow_partial_acceleration = allowPartialAcceleration
-    };
-
-    return bfs.run_streaming(source, expand_spec, options, onLayer);
-}
+} // namespace cpgdb::services

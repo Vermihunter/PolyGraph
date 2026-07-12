@@ -1,33 +1,27 @@
-//
-// Created by akos on 19. 3. 2026.
-//
+/**
+ * @file include/query/query_types/GetNeighborsForVertexQuery.hpp
+ * @brief Declarations for get neighbors for vertex query in the query dispatch module.
+ */
 
-#ifndef CPGDB_GETNEIGHBORSFORVERTEXQUERY_HPP
-#define CPGDB_GETNEIGHBORSFORVERTEXQUERY_HPP
+#ifndef CPGDB_QUERY_GET_NEIGHBORS_FOR_VERTEX_QUERY_HPP
+#define CPGDB_QUERY_GET_NEIGHBORS_FOR_VERTEX_QUERY_HPP
 
-#include <query/Query.hpp>
-#include <query/QueryResult.hpp>
-#include <query/QueryVisitor.hpp>
-#include <utilities/uuid.hpp>
+#include "data_model/Node.hpp"
+#include "query/Query.hpp"
 
-class GetNeighborsForVertexQuery : public Query {
+namespace cpgdb {
+
+class GetNeighborsForVertexQuery final : public Query {
+  public:
+    explicit GetNeighborsForVertexQuery(Node& node) noexcept;
+    [[nodiscard]] Node& node() const noexcept;
+    query_result_t accept(QueryVisitor& visitor) const override;
+    [[nodiscard]] query_t clone() const override;
+
+  private:
     Node& node_;
-public:
-    explicit GetNeighborsForVertexQuery(Node& node)
-        : node_(node) {}
-
-    Node &getNode() const {
-        return node_;
-    }
-
-    query_result_t accept(QueryVisitor& visitor) const override {
-        return visitor.visit(*this);
-    }
-
-    query_t clone() const override {
-        return std::make_unique<GetNeighborsForVertexQuery>(node_);
-    }
-
 };
 
-#endif //CPGDB_GETNEIGHBORSFORVERTEXQUERY_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_QUERY_GET_NEIGHBORS_FOR_VERTEX_QUERY_HPP

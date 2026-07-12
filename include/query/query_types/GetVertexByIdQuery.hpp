@@ -1,35 +1,27 @@
-//
-// Created by akos on 19. 3. 2026.
-//
+/**
+ * @file include/query/query_types/GetVertexByIdQuery.hpp
+ * @brief Declarations for get vertex by id query in the query dispatch module.
+ */
 
-#ifndef CPGDB_GETVERTEXBYIDQUERY_HPP
-#define CPGDB_GETVERTEXBYIDQUERY_HPP
+#ifndef CPGDB_QUERY_GET_VERTEX_BY_ID_QUERY_HPP
+#define CPGDB_QUERY_GET_VERTEX_BY_ID_QUERY_HPP
 
+#include "data_model/Node.hpp"
+#include "query/Query.hpp"
 
-#include <query/Query.hpp>
-#include <query/QueryResult.hpp>
-#include <query/QueryVisitor.hpp>
-#include <utilities/uuid.hpp>
+namespace cpgdb {
 
-class GetVertexByIdQuery : public Query {
+class GetVertexByIdQuery final : public Query {
+  public:
+    explicit GetVertexByIdQuery(Node& node) noexcept;
+    [[nodiscard]] Node& node() const noexcept;
+    query_result_t accept(QueryVisitor& visitor) const override;
+    [[nodiscard]] query_t clone() const override;
+
+  private:
     Node& node_;
-public:
-    explicit GetVertexByIdQuery(Node& node)
-        : node_(node) {
-    }
-
-    [[nodiscard]] Node &getNode() const {
-        return node_;
-    }
-
-    query_result_t accept(QueryVisitor& visitor) const override {
-        return visitor.visit(*this);
-    }
-
-    [[nodiscard]] query_t clone() const override {
-        return std::make_unique<GetVertexByIdQuery>(node_);
-    }
-
 };
 
-#endif //CPGDB_GETVERTEXBYIDQUERY_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_QUERY_GET_VERTEX_BY_ID_QUERY_HPP

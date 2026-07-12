@@ -1,6 +1,7 @@
-//
-// Created by akos on 5. 5. 2026.
-//
+/**
+ * @file include/algorithms/bfs/BfsOptions.hpp
+ * @brief Configures native, distributed, and GPU breadth-first search execution.
+ */
 
 #ifndef CPGDB_BFSOPTIONS_HPP
 #define CPGDB_BFSOPTIONS_HPP
@@ -8,16 +9,20 @@
 #include <cinttypes>
 #include <optional>
 
+namespace cpgdb {
+
+/** @brief Runtime options shared by every BFS implementation. */
 struct BfsOptions {
+    /// Maximum number of edges from the source; no value means unlimited depth.
     std::optional<std::uint32_t> max_depth;
+    /// Whether the result must contain one predecessor for each discovered vertex.
     bool return_predecessors = true;
-
-    // If true, planner may choose Memgraph / GPU / Neo4j GDS native BFS
-    // when the backend covers the whole requested subgraph.
+    /// Allow a capable backend to execute the complete BFS natively.
     bool allow_native_pushdown = true;
-
-    // If true, distributed fallback may use caches/projections for frontier expansion.
+    /// Allow caches and projections to participate in distributed layer expansion.
     bool allow_partial_acceleration = true;
 };
 
-#endif //CPGDB_BFSOPTIONS_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_BFSOPTIONS_HPP

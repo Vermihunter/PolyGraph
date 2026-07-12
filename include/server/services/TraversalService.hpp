@@ -1,43 +1,46 @@
-//
-// Created by akos on 7. 7. 2026.
-//
+/**
+ * @file include/server/services/TraversalService.hpp
+ * @brief Declarations for traversal service in the server frontend module.
+ */
 
-#ifndef CPGDB_TRAVERSALSERVICE_HPP
-#define CPGDB_TRAVERSALSERVICE_HPP
-#include <stdexcept>
+#ifndef CPGDB_SERVER_SERVICES_TRAVERSAL_SERVICE_HPP
+#define CPGDB_SERVER_SERVICES_TRAVERSAL_SERVICE_HPP
 
+#include "algorithms/bfs/BfsLayer.hpp"
 #include "algorithms/bfs/BfsResult.hpp"
-#include "cli/BfsCli.hpp"
+#include "algorithms/common/NeighborExpander.hpp"
 #include "infrastructure/DatabaseContext.hpp"
 #include "server/dto/BfsRequest.hpp"
 
+#include <cstdint>
+#include <functional>
+#include <string>
 
-namespace services {
+namespace cpgdb::services {
 
+class TraversalService {
+  public:
+    explicit TraversalService(DatabaseContext& context) noexcept;
 
-    class TraversalService {
-    public:
-        explicit TraversalService(DatabaseContext& ctx) : ctx_(ctx) {};
+    [[nodiscard]] BfsResult runBfs(const std::string& source_vertex_uuid, const dto::BfsRequest& request);
 
-        [[nodiscard]] BfsResult runBfs(
-            const std::string& graphId,
-            const dto::BfsRequest& request
-        );
+    [[nodiscard]] std::vector<MinimalAdjacencyRow>
+    getNeighbors(const std::string& source_vertex_uuid, TypeId source_vertex_type);
 
-        BfsResult streamBfs(
-           const std::string& graphId,
-           const std::string& sourceVertexId,
-           const std::string& sourceType,
-           std::uint32_t maxDepth,
-           bool returnPredecessors,
-           bool allowNativePushdown,
-           bool allowPartialAcceleration,
-           const std::function<void(const BfsLayerEvent&)>& onLayer
-       );
+    [[nodiscard]] BfsResult streamBfs(const std::string& graph_id,
+                                      const std::string& source_vertex_id,
+                                      const std::string& source_type,
+                                      std::uint32_t max_depth,
+                                      bool return_predecessors,
+                                      bool allow_native_pushdown,
+                                      bool allow_partial_acceleration,
+                                      const std::function<void(const BfsLayerEvent&)>& on_layer);
 
-    private:
-        DatabaseContext& ctx_;
-    };
-}
+  private:
+    DatabaseContext& context_;
+    NeighborExpander expander_;
+};
 
-#endif //CPGDB_TRAVERSALSERVICE_HPP
+} // namespace cpgdb::services
+
+#endif // CPGDB_SERVER_SERVICES_TRAVERSAL_SERVICE_HPP

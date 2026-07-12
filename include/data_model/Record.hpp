@@ -1,24 +1,30 @@
-#ifndef RECORD_HPP
-#define RECORD_HPP
+/**
+ * @file include/data_model/Record.hpp
+ * @brief Declarations for record in the graph data-model module.
+ */
 
+#pragma once
+
+#include "data_model/Value.hpp"
+
+#include <cstddef>
 #include <memory>
 #include <vector>
 
-#include <data_model/Value.hpp>
+namespace cpgdb {
 
 struct Record {
-  //std::shared_ptr<const std::vector<std::string>> keys;
-  std::vector<Value> fields;
+    std::vector<Value> fields;
 
-  Record() = default;
-  Record(const Record&) = delete;
-  Record& operator=(const Record&) = delete;
-  Record(Record&&) = default;
-  Record& operator=(Record&&) = default;
+    Record() = default;
+    Record(const Record&) = delete;
+    Record& operator=(const Record&) = delete;
+    Record(Record&&) = default;
+    Record& operator=(Record&&) = default;
 
-  const Value& operator[](size_t i) const { return fields[i]; }
+    [[nodiscard]] const Value& operator[](std::size_t index) const;
 };
 
 using record_t = std::unique_ptr<Record>;
 
-#endif // RECORD_HPP
+} // namespace cpgdb

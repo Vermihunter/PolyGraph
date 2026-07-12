@@ -1,3 +1,8 @@
+/**
+ * @file include/data_model/AdjacencyRow.hpp
+ * @brief Declarations for adjacency row in the graph data-model module.
+ */
+
 //
 // Created by akos on 1. 5. 2026.
 //
@@ -7,9 +12,12 @@
 #include "NeighborRef.hpp"
 #include "Node.hpp"
 
+namespace cpgdb {
 struct AdjacencyRow {
     NodeRef source;
     std::vector<NeighborRef> neighbors;
 };
 
-#endif //CPGDB_ADJACENCYROW_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_ADJACENCYROW_HPP

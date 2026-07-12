@@ -1,18 +1,21 @@
-#ifndef PATH_HPP
-#define PATH_HPP
+/**
+ * @file include/data_model/Path.hpp
+ * @brief Declarations for path in the graph data-model module.
+ */
 
-#include <vector>
+#pragma once
+
 #include <memory>
-// #include <data_model/Edge.hpp>
-// #include <data_model/Node.hpp>
+#include <vector>
+
+namespace cpgdb {
 
 struct Edge;
 struct Node;
 
-
 struct Path {
-  std::vector<std::unique_ptr<Node>> nodes;
-  std::vector<std::unique_ptr<Edge>> edges;
+    std::vector<std::unique_ptr<Node>> nodes;
+    std::vector<std::unique_ptr<Edge>> edges;
 };
 
-#endif // PATH_HPP
+} // namespace cpgdb

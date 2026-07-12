@@ -1,80 +1,47 @@
-//
-// Created by akos on 9. 7. 2026.
-//
+/**
+ * @file include/logging/EventScope.hpp
+ * @brief Declarations for event scope in the event logging module.
+ */
 
-#ifndef CPGDB_EVENTSCOPE_HPP
-#define CPGDB_EVENTSCOPE_HPP
+#ifndef CPGDB_LOGGING_EVENT_SCOPE_HPP
+#define CPGDB_LOGGING_EVENT_SCOPE_HPP
 
-#pragma once
+#include "logging/EventLevel.hpp"
+#include "logging/EventLogger.hpp"
 
-#include "EventLogger.hpp"
+#include <chrono>
+#include <string>
+
+namespace cpgdb {
 
 class EventScope {
-public:
-    using json = nlohmann::json;
+  public:
+    EventScope() noexcept = default;
 
-    EventScope(
-        EventLogger& logger,
-        std::string name,
-        json fields = json::object()
-    )
-        : logger_(&logger),
-          name_(std::move(name)),
-          fields_(std::move(fields)),
-          start_(std::chrono::steady_clock::now()) {
-        logger_->event(name_ + ".start", fields_);
-    }
+    EventScope(EventLogger* logger, EventLevel level, std::string name, json fields);
+
+    EventScope(EventLogger& logger, EventLevel level, std::string name, json fields);
 
     EventScope(const EventScope&) = delete;
     EventScope& operator=(const EventScope&) = delete;
 
-    EventScope(EventScope&& other) noexcept
-        : logger_(other.logger_),
-          name_(std::move(other.name_)),
-          fields_(std::move(other.fields_)),
-          end_fields_(std::move(other.end_fields_)),
-          start_(other.start_),
-          active_(other.active_) {
-        other.active_ = false;
-    }
+    EventScope(EventScope&& other) noexcept;
+    EventScope& operator=(EventScope&& other) = delete;
 
-    ~EventScope() noexcept {
-        if (!active_ || logger_ == nullptr) {
-            return;
-        }
+    ~EventScope() noexcept;
 
-        try {
-            auto end = std::chrono::steady_clock::now();
-            auto duration_us =
-                std::chrono::duration_cast<std::chrono::microseconds>(end - start_).count();
+    void add_end_field(std::string key, json value);
 
-            json j = fields_;
-
-            for (auto& [key, value] : end_fields_.items()) {
-                j[key] = value;
-            }
-
-            j["duration_us"] = duration_us;
-
-            logger_->event(name_ + ".end", std::move(j));
-        } catch (...) {
-            // Never throw from destructor.
-        }
-    }
-
-    void add_end_field(std::string key, json value) {
-        end_fields_[std::move(key)] = std::move(value);
-    }
-
-private:
-    EventLogger* logger_;
+  private:
+    EventLogger* logger_{};
+    EventLevel level_{EventLevel::Info};
     std::string name_;
-
     json fields_;
     json end_fields_;
-
-    std::chrono::steady_clock::time_point start_;
-    bool active_ = true;
+    std::chrono::steady_clock::time_point start_{};
+    bool active_{false};
 };
 
-#endif //CPGDB_EVENTSCOPE_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_LOGGING_EVENT_SCOPE_HPP

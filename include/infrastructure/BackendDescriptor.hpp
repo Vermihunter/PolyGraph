@@ -1,3 +1,8 @@
+/**
+ * @file include/infrastructure/BackendDescriptor.hpp
+ * @brief Declarations for backend descriptor in the backend infrastructure module.
+ */
+
 //
 // Created by akos on 5. 5. 2026.
 //
@@ -9,6 +14,7 @@
 #include "BackendKind.hpp"
 #include "GraphCoverage.hpp"
 
+namespace cpgdb {
 /**
  * Metadata about one logical backend: id, kind, capabilities, coverage, priority
  */
@@ -30,4 +36,6 @@ struct BackendDescriptor {
     std::string name;
 };
 
-#endif //CPGDB_BACKENDDESCRIPTOR_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_BACKENDDESCRIPTOR_HPP

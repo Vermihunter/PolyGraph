@@ -1,15 +1,21 @@
-//
-// Created by akos on 28. 5. 2026.
-//
+/**
+ * @file include/gpu/GpuRuntime.hpp
+ * @brief Declarations for gpu runtime in the GPU acceleration module.
+ */
 
-#ifndef CPGDB_GPURUNTIME_HPP
-#define CPGDB_GPURUNTIME_HPP
+#pragma once
 
+#ifdef CPGDB_ENABLE_GPU
 #include <raft/core/handle.hpp>
+#endif
+
+namespace cpgdb {
 
 struct GpuRuntime {
     int device_id = 0;
+#ifdef CPGDB_ENABLE_GPU
     raft::handle_t handle;
+#endif
 };
 
-#endif //CPGDB_GPURUNTIME_HPP
+} // namespace cpgdb

@@ -1,29 +1,26 @@
-//
-// Created by akos on 7. 3. 2026.
-//
+/**
+ * @file include/data_access/adapters/Neo4J/response_processors/Neo4JResponseProcessor.hpp
+ * @brief Declarations for neo4 jresponse processor in the graph-store access module.
+ */
 
-#ifndef CPGDB_NEO4JRESPONSEPROCESSOR_HPP
-#define CPGDB_NEO4JRESPONSEPROCESSOR_HPP
+#pragma once
 
-#include <memory>
+#include "query/QueryResult.hpp"
+#include "query/ResultParseType.hpp"
+#include "utilities/json.hpp"
 
-#include <query/QueryResult.hpp>
-#include <utilities/json.hpp>
-
-enum class PARSE_TYPE {
-    NODE,
-    RELATIONSHIP,
-    ADJACENCY_ROW,
-};
+namespace cpgdb {
 
 class Neo4JResponseProcessor {
-public:
-    Neo4JResponseProcessor() = default;
-    virtual ~Neo4JResponseProcessor() = default;
+  public:
+    Neo4JResponseProcessor();
+    virtual ~Neo4JResponseProcessor();
 
-    virtual query_result_t process(const json&, PARSE_TYPE parse_type) const = 0;
+    Neo4JResponseProcessor(const Neo4JResponseProcessor&) = delete;
+    Neo4JResponseProcessor& operator=(const Neo4JResponseProcessor&) = delete;
+
+    [[nodiscard]] virtual query_result_t process(const json& response,
+                                                 ResultParseType parse_type) const = 0;
 };
 
-using neo_response_processor_t = std::unique_ptr<Neo4JResponseProcessor>;
-
-#endif //CPGDB_NEO4JRESPONSEPROCESSOR_HPP
+} // namespace cpgdb

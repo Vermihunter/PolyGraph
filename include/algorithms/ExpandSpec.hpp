@@ -1,43 +1,42 @@
-//
-// Created by akos on 30. 4. 2026.
-//
+/**
+ * @file include/algorithms/ExpandSpec.hpp
+ * @brief Defines one-hop graph expansion filtering and direction semantics.
+ */
 
-#ifndef CPGDB_EXPANDSPEC_HPP
-#define CPGDB_EXPANDSPEC_HPP
-
-#include <vector>
-#include <optional>
+#ifndef CPGDB_ALGORITHMS_EXPAND_SPEC_HPP
+#define CPGDB_ALGORITHMS_EXPAND_SPEC_HPP
 
 #include "domain/graph/Direction.hpp"
 #include "domain/graph/TypeId.hpp"
 
-struct ExpandSpec {
-    std::vector<TypeId> allowed_edge_types;
-    std::vector<TypeId> allowed_target_node_types;
-    Direction direction = Direction::Both;
+#include <vector>
 
-    // Fast algorithms such as BFS only need neighbor vertices.
-    // Set this to true only when the caller really needs EdgeRef metadata.
+namespace cpgdb {
+
+/**
+ * @brief Describes which incident edges and destination vertices may be traversed.
+ *
+ * Empty type lists are interpreted as wildcards. The same specification is used
+ * by backend queries, placement coverage checks, CPU adjacency expansion, and
+ * distributed BFS planning.
+ */
+struct ExpandSpec {
+    /// Logical edge types that may be traversed; empty means every edge type.
+    std::vector<TypeId> allowed_edge_types;
+    /// Logical destination node types that may be reached; empty means every type.
+    std::vector<TypeId> allowed_target_node_types;
+    /// Direction in which incident edges are interpreted.
+    Direction direction = Direction::Both;
+    /// Whether rich adjacency results should include the traversed edge reference.
     bool return_edge_refs = false;
 
-    [[nodiscard]] bool allows_edge_type(TypeId edge_type) const {
-        return allowed_edge_types.empty() ||
-               std::find(
-                   allowed_edge_types.begin(),
-                   allowed_edge_types.end(),
-                   edge_type
-               ) != allowed_edge_types.end();
-    }
+    /** @brief Returns whether @p edge_type passes the edge-type allowlist. */
+    [[nodiscard]] bool allows_edge_type(TypeId edge_type) const noexcept;
 
-    [[nodiscard]] bool allows_target_type(TypeId node_type) const {
-        return allowed_target_node_types.empty() ||
-               std::find(
-                   allowed_target_node_types.begin(),
-                   allowed_target_node_types.end(),
-                   node_type
-               ) != allowed_target_node_types.end();
-    }
+    /** @brief Returns whether @p node_type passes the destination-type allowlist. */
+    [[nodiscard]] bool allows_target_type(TypeId node_type) const noexcept;
 };
 
+} // namespace cpgdb
 
-#endif //CPGDB_EXPANDSPEC_HPP
+#endif // CPGDB_ALGORITHMS_EXPAND_SPEC_HPP

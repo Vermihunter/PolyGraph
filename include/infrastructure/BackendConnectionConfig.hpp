@@ -1,17 +1,23 @@
+/**
+ * @file include/infrastructure/BackendConnectionConfig.hpp
+ * @brief Declarations for backend connection config in the backend infrastructure module.
+ */
+
 //
 // Created by akos on 7. 5. 2026.
 //
 
 #ifndef CPGDB_BACKENDCONNECTIONCONFIG_HPP
 #define CPGDB_BACKENDCONNECTIONCONFIG_HPP
-#include <optional>
-#include <string>
-#include <vector>
-
 #include "BackendId.hpp"
 #include "BackendKind.hpp"
 #include "DatabaseCredentials.hpp"
 
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace cpgdb {
 struct BackendConnectionConfig {
     BackendId id;
     BackendKind kind;
@@ -33,5 +39,6 @@ struct BackendConnectionConfig {
     std::vector<std::string> replica_endpoints;
 };
 
+} // namespace cpgdb
 
-#endif //CPGDB_BACKENDCONNECTIONCONFIG_HPP
+#endif // CPGDB_BACKENDCONNECTIONCONFIG_HPP

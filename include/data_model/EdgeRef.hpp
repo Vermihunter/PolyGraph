@@ -1,3 +1,8 @@
+/**
+ * @file include/data_model/EdgeRef.hpp
+ * @brief Declarations for edge ref in the graph data-model module.
+ */
+
 //
 // Created by akos on 5. 5. 2026.
 //
@@ -8,6 +13,7 @@
 #include "EntityId.hpp"
 #include "domain/graph/TypeId.hpp"
 
+namespace cpgdb {
 struct EdgeRef {
     GlobalId global_id;
     TypeId type;
@@ -15,4 +21,6 @@ struct EdgeRef {
     GlobalId to;
 };
 
-#endif //CPGDB_EDGEREF_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_EDGEREF_HPP
