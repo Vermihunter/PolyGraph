@@ -42,8 +42,8 @@ int main(int argc, char** argv) {
     cpgdb::cli::parse_log_options(program);
 
     try {
-        cpgdb::cli::GraphRuntimeBuilder builder;
-        auto ctx = builder.build(cpgdb::cli::parse_runtime_config(program));
+
+        auto ctx = cpgdb::cli::GraphRuntimeBuilder::build(cpgdb::cli::parse_runtime_config(program));
 
         cpgdb::BfsExecutor bfs(*ctx->placement_catalog);
 

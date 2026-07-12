@@ -120,7 +120,7 @@ namespace cpgdb::cli {
 
     GraphRuntimeConfig parse_runtime_config(const CommandLine &args) {
         std::optional<std::string> backend_config_path;
-        const auto backend_config_value = args.string_value("backend-config");
+        const auto &backend_config_value = args.string_value("backend-config");
         if (!backend_config_value.empty()) {
             backend_config_path = backend_config_value;
         }

@@ -1,16 +1,6 @@
 # CPGDB interactive gRPC-Web BFS Viewer
 
-This is the interactive version of the regenerated client.
-
-## Features
-
-- Native ESM/TypeScript protobuf generation via `@protobuf-ts`
-- gRPC-Web server streaming through Envoy
-- Wheel zoom
-- Background drag pan
-- Node drag
-- Reset view button
-- Keeps the graph on screen if the backend streams data but disconnects at the final trailer stage
+Interactive BFS viewer client for CPGDB using the gRPC backend
 
 ## Install
 
