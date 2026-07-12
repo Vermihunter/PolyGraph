@@ -1,0 +1,178 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 27,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CPGDB_FETCH_DEPENDENCIES": "ON",
+        "CPGDB_FETCH_TEST_DEPENDENCIES": "ON",
+        "CPGDB_ENABLE_CLANG_FORMAT": "ON",
+        "CPGDB_ENABLE_CLANG_TIDY": "ON",
+        "CPGDB_CLANG_FORMAT_EXECUTABLE": "/usr/bin/clang-format-21",
+        "CPGDB_CLANG_TIDY_EXECUTABLE": "/usr/bin/clang-tidy-21"
+      }
+    },
+    {
+      "name": "cpu-core",
+      "displayName": "CPU core and tests",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/cpu-core",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPGDB_ENABLE_GPU": "OFF",
+        "CPGDB_BUILD_BACKENDS": "OFF",
+        "CPGDB_BUILD_BFS": "OFF",
+        "CPGDB_BUILD_HTTP": "OFF",
+        "CPGDB_BUILD_GRPC": "OFF",
+        "CPGDB_BUILD_TESTS": "ON",
+        "CPGDB_BUILD_DOCS": "OFF"
+      }
+    },
+    {
+      "name": "cpu-bfs",
+      "displayName": "CPU BFS CLI",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/cpu-bfs",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CPGDB_ENABLE_GPU": "OFF",
+        "CPGDB_BUILD_BACKENDS": "ON",
+        "CPGDB_BUILD_BFS": "ON",
+        "CPGDB_BUILD_HTTP": "OFF",
+        "CPGDB_BUILD_GRPC": "OFF",
+        "CPGDB_BUILD_TESTS": "OFF",
+        "CPGDB_BUILD_DOCS": "OFF"
+      }
+    },
+    {
+      "name": "cpu-bfs-debug",
+      "displayName": "Debug CPU BFS CLI",
+      "inherits": "cpu-bfs",
+      "binaryDir": "${sourceDir}/build/cpu-bfs-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "gpu-bfs-debug",
+      "displayName": "CUDA/cuGraph BFS CLI",
+      "inherits": "cpu-bfs",
+      "binaryDir": "${sourceDir}/build/gpu-bfs-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPGDB_ENABLE_GPU": "ON",
+        "CPGDB_DEPENDENCY_PREFIX": "/home/akos/miniconda3/envs/rapids-cpp",
+        "CMAKE_CUDA_COMPILER": "/usr/local/cuda/bin/nvcc"
+      }
+    },
+    {
+      "name": "gpu-bfs",
+      "displayName": "CUDA/cuGraph BFS CLI",
+      "inherits": "cpu-bfs",
+      "binaryDir": "${sourceDir}/build/gpu-bfs",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CPGDB_ENABLE_GPU": "ON",
+        "CPGDB_DEPENDENCY_PREFIX": "/home/akos/miniconda3/envs/rapids-cpp",
+        "CMAKE_CUDA_COMPILER": "/usr/local/cuda/bin/nvcc"
+      }
+    },
+    {
+      "name": "http-server",
+      "displayName": "Drogon HTTP server",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/http-server",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CPGDB_ENABLE_GPU": "ON",
+        "CPGDB_BUILD_BACKENDS": "ON",
+        "CPGDB_BUILD_BFS": "OFF",
+        "CPGDB_BUILD_HTTP": "ON",
+        "CPGDB_BUILD_GRPC": "OFF",
+        "CPGDB_BUILD_TESTS": "ON",
+        "CPGDB_BUILD_DOCS": "OFF",
+        "CPGDB_DEPENDENCY_PREFIX": "/home/akos/miniconda3/envs/rapids-cpp",
+        "CMAKE_CUDA_COMPILER": "/usr/local/cuda/bin/nvcc"
+      }
+    },
+    {
+      "name": "grpc-server",
+      "displayName": "gRPC streaming server",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/grpc-server",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CPGDB_ENABLE_GPU": "OFF",
+        "CPGDB_BUILD_BACKENDS": "ON",
+        "CPGDB_BUILD_BFS": "OFF",
+        "CPGDB_BUILD_HTTP": "OFF",
+        "CPGDB_BUILD_GRPC": "ON",
+        "CPGDB_BUILD_TESTS": "ON",
+        "CPGDB_BUILD_DOCS": "OFF"
+      }
+    },
+    {
+      "name": "full-cpu",
+      "displayName": "All CPU applications",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/full-cpu",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CPGDB_ENABLE_GPU": "OFF",
+        "CPGDB_BUILD_BACKENDS": "ON",
+        "CPGDB_BUILD_BFS": "ON",
+        "CPGDB_BUILD_HTTP": "ON",
+        "CPGDB_BUILD_GRPC": "ON",
+        "CPGDB_BUILD_TESTS": "ON",
+        "CPGDB_BUILD_DOCS": "OFF"
+      }
+    },
+    {
+      "name": "docs",
+      "displayName": "Doxygen documentation",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/docs",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CPGDB_ENABLE_GPU": "OFF",
+        "CPGDB_BUILD_BACKENDS": "OFF",
+        "CPGDB_BUILD_BFS": "OFF",
+        "CPGDB_BUILD_HTTP": "OFF",
+        "CPGDB_BUILD_GRPC": "OFF",
+        "CPGDB_BUILD_TESTS": "OFF",
+        "CPGDB_BUILD_DOCS": "ON",
+        "CPGDB_ENABLE_CLANG_FORMAT": "OFF",
+        "CPGDB_ENABLE_CLANG_TIDY": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "cpu-core", "configurePreset": "cpu-core", "jobs": 2 },
+    { "name": "cpu-bfs", "configurePreset": "cpu-bfs", "jobs": 2 },
+    { "name": "cpu-bfs-debug", "configurePreset": "cpu-bfs-debug", "jobs": 2 },
+    { "name": "gpu-bfs", "configurePreset": "gpu-bfs", "jobs": 2 },
+    { "name": "gpu-bfs-debug", "configurePreset": "gpu-bfs-debug", "jobs": 2 },
+    { "name": "http-server", "configurePreset": "http-server", "jobs": 2 },
+    { "name": "grpc-server", "configurePreset": "grpc-server", "jobs": 2 },
+    { "name": "full-cpu", "configurePreset": "full-cpu", "jobs": 2 },
+    { "name": "docs", "configurePreset": "docs", "targets": ["docs"], "jobs": 2 }
+  ],
+  "testPresets": [
+    { "name": "cpu-core", "configurePreset": "cpu-core", "output": { "outputOnFailure": true } },
+    { "name": "cpu-bfs", "configurePreset": "cpu-bfs", "output": { "outputOnFailure": true } },
+    { "name": "cpu-bfs-debug", "configurePreset": "cpu-bfs-debug", "output": { "outputOnFailure": true } },
+    { "name": "gpu-bfs", "configurePreset": "gpu-bfs", "output": { "outputOnFailure": true } },
+    { "name": "gpu-bfs-debug", "configurePreset": "gpu-bfs-debug", "output": { "outputOnFailure": true } },
+    { "name": "http-server", "configurePreset": "http-server", "output": { "outputOnFailure": true } },
+    { "name": "grpc-server", "configurePreset": "grpc-server", "output": { "outputOnFailure": true } },
+    { "name": "full-cpu", "configurePreset": "full-cpu", "output": { "outputOnFailure": true } }
+  ]
+}

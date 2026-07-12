@@ -1,8 +1,10 @@
 build/
 
 **/*.env
-**/*.json
-**/*.csv*.txt
+*.json
+!CMakePresets.json
+**/*.csv
+*.txt
 !CMakeLists.txt
 *.log
 *.jsonl
