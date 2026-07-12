@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package cpgdb.grpc.v1;
+
+service TraversalService {
+  rpc StreamBfs(BfsStreamRequest) returns (stream BfsLayer);
+}
+
+message BfsStreamRequest {
+  string graph_id = 1;
+  string source_vertex_id = 2;
+  string source_type = 3;
+  uint32 max_depth = 4;
+  bool return_predecessors = 5;
+  bool allow_native_pushdown = 6;
+  bool allow_partial_acceleration = 7;
+}
+
+message BfsVertex {
+  string id = 1;
+  string type = 2;
+  uint32 distance = 3;
+}
+
+message BfsTreeEdge {
+  string source_id = 1;
+  string target_id = 2;
+}
+
+message BfsLayer {
+  string graph_id = 1;
+  uint32 depth = 2;
+  repeated BfsVertex vertices = 3;
+  repeated BfsTreeEdge tree_edges = 4;
+  bool done = 5;
+}

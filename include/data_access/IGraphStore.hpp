@@ -1,73 +1,79 @@
-//
-// Created by akos on 30. 4. 2026.
-//
+/**
+ * @file include/data_access/IGraphStore.hpp
+ * @brief Defines the backend-neutral graph store contract.
+ */
 
-#ifndef CPGDB_IGRAPHSTORE_HPP
-#define CPGDB_IGRAPHSTORE_HPP
-#include <span>
-#include <unordered_map>
-#include <vector>
-#include <boost/container_hash/hash.hpp>
+#ifndef CPGDB_DATA_ACCESS_I_GRAPH_STORE_HPP
+#define CPGDB_DATA_ACCESS_I_GRAPH_STORE_HPP
 
 #include "algorithms/ExpandSpec.hpp"
 #include "algorithms/bfs/BfsOptions.hpp"
 #include "algorithms/bfs/BfsResult.hpp"
 #include "data_model/AdjacencyRow.hpp"
 #include "data_model/MinimalAdjacencyRow.hpp"
-#include "data_model/EntityId.hpp"
 #include "data_model/NodeRef.hpp"
-#include "infrastructure/BackendCapabilities.hpp"
 #include "infrastructure/BackendDescriptor.hpp"
 #include "infrastructure/BackendKind.hpp"
+#include "query/QueryResult.hpp"
 
+#include <memory>
+#include <span>
+#include <vector>
+
+namespace cpgdb {
+
+class Query;
+
+/**
+ * @brief Polymorphic interface implemented by every physical graph backend.
+ *
+ * Stores expose optimized traversal operations as well as generic visitor-based
+ * query execution. Default methods deliberately fail or adapt richer results so
+ * a minimal backend only needs to implement its essential capabilities.
+ */
 class IGraphStore {
-public:
-    virtual ~IGraphStore() = default;
+  public:
+    virtual ~IGraphStore();
 
-    virtual BackendKind kind() const = 0;
-    virtual const BackendDescriptor& descriptor() const = 0;
+    /** @brief Returns the backend product/category implemented by this store. */
+    [[nodiscard]] virtual BackendKind kind() const = 0;
+    /** @brief Returns immutable capability, identity, priority, and coverage metadata. */
+    [[nodiscard]] virtual const BackendDescriptor& descriptor() const = 0;
 
+    /**
+     * @brief Returns rich one-hop adjacency for all vertices in @p frontier.
+     * @param depth Current BFS depth, available to cache-aware backends.
+     */
     virtual std::vector<AdjacencyRow>
-    get_neighbors_batch(std::span<const NodeRef> frontier,
-                        const ExpandSpec& spec) = 0;
+    get_neighbors_batch(std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth) = 0;
 
-    virtual std::vector<MinimalAdjacencyRow>
-    get_minimal_neighbors_batch(std::span<const NodeRef> frontier,
-                                const ExpandSpec& spec) {
-        auto rich_rows = get_neighbors_batch(frontier, spec);
+    /**
+     * @brief Returns the lightweight adjacency form used by graph algorithms.
+     *
+     * The default implementation converts @ref get_neighbors_batch output.
+     */
+    virtual std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch(
+        std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth);
 
-        std::vector<MinimalAdjacencyRow> minimal_rows;
-        minimal_rows.reserve(rich_rows.size());
+    /** @brief Returns whether this store can execute the complete requested BFS natively. */
+    [[nodiscard]] virtual bool can_run_native_bfs(const NodeRef& source,
+                                                  const ExpandSpec& spec,
+                                                  const BfsOptions& options) const;
 
-        for (auto& row : rich_rows) {
-            MinimalAdjacencyRow minimal;
-            minimal.source = row.source;
-            minimal.neighbors.reserve(row.neighbors.size());
+    /**
+     * @brief Executes a backend-neutral query through this store's query visitor.
+     * @throws std::runtime_error when generic query execution is unsupported.
+     */
+    virtual query_result_t execute(const Query& query);
 
-            for (const auto& neighbor : row.neighbors) {
-                minimal.neighbors.push_back(neighbor.vertex);
-            }
-
-            minimal_rows.push_back(std::move(minimal));
-        }
-
-        return minimal_rows;
-    }
-
-    virtual bool can_run_native_bfs(const NodeRef& source,
-                                    const ExpandSpec& spec,
-                                    const BfsOptions& options) const {
-        const auto d = descriptor();
-
-        return options.allow_native_pushdown &&
-               d.capabilities.supports_native_bfs &&
-               d.coverage.can_answer_whole_bfs(source, spec);
-    }
-
+    /**
+     * @brief Executes a complete native BFS.
+     * @throws std::runtime_error when native BFS is unsupported.
+     */
     virtual BfsResult
-    run_bfs(const NodeRef& source, const ExpandSpec& spec, const BfsOptions& options) {
-        throw std::runtime_error("Native BFS not supported");
-    }
+    run_bfs(const NodeRef& source, const ExpandSpec& spec, const BfsOptions& options);
 };
 
-#endif //CPGDB_IGRAPHSTORE_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_DATA_ACCESS_I_GRAPH_STORE_HPP

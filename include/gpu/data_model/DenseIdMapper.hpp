@@ -1,16 +1,21 @@
+/**
+ * @file include/gpu/data_model/DenseIdMapper.hpp
+ * @brief Declarations for dense id mapper in the GPU acceleration module.
+ */
+
 #ifndef CPGDB_DENSEIDMAPPER_HPP
 #define CPGDB_DENSEIDMAPPER_HPP
 
+#include "utilities/uuid.hpp"
+
+#include <boost/container_hash/hash.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <cstddef>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
-#include <boost/container_hash/hash.hpp>
-#include <boost/uuid/uuid_io.hpp>
-
-#include "utilities/uuid.hpp"
-
+namespace cpgdb {
 /*
  * Maps your external graph ids, GlobalId/boost::uuid, to dense cuGraph ids:
  *
@@ -19,9 +24,8 @@
  * cuGraph works best with dense vertex ids. Your graph engine should continue
  * to use GlobalId everywhere outside the GPU projection.
  */
-template <typename vertex_t>
-class DenseIdMapper {
-public:
+template <typename vertex_t> class DenseIdMapper {
+  public:
     vertex_t get_or_add(const GlobalId& id) {
         auto it = to_dense_.find(id);
 
@@ -45,10 +49,8 @@ public:
         auto it = to_dense_.find(id);
 
         if (it == to_dense_.end()) {
-            throw std::runtime_error(
-                "GlobalId not present in DenseIdMapper: " +
-                boost::uuids::to_string(id)
-            );
+            throw std::runtime_error("GlobalId not present in DenseIdMapper: " +
+                                     boost::uuids::to_string(id));
         }
 
         return it->second;
@@ -66,9 +68,11 @@ public:
         return to_global_;
     }
 
-private:
+  private:
     std::unordered_map<GlobalId, vertex_t, boost::hash<GlobalId>> to_dense_;
     std::vector<GlobalId> to_global_;
 };
+
+} // namespace cpgdb
 
 #endif // CPGDB_DENSEIDMAPPER_HPP

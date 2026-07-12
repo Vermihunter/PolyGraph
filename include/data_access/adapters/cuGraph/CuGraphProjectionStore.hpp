@@ -1,11 +1,10 @@
+/**
+ * @file include/data_access/adapters/cuGraph/CuGraphProjectionStore.hpp
+ * @brief Declarations for cu graph projection store in the graph-store access module.
+ */
+
 #ifndef CPGDB_CUGRAPHPROJECTIONSTORE_HPP
 #define CPGDB_CUGRAPHPROJECTIONSTORE_HPP
-
-#include <memory>
-#include <span>
-#include <stdexcept>
-#include <utility>
-#include <vector>
 
 #include "algorithms/bfs/BfsOptions.hpp"
 #include "algorithms/bfs/BfsResult.hpp"
@@ -16,19 +15,23 @@
 #include "gpu/data_model/HostAdjacencyIndex.hpp"
 #include "infrastructure/BackendDescriptor.hpp"
 
-template <typename ProjectionT>
-class CuGraphProjectionStore final : public IGraphStore {
-public:
+#include <memory>
+#include <span>
+#include <stdexcept>
+#include <utility>
+#include <vector>
+
+namespace cpgdb {
+template <typename ProjectionT> class CuGraphProjectionStore final : public IGraphStore {
+  public:
     CuGraphProjectionStore(BackendDescriptor descriptor,
                            std::shared_ptr<ProjectionT> projection,
                            std::shared_ptr<HostAdjacencyIndex> host_index = nullptr)
-        : descriptor_(std::move(descriptor)),
-          projection_(std::move(projection)),
-          host_index_(std::move(host_index)) {
+        : descriptor_(std::move(descriptor))
+        , projection_(std::move(projection))
+        , host_index_(std::move(host_index)) {
         if (!projection_) {
-            throw std::invalid_argument(
-                "CuGraphProjectionStore requires a non-null projection"
-            );
+            throw std::invalid_argument("CuGraphProjectionStore requires a non-null projection");
         }
     }
 
@@ -58,52 +61,25 @@ public:
         return projection_->mapper().contains(source.global_id);
     }
 
-    BfsResult run_bfs(const NodeRef& source,
-                      const ExpandSpec& spec,
-                      const BfsOptions& options) override {
+    BfsResult
+    run_bfs(const NodeRef& source, const ExpandSpec& spec, const BfsOptions& options) override {
         if (!can_run_native_bfs(source, spec, options)) {
-            throw std::runtime_error(
-                "GPU projection cannot answer whole BFS for this source/spec"
-            );
+            throw std::runtime_error("GPU projection cannot answer whole BFS for this source/spec");
         }
 
-        /*
-        return CuGraphOneHopExpandExecutor::run_as_union_bfs_result(
-            *projection_,
-            source.global_id,
-            options);
-        */
-
-        return CuGraphBfsExecutor::run(
-            *projection_,
-            source.global_id,
-            options
-        );
+        return CuGraphBfsExecutor::run(*projection_, source.global_id, options);
     }
 
-    /*
-    std::vector<AdjacencyRow>
-    get_neighbors_batch(std::span<const NodeRef> frontier,
-                        const ExpandSpec& spec) override {
+    std::vector<AdjacencyRow> get_neighbors_batch(std::span<const NodeRef> frontier,
+                                                  const ExpandSpec& spec,
+                                                  int depth) override {
         if (!host_index_) {
-            throw std::runtime_error(
-                "CuGraphProjectionStore has no host adjacency index for partial expansion"
-            );
+            throw std::runtime_error("CuGraphProjectionStore requires HostAdjacencyIndex to "
+                                     "hydrate GPU expansion results");
         }
 
-        return host_index_->get_neighbors_batch(frontier, spec);
-    }
-    */
-
-    std::vector<AdjacencyRow>
-    get_neighbors_batch(std::span<const NodeRef> frontier,
-                        const ExpandSpec& spec) override {
-        if (!host_index_) {
-            throw std::runtime_error(
-                "CuGraphProjectionStore requires HostAdjacencyIndex to hydrate GPU expansion results"
-            );
-        }
-
+        EVENT_SCOPE_INFO(
+            _, "cugraph.get_neighbors", {"depth", depth}, {"frontier_size", frontier.size()});
         std::vector<AdjacencyRow> rows;
         rows.reserve(frontier.size());
 
@@ -113,10 +89,7 @@ public:
 
         for (const auto& source : frontier) {
             row_by_source.emplace(source.global_id, rows.size());
-            rows.push_back(AdjacencyRow{
-                .source = source,
-                .neighbors = {}
-            });
+            rows.push_back(AdjacencyRow{.source = source, .neighbors = {}});
 
             if (projection_->mapper().contains(source.global_id)) {
                 gpu_source_ids.push_back(source.global_id);
@@ -127,29 +100,21 @@ public:
             return rows;
         }
 
-        BfsOptions one_hop_options{
-            .max_depth = 1,
-            .return_predecessors = false,
-            .allow_native_pushdown = false,
-            .allow_partial_acceleration = true
-        };
+        BfsOptions one_hop_options{.max_depth = 1,
+                                   .return_predecessors = false,
+                                   .allow_native_pushdown = false,
+                                   .allow_partial_acceleration = true};
 
         using vertex_t = typename ProjectionT::vertex_type;
         using edge_t = typename ProjectionT::edge_type;
 
-        OneHopExpansionResult expanded =
-            CuGraphOneHopExpandExecutor::template run<
-                vertex_t,
-                edge_t,
-                ProjectionT::multi_gpu,
-                ProjectionT::store_transposed
-            >(
-                *projection_,
-                gpu_source_ids,
-                one_hop_options
-            );
+        OneHopExpansionResult expanded = CuGraphOneHopExpandExecutor::
+            template run<vertex_t, edge_t, ProjectionT::multi_gpu, ProjectionT::store_transposed>(
+                *projection_, gpu_source_ids, one_hop_options);
 
-        std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+        std::unordered_map<GlobalId,
+                           std::unordered_set<GlobalId, boost::hash<GlobalId>>,
+                           boost::hash<GlobalId>>
             seen_by_source;
 
         for (const auto& [source_id, destination_id] : expanded.edges) {
@@ -158,8 +123,7 @@ public:
                 continue;
             }
 
-            auto hydrated_neighbor =
-                host_index_->find_neighbor(source_id, destination_id, spec);
+            auto hydrated_neighbor = host_index_->find_neighbor(source_id, destination_id, spec);
 
             if (!hydrated_neighbor.has_value()) {
                 // The GPU graph may intentionally contain mirrored edges for
@@ -180,10 +144,12 @@ public:
         return rows;
     }
 
-private:
+  private:
     BackendDescriptor descriptor_;
     std::shared_ptr<ProjectionT> projection_;
     std::shared_ptr<HostAdjacencyIndex> host_index_;
 };
+
+} // namespace cpgdb
 
 #endif // CPGDB_CUGRAPHPROJECTIONSTORE_HPP

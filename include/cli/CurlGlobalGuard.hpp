@@ -1,29 +1,21 @@
-//
-// Created by akos on 7. 7. 2026.
-//
+/**
+ * @file include/cli/CurlGlobalGuard.hpp
+ * @brief Declarations for curl global guard in the command-line and runtime configuration module.
+ */
 
-#ifndef CPGDB_CURLGLOBALGUARD_HPP
-#define CPGDB_CURLGLOBALGUARD_HPP
-
-#include <curl/curl.h>
+#ifndef CPGDB_CLI_CURL_GLOBAL_GUARD_HPP
+#define CPGDB_CLI_CURL_GLOBAL_GUARD_HPP
 
 namespace cpgdb::runtime {
 
-    class CurlGlobalGuard final {
-    public:
-        CurlGlobalGuard() {
-            curl_global_init(CURL_GLOBAL_ALL);
-        }
-
-        ~CurlGlobalGuard() {
-            curl_global_cleanup();
-        }
-
-        CurlGlobalGuard(const CurlGlobalGuard&) = delete;
-        CurlGlobalGuard& operator=(const CurlGlobalGuard&) = delete;
-    };
+class CurlGlobalGuard {
+  public:
+    CurlGlobalGuard();
+    CurlGlobalGuard(const CurlGlobalGuard&) = delete;
+    CurlGlobalGuard& operator=(const CurlGlobalGuard&) = delete;
+    ~CurlGlobalGuard();
+};
 
 } // namespace cpgdb::runtime
 
-
-#endif //CPGDB_CURLGLOBALGUARD_HPP
+#endif // CPGDB_CLI_CURL_GLOBAL_GUARD_HPP

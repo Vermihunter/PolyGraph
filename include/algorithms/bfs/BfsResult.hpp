@@ -1,18 +1,27 @@
-//
-// Created by akos on 1. 5. 2026.
-//
+/**
+ * @file include/algorithms/bfs/BfsResult.hpp
+ * @brief External-ID result representation returned by BFS executors.
+ */
 
 #ifndef CPGDB_BFSRESULT_HPP
 #define CPGDB_BFSRESULT_HPP
 
-#include <unordered_map>
-#include <boost/container_hash/hash.hpp>
-
 #include "data_model/EntityId.hpp"
 
+#include <boost/container_hash/hash.hpp>
+#include <cstdint>
+#include <unordered_map>
+
+namespace cpgdb {
+
+/** @brief Distances and optional predecessor tree keyed by stable graph UUID. */
 struct BfsResult {
+    /// Minimum number of traversed edges from the source to each reachable vertex.
     std::unordered_map<GlobalId, std::uint32_t, boost::hash<GlobalId>> distance;
+    /// First predecessor selected for each discovered non-source vertex.
     std::unordered_map<GlobalId, GlobalId, boost::hash<GlobalId>> predecessor;
 };
 
-#endif //CPGDB_BFSRESULT_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_BFSRESULT_HPP

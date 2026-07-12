@@ -1,3 +1,8 @@
+/**
+ * @file include/infrastructure/BackendId.hpp
+ * @brief Declarations for backend id in the backend infrastructure module.
+ */
+
 //
 // Created by akos on 30. 4. 2026.
 //
@@ -7,9 +12,12 @@
 
 #include <cstdint>
 
+namespace cpgdb {
 /**
  * Stable id of a logical backend, e.g. 1 = Neo4jMain, 2 = MemgraphHotCache
  */
 using BackendId = std::uint32_t;
 
-#endif //CPGDB_BACKENDID_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_BACKENDID_HPP

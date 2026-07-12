@@ -1,0 +1,24 @@
+/**
+@mainpage CPGDB Developer Documentation
+
+@tableofcontents
+
+CPGDB is a C++23 graph execution engine that presents one logical graph across
+multiple physical stores. It contains a distributed breadth-first-search
+executor, Neo4j and ArangoDB adapters, optional CUDA/cuGraph acceleration,
+HTTP and gRPC frontends, and a policy-driven insertion subsystem.
+
+@section documentation_map Documentation map
+
+- @ref architecture explains component boundaries and execution flow.
+- @ref insertion_architecture explains insertion queries, routing policies,
+  UUID ownership encoding, batching, and extension points.
+- @ref build_guide lists dependencies, CMake options, and presets.
+- `docs/CONFIGURATION.md` documents runtime JSON inputs and examples.
+- @ref testing_guide explains GoogleTest organization and common commands.
+- @ref static_analysis explains clang-format and clang-tidy build gates.
+- @ref troubleshooting lists common configuration and dependency failures.
+
+The generated namespace, class, file, and call-reference pages cover both the
+public API under `include/` and the compiled implementation under `src/`.
+*/

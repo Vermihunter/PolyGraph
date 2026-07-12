@@ -1,92 +1,34 @@
-//
-// Created by akos on 7. 7. 2026.
-//
+/**
+ * @file include/server/controllers/TraversalController.hpp
+ * @brief Declarations for traversal controller in the server frontend module.
+ */
 
-#ifndef CPGDB_TRAVERSALCONTROLLER_HPP
-#define CPGDB_TRAVERSALCONTROLLER_HPP
+#ifndef CPGDB_SERVER_CONTROLLERS_TRAVERSAL_CONTROLLER_HPP
+#define CPGDB_SERVER_CONTROLLERS_TRAVERSAL_CONTROLLER_HPP
 
 #include <drogon/drogon.h>
+#include <functional>
+#include <spdlog/spdlog.h>
+#include <string>
 
-#include "server/dto/BfsRequest.hpp"
-#include "server/http/RequestParsing.hpp"
-#include "server/services/ServicesPlugin.hpp"
-#include "utilities/json.hpp"
-#include "serialization/BfsResultJsonSerializer.hpp"
+namespace cpgdb::http::api::v1 {
 
-namespace http::api::v1 {
+class TraversalController final : public drogon::HttpController<TraversalController> {
+  public:
+    METHOD_LIST_BEGIN
+    ADD_METHOD_TO(TraversalController::runBfs, "/api/v1/graphs/{1}/bfs", drogon::Post);
+    ADD_METHOD_TO(TraversalController::getNeighbors, "/api/v1/graphs/{1}/neighbors", drogon::Post);
+    METHOD_LIST_END
 
-    class TraversalController final
-        : public drogon::HttpController<TraversalController> {
-    public:
-        METHOD_LIST_BEGIN
+    static void runBfs(const drogon::HttpRequestPtr& request,
+                std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                const std::string& source_vertex_uuid);
 
-        ADD_METHOD_TO(
-            TraversalController::runBfs,
-            "/api/v1/graphs/{1}/bfs",
-            drogon::Post
-        );
-        //  "filters::AuthFilter"
+    static void getNeighbors(const drogon::HttpRequestPtr& request,
+                      std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                      const std::string& source_vertex_uuid);
+};
 
-        ADD_METHOD_TO(
-            TraversalController::getNeighbors,
-            "/api/v1/graphs/{1}/vertices/{2}/neighbors",
-            drogon::Get,
-        );
-        // "filters::AuthFilter"
+} // namespace cpgdb::http::api::v1
 
-        ADD_METHOD_TO(
-            TraversalController::getNeighborsBatch,
-            "/api/v1/graphs/{1}/neighbors/batch",
-            drogon::Post,
-        );
-        // "filters::AuthFilter"
-
-        METHOD_LIST_END
-
-        void runBfs(
-            const drogon::HttpRequestPtr& req,
-            std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-            const std::string& graphId
-        ) const {
-            try {
-                std::cout << "BFS query" << std::endl;
-                const auto& body = http::parse::jsonBody(req);
-                const auto bfsRequest = dto::BfsRequest::fromJson(body);
-
-                auto* services = drogon::app().getPlugin<::services::ServicesPlugin>();
-                auto result = services->traversalService().runBfs(graphId, bfsRequest);
-                nlohmann::json jsonResult = result;
-
-
-                nlohmann::json response = {
-                    {"graphId", graphId},
-                    {"sourceVertexId", bfsRequest.sourceVertexId},
-                    {"maxDepth", bfsRequest.maxDepth},
-                    {"result", result}
-                };
-
-                callback(http::jsonOk(std::move(response)));
-            } catch (const std::exception& e) {
-                callback(http::mapExceptionToResponse(e));
-            } catch (...) {
-                callback(http::mapUnknownExceptionToResponse());
-            }
-        }
-
-        void getNeighbors(
-            const drogon::HttpRequestPtr& req,
-            std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-            std::string graphId,
-            std::string vertexId
-        ) const {}
-
-        void getNeighborsBatch(
-            const drogon::HttpRequestPtr& req,
-            std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-            std::string graphId
-        ) const {}
-    };
-
-}
-
-#endif //CPGDB_TRAVERSALCONTROLLER_HPP
+#endif // CPGDB_SERVER_CONTROLLERS_TRAVERSAL_CONTROLLER_HPP

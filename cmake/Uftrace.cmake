@@ -1,0 +1,15 @@
+include_guard(GLOBAL)
+
+function(cpgdb_enable_uftrace target)
+    if(NOT CPGDB_ENABLE_UFTRACE)
+        return()
+    endif()
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options("${target}" INTERFACE -pg -g)
+        target_link_options("${target}" INTERFACE -pg)
+        message(STATUS "CPGDB uftrace instrumentation: enabled")
+    else()
+        message(WARNING "uftrace instrumentation is supported only with GCC or Clang")
+    endif()
+endfunction()

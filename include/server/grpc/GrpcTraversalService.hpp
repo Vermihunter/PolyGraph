@@ -1,34 +1,29 @@
-//
-// Created by akos on 8. 7. 2026.
-//
+/**
+ * @file include/server/grpc/GrpcTraversalService.hpp
+ * @brief Declarations for grpc traversal service in the server frontend module.
+ */
 
-#ifndef CPGDB_GRPCTRAVERSALSERVICE_HPP
-#define CPGDB_GRPCTRAVERSALSERVICE_HPP
-
-#include <grpcpp/grpcpp.h>
+#pragma once
 
 #include "bfs_stream.grpc.pb.h"
 #include "server/services/TraversalService.hpp"
 
-namespace cpgdb::server_rpc {
-    namespace pb = ::cpgdb::grpc::v1;
+#include <grpcpp/grpcpp.h>
 
-    class GrpcTraversalService final
-        : public pb::TraversalService::Service {
-    public:
-        explicit GrpcTraversalService(
-            ::services::TraversalService& traversalService
-        );
+namespace cpgdb::server::grpc_api {
 
-        ::grpc::Status StreamBfs(
-            ::grpc::ServerContext* context,
-            const pb::BfsStreamRequest* request,
-            ::grpc::ServerWriter<pb::BfsLayer>* writer
-        ) override;
+namespace pb = ::cpgdb::grpc::v1;
 
-    private:
-        ::services::TraversalService& traversalService_;
-    };
-}
+class GrpcTraversalService final : public pb::TraversalService::Service {
+  public:
+    explicit GrpcTraversalService(services::TraversalService& traversal_service) noexcept;
 
-#endif //CPGDB_GRPCTRAVERSALSERVICE_HPP
+    ::grpc::Status StreamBfs(::grpc::ServerContext* context,
+                             const pb::BfsStreamRequest* request,
+                             ::grpc::ServerWriter<pb::BfsLayer>* writer) override;
+
+  private:
+    services::TraversalService& traversal_service_;
+};
+
+} // namespace cpgdb::server::grpc_api

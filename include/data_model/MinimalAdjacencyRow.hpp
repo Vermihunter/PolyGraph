@@ -1,3 +1,8 @@
+/**
+ * @file include/data_model/MinimalAdjacencyRow.hpp
+ * @brief Declarations for minimal adjacency row in the graph data-model module.
+ */
+
 //
 // Created by akos on 16. 6. 2026.
 //
@@ -5,10 +10,11 @@
 #ifndef CPGDB_MINIMALADJACENCYROW_HPP
 #define CPGDB_MINIMALADJACENCYROW_HPP
 
-#include <vector>
-
 #include "NodeRef.hpp"
 
+#include <vector>
+
+namespace cpgdb {
 /*
  * Minimal one-hop expansion result for graph algorithms.
  *
@@ -22,4 +28,6 @@ struct MinimalAdjacencyRow {
     std::vector<NodeRef> neighbors;
 };
 
-#endif //CPGDB_MINIMALADJACENCYROW_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_MINIMALADJACENCYROW_HPP

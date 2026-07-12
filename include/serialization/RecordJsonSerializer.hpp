@@ -1,133 +1,47 @@
-//
-// Created by akos on 6. 3. 2026.
-//
+/**
+ * @file include/serialization/RecordJsonSerializer.hpp
+ * @brief Declarations for record json serializer in the serialization module.
+ */
 
-#ifndef CPGDB_RECORDJSONSERIALIZER_HPP
-#define CPGDB_RECORDJSONSERIALIZER_HPP
-
-#include <variant>
+#ifndef CPGDB_SERIALIZATION_RECORD_JSON_SERIALIZER_HPP
+#define CPGDB_SERIALIZATION_RECORD_JSON_SERIALIZER_HPP
 
 #include <data_model/Record.hpp>
 #include <data_model/Value.hpp>
+#include <memory>
 #include <utilities/json.hpp>
-#include <boost/uuid/string_generator.hpp>
 
-//using json = nlohmann::json;
-// Forward declarations for the compiler
-// --- unique_ptr Handling (Must be in nlohmann namespace) ---
 namespace nlohmann {
-    template <typename T>
-    struct adl_serializer<std::unique_ptr<T>> {
-        static void to_json(json& j, const std::unique_ptr<T>& ptr) {
-            if (ptr) j = *ptr; else j = nullptr;
-        }
-        static void from_json(const json& j, std::unique_ptr<T>& ptr) {
-            if (j.is_null()) ptr = nullptr;
-            else ptr = std::make_unique<T>(j.get<T>());
-        }
-    };
-}
 
-// --- Implementation ---
-
-inline void to_json(json& j, const Node& n) {
-    j = json::object(); // Explicitly create object to avoid ambiguity
-    j["id"] = n.global_id;
-    j["labels"] = n.labels;
-    j["properties"] = n.properties;
-}
-
-
-
-inline boost::uuids::uuid json_to_uuid(const json& j) {
-    return boost::uuids::string_generator{}(j.get<std::string>());
-}
-
-inline void from_json(const json& j, Node& n) {
-    n.global_id = json_to_uuid(j.at("id"));
-
-    n.labels = j.at("labels").get<std::vector<std::string>>();
-    n.properties = j.at("properties").get<std::unordered_map<std::string, std::unique_ptr<Value>>>();
-}
-
-
-inline void to_json(json& j, const Edge& e) {
-    j = json::object();
-    j["global_id"] = e.global_id;
-    j["type"] = e.type;
-    j["src"] = e.src;
-    j["dst"] = e.dst;
-    j["properties"] = e.properties;
-}
-
-inline void from_json(const json& j, Edge& e) {
-    e.global_id = json_to_uuid(j.at("global_id"));
-    e.type = j.at("type").get<TypeId>();
-    e.src = json_to_uuid( j.at("src"));
-    e.dst = json_to_uuid( j.at("dst"));
-    e.properties = j.at("properties").get<Map>();
-}
-
-inline void to_json(json& j, const Path& p) {
-    j = json::object();
-    j["nodes"] = p.nodes;
-    j["edges"] = p.edges;
-}
-
-inline void from_json(const json& j, Path& p) {
-    p.nodes = j.at("nodes").get<std::vector<std::unique_ptr<Node>>>();
-    p.edges = j.at("edges").get<std::vector<std::unique_ptr<Edge>>>();
-}
-
-inline void to_json(json& j, const Value& v) {
-    std::visit([&j](auto&& arg) {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, std::monostate>) {
-            j = nullptr;
-        } else {
-            j = arg;
-        }
-    }, v.data);
-}
-
-inline void from_json(const json& j, Value& v) {
-    if (j.is_null()) {
-        v.data = std::monostate{};
-    } else if (j.is_boolean()) {
-        v.data = j.get<bool>();
-    } else if (j.is_number_integer()) {
-        v.data = j.get<int64_t>();
-    } else if (j.is_number_float()) {
-        v.data = j.get<double>();
-    } else if (j.is_string()) {
-        v.data = j.get<std::string>();
-    } else if (j.is_array()) {
-        // Checking for binary (std::vector<uint8_t>) vs List
-        if (j.is_binary()) {
-            v.data = j.get_binary();
-        } else {
-            v.data = j.get<List>();
-        }
-    } else if (j.is_object()) {
-        if (j.contains("nodes") && j.contains("edges")) {
-            v.data = j.get<Path>();
-        } else if (j.contains("labels") && j.contains("id")) {
-            v.data = j.get<Node>();
-        } else if (j.contains("src") && j.contains("dst")) {
-            v.data = j.get<Edge>();
-        } else {
-            v.data = j.get<std::unordered_map<std::string, std::unique_ptr<Value>>>();
-        }
+template <typename T> struct adl_serializer<std::unique_ptr<T>> {
+    static void to_json(json& value, const std::unique_ptr<T>& pointer) {
+        value = pointer ? json(*pointer) : json(nullptr);
     }
-}
 
-inline void to_json(json& j, const Record& r) {
-    j = json::object();
-    j["fields"] = r.fields;
-}
+    static void from_json(const json& value, std::unique_ptr<T>& pointer) {
+        pointer = value.is_null() ? nullptr : std::make_unique<T>(value.get<T>());
+    }
+};
 
-inline void from_json(const json& j, Record& r) {
-    r.fields = j.at("fields").get<std::vector<Value>>();
-}
+} // namespace nlohmann
 
-#endif //CPGDB_RECORDJSONSERIALIZER_HPP
+namespace cpgdb {
+
+void to_json(json& value, const Node& node);
+void from_json(const json& value, Node& node);
+
+void to_json(json& value, const Edge& edge);
+void from_json(const json& value, Edge& edge);
+
+void to_json(json& value, const Path& path);
+void from_json(const json& value, Path& path);
+
+void to_json(json& value, const Value& source);
+void from_json(const json& value, Value& target);
+
+void to_json(json& value, const Record& record);
+void from_json(const json& value, Record& record);
+
+} // namespace cpgdb
+
+#endif // CPGDB_SERIALIZATION_RECORD_JSON_SERIALIZER_HPP

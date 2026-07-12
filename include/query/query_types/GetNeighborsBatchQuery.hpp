@@ -1,36 +1,33 @@
-#ifndef CPGDB_GETNEIGHBORSBATCHQUERY_HPP
-#define CPGDB_GETNEIGHBORSBATCHQUERY_HPP
+/**
+ * @file include/query/query_types/GetNeighborsBatchQuery.hpp
+ * @brief Declarations for get neighbors batch query in the query dispatch module.
+ */
 
-#include "query/QueryResult.hpp"
-#include "query/QueryVisitor.hpp"
+#ifndef CPGDB_QUERY_GET_NEIGHBORS_BATCH_QUERY_HPP
+#define CPGDB_QUERY_GET_NEIGHBORS_BATCH_QUERY_HPP
+
 #include "algorithms/ExpandSpec.hpp"
 #include "data_model/NodeRef.hpp"
 #include "query/Query.hpp"
 
-class GetNeighborsBatchQuery : public Query {
-public:
-    GetNeighborsBatchQuery(std::vector<NodeRef> frontier, ExpandSpec spec)
-        : frontier_(std::move(frontier)), spec_(std::move(spec)) {}
+#include <vector>
 
-    const std::vector<NodeRef>& frontier() const {
-        return frontier_;
-    }
+namespace cpgdb {
 
-    const ExpandSpec& spec() const {
-        return spec_;
-    }
+class GetNeighborsBatchQuery final : public Query {
+  public:
+    GetNeighborsBatchQuery(std::vector<NodeRef> frontier, ExpandSpec spec);
 
-    query_result_t accept(QueryVisitor& visitor) const override {
-        return visitor.visit(*this);
-    }
+    [[nodiscard]] const std::vector<NodeRef>& frontier() const noexcept;
+    [[nodiscard]] const ExpandSpec& spec() const noexcept;
+    query_result_t accept(QueryVisitor& visitor) const override;
+    [[nodiscard]] query_t clone() const override;
 
-    [[nodiscard]] query_t clone() const override {
-        return std::make_unique<GetNeighborsBatchQuery>(*this);
-    }
-
-private:
+  private:
     std::vector<NodeRef> frontier_;
     ExpandSpec spec_;
 };
 
-#endif // CPGDB_GETNEIGHBORSBATCHQUERY_HPP
+} // namespace cpgdb
+
+#endif // CPGDB_QUERY_GET_NEIGHBORS_BATCH_QUERY_HPP
