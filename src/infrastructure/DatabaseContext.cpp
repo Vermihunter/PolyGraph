@@ -7,6 +7,7 @@
 
 #include "gpu/GpuRuntime.hpp"
 
+#include <stdexcept>
 #include <utility>
 
 namespace cpgdb {
@@ -31,6 +32,8 @@ namespace cpgdb {
     void DatabaseContext::register_placement(Placement placement) {
         placement_catalog->register_placement(std::move(placement));
     }
+
+    NodeRef DatabaseContext::node_ref(const GlobalId &id) const { return placement_catalog->node_ref(id); }
 
     const BackendConnectionConfig &DatabaseContext::config_for(BackendId id) const { return connection_configs.at(id); }
 

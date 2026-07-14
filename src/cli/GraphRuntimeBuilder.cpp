@@ -28,10 +28,12 @@
 #endif
 
 #include "cli/BackendConfigParser.hpp"
+#include "cli/GraphDataReader.hpp"
 #include "domain/graph/TypeId.hpp"
 #include "infrastructure/BackendId.hpp"
 #include "infrastructure/ConfiguredGraphStoreFactory.hpp"
 #include "infrastructure/PlacementCatalog.hpp"
+#include "insertion/BackendEncodedUuid.hpp"
 #include "serialization/RecordJsonSerializer.hpp"
 #include "utilities/BackendIds.hpp"
 #include "utilities/json.hpp"
@@ -47,7 +49,6 @@ namespace cpgdb::cli {
             std::unique_ptr<domain::LogicalGraphSchema> schema;
             std::unordered_map<BackendId, std::unordered_set<TypeId>> nodes_by_backend;
             std::unordered_map<BackendId, std::unordered_set<TypeId>> edges_by_backend;
-            std::vector<Placement> placements;
         };
 
         [[nodiscard]] const json &required_array(const json &object, std::string_view key) {
@@ -121,70 +122,77 @@ namespace cpgdb::cli {
 
         [[nodiscard]] ProjectionBuildResult
         build_host_and_gpu_projection_inputs(const std::string &filename,
-                                             const std::shared_ptr<domain::LogicalGraphSchema> &schema) {
-            const json data = read_json_file(filename);
-
+                                             const std::shared_ptr<domain::LogicalGraphSchema> &schema,
+                                             const std::vector<BackendId> &routing_backends) {
             ProjectionBuildResult result;
             result.host_index = std::make_shared<HostAdjacencyIndex>();
 
             std::unordered_map<GlobalId, NodeRef, boost::hash<GlobalId>> nodes_by_id;
             std::unordered_map<std::string, GlobalId> id_by_uuid;
 
-            for (const auto &node_json: required_array(data, "nodes")) {
-                const auto uuid_str = node_json.at("uuid").get<std::string>();
-                const auto type_name = node_json.at("type").get<std::string>();
-                const auto source = node_json.at("source").get<std::string>();
+            GraphDataReader::for_each(
+                    filename,
+                    [&](const json &node_json) {
+                        const auto uuid_str = node_json.at("uuid").get<std::string>();
+                        const auto type_name = node_json.at("type").get<std::string>();
+                        const auto global_id = boost::lexical_cast<boost::uuids::uuid>(uuid_str);
+                        const TypeId type_id = schema->node_type_id(type_name);
+                        NodeRef ref{.global_id = global_id, .type = type_id};
 
-                const auto global_id = boost::lexical_cast<boost::uuids::uuid>(uuid_str);
-                const TypeId type_id = schema->node_type_id(type_name);
+                        nodes_by_id.emplace(global_id, ref);
+                        id_by_uuid.emplace(uuid_str, global_id);
 
-                NodeRef ref{.global_id = global_id, .type = type_id};
+                        if (insertion::BackendEncodedUuid::decode(global_id, routing_backends) == GPU) {
+                            auto record = std::make_unique<Record>();
+                            record->fields.emplace_back(
+                                    Node{.global_id = global_id,
+                                         .type = type_id,
+                                         .labels = {type_name},
+                                         .properties = node_json.value("properties", json::object()).get<Map>()});
+                            result.gpu_records.push_back(std::move(record));
+                        }
+                    },
+                    [&](const json &rel_json) {
+                        const auto rel_uuid_str = rel_json.at("uuid").get<std::string>();
+                        const auto rel_type_name = rel_json.at("type").get<std::string>();
+                        const auto from_uuid = rel_json.at("from").get<std::string>();
+                        const auto to_uuid = rel_json.at("to").get<std::string>();
 
-                nodes_by_id.emplace(global_id, ref);
-                id_by_uuid.emplace(uuid_str, global_id);
+                        const auto from_iterator = id_by_uuid.find(from_uuid);
+                        const auto to_iterator = id_by_uuid.find(to_uuid);
+                        if (from_iterator == id_by_uuid.end() || to_iterator == id_by_uuid.end()) {
+                            throw std::runtime_error(
+                                    "Relationship references an unknown endpoint. JSONL inputs must put all nodes "
+                                    "before relationships. Relationship uuid=" +
+                                    rel_uuid_str);
+                        }
 
-                if (source == "GPU") {
-                    auto record = std::make_unique<Record>();
-                    record->fields.emplace_back(
-                            Node{.global_id = global_id,
-                                 .type = type_id,
-                                 .labels = {type_name},
-                                 .properties = node_json.value("properties", json::object()).get<Map>()});
-                    result.gpu_records.push_back(std::move(record));
-                }
-            }
+                        const GlobalId from_id = from_iterator->second;
+                        const GlobalId to_id = to_iterator->second;
+                        const NodeRef &from_ref = nodes_by_id.at(from_id);
+                        const NodeRef &to_ref = nodes_by_id.at(to_id);
 
-            for (const auto &rel_json: required_array(data, "relationships")) {
-                const auto rel_uuid_str = rel_json.at("uuid").get<std::string>();
-                const auto rel_type_name = rel_json.at("type").get<std::string>();
-                const auto rel_source = rel_json.at("source").get<std::string>();
-                const auto from_uuid = rel_json.at("from").get<std::string>();
-                const auto to_uuid = rel_json.at("to").get<std::string>();
+                        EdgeRef edge_ref{.global_id = boost::lexical_cast<boost::uuids::uuid>(rel_uuid_str),
+                                         .type = schema->edge_type_id(rel_type_name),
+                                         .from = from_ref.global_id,
+                                         .to = to_ref.global_id};
+                        result.host_index->add_edge(from_ref, to_ref, edge_ref);
 
-                const GlobalId from_id = id_by_uuid.at(from_uuid);
-                const GlobalId to_id = id_by_uuid.at(to_uuid);
-
-                const NodeRef &from_ref = nodes_by_id.at(from_id);
-                const NodeRef &to_ref = nodes_by_id.at(to_id);
-
-                EdgeRef edge_ref{.global_id = boost::lexical_cast<boost::uuids::uuid>(rel_uuid_str),
-                                 .type = schema->edge_type_id(rel_type_name),
-                                 .from = from_ref.global_id,
-                                 .to = to_ref.global_id};
-
-                result.host_index->add_edge(from_ref, to_ref, edge_ref);
-
-                if (rel_source == "GPU") {
-                    auto record = std::make_unique<Record>();
-                    record->fields.emplace_back(
-                            Edge{.global_id = edge_ref.global_id,
-                                 .type = edge_ref.type,
-                                 .src = from_ref.global_id,
-                                 .dst = to_ref.global_id,
-                                 .properties = rel_json.value("properties", json::object()).get<Map>()});
-                    result.gpu_records.push_back(std::move(record));
-                }
-            }
+                        const bool gpu_resident =
+                                insertion::BackendEncodedUuid::decode(edge_ref.global_id, routing_backends) == GPU ||
+                                insertion::BackendEncodedUuid::decode(from_id, routing_backends) == GPU ||
+                                insertion::BackendEncodedUuid::decode(to_id, routing_backends) == GPU;
+                        if (gpu_resident) {
+                            auto record = std::make_unique<Record>();
+                            record->fields.emplace_back(
+                                    Edge{.global_id = edge_ref.global_id,
+                                         .type = edge_ref.type,
+                                         .src = from_ref.global_id,
+                                         .dst = to_ref.global_id,
+                                         .properties = rel_json.value("properties", json::object()).get<Map>()});
+                            result.gpu_records.push_back(std::move(record));
+                        }
+                    });
 
             return result;
         }
@@ -200,37 +208,47 @@ namespace cpgdb::cli {
 
             for (const auto &node_json: required_array(config, "nodeTypes")) {
                 const auto name = node_json.at("name").get<std::string>();
-                const auto source = node_json.at("source").get<std::string>();
-
-                const TypeId node_type_id = result.schema->add_node_type(
-                        name, parse_properties(node_json.value("properties", json::array())));
-
-                result.nodes_by_backend[config::backend_id_from_string(source)].insert(node_type_id);
+                result.schema->add_node_type(name, parse_properties(node_json.value("properties", json::array())));
             }
 
             for (const auto &relation_json: required_array(config, "relations")) {
                 const auto name = relation_json.at("name").get<std::string>();
-                const auto source = relation_json.at("source").get<std::string>();
-
                 const TypeId from_id = result.schema->node_type_id(relation_json.at("from").get<std::string>());
                 const TypeId to_id = result.schema->node_type_id(relation_json.at("to").get<std::string>());
-                const TypeId edge_type_id = result.schema->add_edge_type(
-                        name, from_id, to_id, true, parse_properties(relation_json.value("properties", json::array())));
-
-                const BackendId backend_id = config::backend_id_from_string(source);
-                result.edges_by_backend[backend_id].insert(edge_type_id);
-
-                result.placements.push_back(
-                        Placement{.backend_id = backend_id,
-                                  .kind = backend_id == GPU ? PlacementKind::GpuProjection : PlacementKind::Primary,
-                                  .source_node_types = {from_id},
-                                  .edge_types = {edge_type_id},
-                                  .target_node_types = {to_id},
-                                  .authoritative = true,
-                                  .priority = backend_id == GPU ? 1 : 50});
+                result.schema->add_edge_type(name, from_id, to_id, relation_json.value("directed", true),
+                                             parse_properties(relation_json.value("properties", json::array())));
             }
 
             return result;
+        }
+
+
+        void validate_graph_uuid_layout(const std::string &filename, const std::vector<BackendId> &routing_backends) {
+            const json metadata = GraphDataReader::metadata(filename);
+            const auto layout = metadata.find("uuidRouting");
+            if (layout == metadata.end()) {
+                throw std::runtime_error("Graph metadata must declare uuidRouting; regenerate or migrate UUIDs first");
+            }
+            if (!layout->is_array()) {
+                throw std::runtime_error("Graph metadata field 'uuidRouting' must be an array");
+            }
+
+            std::vector<BackendId> graph_routing;
+            graph_routing.reserve(layout->size());
+            for (const auto &value: *layout) {
+                graph_routing.push_back(config::backend_id_from_string(value.get<std::string>()));
+            }
+            if (graph_routing != routing_backends) {
+                throw std::runtime_error(
+                        "Graph uuidRouting metadata does not match backend config; UUID suffixes would route to "
+                        "the wrong storage layer");
+            }
+
+            if (const auto bits = metadata.find("uuidRoutingBits");
+                bits != metadata.end() &&
+                bits->get<std::size_t>() != insertion::BackendEncodedUuid::bit_count(routing_backends.size())) {
+                throw std::runtime_error("Graph uuidRoutingBits metadata does not match backend count");
+            }
         }
 
     } // namespace
@@ -243,22 +261,29 @@ namespace cpgdb::cli {
         ctx->schema = std::move(loaded_schema.schema);
         ctx->current_graph_version = config.graph_version;
 
-        const json backend_root = cpgdb::config::load_backend_config_file_or_default(config.backend_config_path);
-        const json &backend_entries = cpgdb::config::backend_array_or_throw(backend_root);
+        const json backend_root = config::load_backend_config_file_or_default(config.backend_config_path);
+        const json &backend_entries = config::backend_array_or_throw(backend_root);
+        ctx->uuid_routing_backends = config::uuid_routing_backends(backend_root);
+        validate_graph_uuid_layout(config.data_path, ctx->uuid_routing_backends);
+        ctx->placement_catalog->set_uuid_routing_backends(ctx->uuid_routing_backends);
 
-        ConfiguredGraphStoreFactory store_factory;
+        const auto projection_builder = [routing_backends = ctx->uuid_routing_backends](
+                                                const std::string &path,
+                                                const std::shared_ptr<domain::LogicalGraphSchema> &schema) {
+            return build_host_and_gpu_projection_inputs(path, schema, routing_backends);
+        };
+
         ConfiguredGraphStoreFactory::Inputs factory_inputs{.data_path = config.data_path,
                                                            .schema = *ctx->schema,
                                                            .nodes_by_backend = loaded_schema.nodes_by_backend,
                                                            .edges_by_backend = loaded_schema.edges_by_backend,
                                                            .graph_version = ctx->current_graph_version,
-                                                           .build_gpu_projection_inputs =
-                                                                   build_host_and_gpu_projection_inputs,
+                                                           .build_gpu_projection_inputs = projection_builder,
                                                            .ensure_cuda = ensure_cuda_or_throw};
 
         std::size_t enabled_backend_count = 0;
         for (const auto &backend_json: backend_entries) {
-            auto store = store_factory.create_from_json(*ctx, backend_json, factory_inputs);
+            auto store = ConfiguredGraphStoreFactory::create_from_json(*ctx, backend_json, factory_inputs);
             if (!store) {
                 continue;
             }
@@ -272,14 +297,9 @@ namespace cpgdb::cli {
         }
 
         if (config.verbose) {
-            cpgdb::config::print_backend_summary(*ctx, std::cerr);
+            config::print_backend_summary(*ctx, std::cerr);
         }
 
-        for (auto &placement: loaded_schema.placements) {
-            if (cpgdb::config::backend_enabled(*ctx, placement.backend_id)) {
-                ctx->register_placement(std::move(placement));
-            }
-        }
 
         return ctx;
     }

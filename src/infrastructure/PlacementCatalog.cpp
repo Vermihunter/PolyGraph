@@ -5,6 +5,8 @@
 
 #include "infrastructure/PlacementCatalog.hpp"
 
+#include "insertion/BackendEncodedUuid.hpp"
+
 #include <algorithm>
 #include <stdexcept>
 #include <unordered_set>
@@ -17,6 +19,26 @@ namespace cpgdb {
         if (!backend_registry_) {
             throw std::invalid_argument("PlacementCatalog requires a backend registry");
         }
+    }
+
+    void PlacementCatalog::set_uuid_routing_backends(std::vector<BackendId> routing_backends) {
+        if (routing_backends.empty()) {
+            throw std::invalid_argument("UUID routing layout must contain at least one backend");
+        }
+        uuid_routing_backends_ = std::move(routing_backends);
+    }
+
+    NodeRef PlacementCatalog::node_ref(const GlobalId &id) const {
+        if (uuid_routing_backends_.empty()) {
+            throw std::runtime_error("PlacementCatalog has no UUID routing layout");
+        }
+
+        const BackendId owner = insertion::BackendEncodedUuid::decode(id, uuid_routing_backends_);
+        if (!backend_registry_->contains(owner)) {
+            throw std::runtime_error("UUID routes to a backend that is not enabled");
+        }
+
+        return NodeRef{.global_id = id, .type = unresolved_type_id};
     }
 
     void PlacementCatalog::register_placement(Placement placement) { placements_.push_back(std::move(placement)); }
@@ -68,58 +90,25 @@ namespace cpgdb {
     std::vector<BackendId> PlacementCatalog::choose_expansion_backends_for_vertex(const NodeRef &vertex,
                                                                                   const ExpandSpec &spec,
                                                                                   const BfsOptions &options) const {
-        std::vector<const Placement *> matching;
-        matching.reserve(placements_.size());
+        (void) spec;
+        (void) options;
 
-        for (const Placement &placement: placements_) {
-            if (!placement.can_expand_from(vertex, spec)) {
-                continue;
-            }
-
-            const auto descriptor_iterator = backend_registry_->descriptors().find(placement.backend_id);
-            if (descriptor_iterator == backend_registry_->descriptors().end()) {
-                continue;
-            }
-
-            const BackendDescriptor &descriptor_value = descriptor_iterator->second;
-            if (!descriptor_value.capabilities.supports_batch_neighbors || !descriptor_value.coverage.fresh) {
-                continue;
-            }
-
-            matching.push_back(&placement);
+        if (uuid_routing_backends_.empty()) {
+            throw std::runtime_error("PlacementCatalog has no UUID routing layout");
         }
 
-        if (matching.empty()) {
-            return {};
+        const BackendId owner = insertion::BackendEncodedUuid::decode(vertex.global_id, uuid_routing_backends_);
+        const auto descriptor_iterator = backend_registry_->descriptors().find(owner);
+        if (descriptor_iterator == backend_registry_->descriptors().end()) {
+            throw std::runtime_error("UUID routes to a backend that is not enabled");
         }
 
-        std::ranges::sort(matching, {}, [](const Placement *placement) { return placement->priority; });
-
-        if (options.allow_partial_acceleration) {
-            for (const Placement *placement: matching) {
-                const BackendDescriptor &descriptor_value = backend_registry_->descriptor(placement->backend_id);
-                const bool accelerated =
-                        placement->kind == PlacementKind::Cache || placement->kind == PlacementKind::GpuProjection;
-
-                if (accelerated && descriptor_value.coverage.covers_expand_spec(vertex, spec)) {
-                    return {placement->backend_id};
-                }
-            }
+        const BackendDescriptor &descriptor = descriptor_iterator->second;
+        if (!descriptor.capabilities.supports_batch_neighbors || !descriptor.coverage.fresh) {
+            throw std::runtime_error("UUID-routed backend cannot execute neighbor expansion");
         }
 
-        std::vector<BackendId> authoritative;
-        authoritative.reserve(matching.size());
-        for (const Placement *placement: matching) {
-            if (placement->authoritative) {
-                authoritative.push_back(placement->backend_id);
-            }
-        }
-
-        if (!authoritative.empty()) {
-            return authoritative;
-        }
-
-        return {matching.front()->backend_id};
+        return {owner};
     }
 
 } // namespace cpgdb

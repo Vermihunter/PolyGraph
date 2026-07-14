@@ -15,6 +15,15 @@
 namespace cpgdb {
 using TypeId = std::uint32_t;
 
+/**
+ * Sentinel used when a caller supplies only a global UUID.
+ *
+ * Logical schema type IDs start at one, so zero can safely represent an
+ * unresolved type. Backend routing must never depend on this value; the home
+ * backend is decoded from the UUID suffix bits.
+ */
+inline constexpr TypeId unresolved_type_id = 0;
+
 } // namespace cpgdb
 
 #endif // CPGDB_TYPEID_HPP

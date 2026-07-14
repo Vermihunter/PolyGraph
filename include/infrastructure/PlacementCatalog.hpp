@@ -20,11 +20,13 @@
 namespace cpgdb {
 
 /**
- * @brief Authoritative in-memory mapping from logical graph regions to stores.
+ * @brief Runtime store selection for native and UUID-routed distributed traversal.
  *
- * The catalog evaluates registered placements together with live backend
- * descriptors. It chooses complete native BFS pushdown when possible and
- * otherwise creates per-layer backend frontier partitions.
+ * Complete native BFS pushdown still uses backend capabilities/coverage. Normal
+ * layer expansion decodes each frontier UUID using the configured routing layout.
+ * The catalog deliberately does not keep a UUID-to-type/backend directory: the
+ * backend is encoded in the UUID, while logical type resolution is delegated to
+ * the owning store when a type is actually needed.
  */
 class PlacementCatalog {
   public:
@@ -37,7 +39,16 @@ class PlacementCatalog {
     /** @brief Creates a catalog backed by @p backend_registry. */
     explicit PlacementCatalog(std::shared_ptr<BackendRegistry> backend_registry);
 
-    /** @brief Adds a physical placement rule. */
+    /** @brief Sets the ordered backend layout encoded in UUID suffix bits. */
+    void set_uuid_routing_backends(std::vector<BackendId> routing_backends);
+    /**
+     * @brief Creates a routing reference for @p id without a global UUID directory.
+     *
+     * The returned logical type is unresolved. The UUID suffix is decoded and
+     * validated immediately, so an invalid/disabled backend still fails fast.
+     */
+    [[nodiscard]] NodeRef node_ref(const GlobalId& id) const;
+    /** @brief Adds an optional replica/cache placement rule. */
     void register_placement(Placement placement);
     /** @brief Resolves @p id to a live graph store. */
     [[nodiscard]] std::shared_ptr<IGraphStore> store(BackendId id) const;
@@ -50,21 +61,19 @@ class PlacementCatalog {
         const NodeRef& source, const ExpandSpec& spec, const BfsOptions& options) const;
 
     /**
-     * @brief Assigns every frontier vertex to one or more eligible expansion stores.
-     *
-     * Partial acceleration controls whether caches, replicas, and GPU projections
-     * may be selected instead of authoritative primary placements.
+     * @brief Assigns every frontier vertex to the home store encoded in its UUID.
      */
     [[nodiscard]] LayerExpansionPlan plan_frontier_expansion(std::span<const NodeRef> frontier,
                                                              const ExpandSpec& spec,
                                                              const BfsOptions& options) const;
 
   private:
-    /** @brief Returns eligible stores for one vertex ordered by placement preference. */
+    /** @brief Decodes and validates the home store for one vertex. */
     [[nodiscard]] std::vector<BackendId> choose_expansion_backends_for_vertex(
         const NodeRef& vertex, const ExpandSpec& spec, const BfsOptions& options) const;
 
     std::shared_ptr<BackendRegistry> backend_registry_;
+    std::vector<BackendId> uuid_routing_backends_;
     std::vector<Placement> placements_;
 };
 

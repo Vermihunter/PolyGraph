@@ -1,98 +1,41 @@
 services:
-
-  #janusgraph:
-  #  image: janusgraph/janusgraph:latest
-  #  container_name: janusgraph
-  #  ports:
-  #    - "8182:8182"
-  #  environment:
-  #    JANUS_PROPS_TEMPLATE: berkeleyje-lucene
-  #
-  #    # Important: allow both WebSocket and HTTP requests
-  #    gremlinserver.channelizer: org.apache.tinkerpop.gremlin.server.channel.WsAndHttpChannelizer
-  #
-  #    # Expose inside container network
-  #    gremlinserver.host: 0.0.0.0
-  #    gremlinserver.port: 8182
-  #  volumes:
-  #    - janusgraph-data:/var/lib/janusgraph
-  #  restart: unless-stopped
-
-  # tigergraph:
-  #   image: tigergraph/community:4.2.2
-  #   container_name: tigergraph
-  #   platform: linux/amd64
-  #   ulimits:
-  #     nofile:
-  #       soft: 1000000
-  #       hard: 1000000
-  #   ports:
-  #     - "14022:22"
-  #     - "9000:9000"
-  #     - "14240:14240"
-  #   volumes:
-  #     - tigergraph-home:/home/tigergraph
-  #     - ./tigergraph-data:/home/tigergraph/mydata
-  #   tty: true
-  #   restart: unless-stopped
-
   neo4j:
-    image: neo4j:5
-    container_name: neo4j
+    build:
+      context: ./neo4j
+      dockerfile: Dockerfile
+      args:
+        NEO4J_IMAGE_TAG: ${NEO4J_IMAGE_TAG}
+    image: cpgdb-neo4j:${NEO4J_IMAGE_TAG}
+    container_name: ${NEO4J_CONTAINER_NAME}
     restart: unless-stopped
     ports:
-      - "7474:7474" # HTTP (Neo4j Browser / transaction API)
-      - "7687:7687" # Bolt
+      - "${NEO4J_HTTP_PORT}:7474"
+      - "${NEO4J_BOLT_PORT}:7687"
     environment:
-      - NEO4J_AUTH=neo4j/password
-      - NEO4J_server_http_enabled=true
-      - NEO4J_server_http_listen__address=0.0.0.0:7474
-      - NEO4J_server_bolt_listen__address=0.0.0.0:7687
-      # Needed by tools/native_bfs/native_bfs_component.py neo4j-bfs.
-      # The component uses apoc.path.expandConfig(... bfs:true, uniqueness:'NODE_GLOBAL').
-      - NEO4J_PLUGINS=["apoc"]
-      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
-      - NEO4J_dbms_security_procedures_allowlist=apoc.*
+      NEO4J_AUTH: ${NEO4J_USERNAME}/${NEO4J_PASSWORD}
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
 
   arangodb:
-    image: arangodb:latest
-    container_name: arangodb
-    environment:
-      ARANGO_ROOT_PASSWORD: rootpassword
+    build:
+      context: ./arango
+      dockerfile: Dockerfile
+      args:
+        ARANGO_IMAGE_TAG: ${ARANGO_IMAGE_TAG}
+    image: cpgdb-arangodb:${ARANGO_IMAGE_TAG}
+    container_name: ${ARANGO_CONTAINER_NAME}
+    restart: unless-stopped
     ports:
-      - 8529:8529
+      - "${ARANGO_PORT}:8529"
+    environment:
+      ARANGO_ROOT_PASSWORD: ${ARANGO_ROOT_PASSWORD}
     volumes:
-      - arangodb_data_container:/var/lib/arangodb3
-      - arangodb_apps_data_container:/var/lib/arangodb3-apps
-
-
-  #memgraph:
-  #  image: memgraph/memgraph:latest
-  #  container_name: memgraph
-  #  ports:
-  #    - "7688:7687"
-  #    - "7444:7444"
-  #  volumes:
-  #    - memgraph_data:/var/lib/memgraph
-  #  restart: unless-stopped
-  #
-  #memgraph-lab:
-  #  image: memgraph/lab:latest
-  #  container_name: memgraph-lab
-  #  ports:
-  #    - "3000:3000"
-  #  depends_on:
-  #    - memgraph
-  #  restart: unless-stopped
+      - arangodb_data:/var/lib/arangodb3
+      - arangodb_apps:/var/lib/arangodb3-apps
 
 volumes:
-  janusgraph-data:
-  tigergraph-home:
-  arangodb_data_container:
-  arangodb_apps_data_container:
   neo4j_data:
   neo4j_logs:
-  memgraph_data:
+  arangodb_data:
+  arangodb_apps:

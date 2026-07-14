@@ -5,6 +5,8 @@
 
 #include "data_access/adapters/ArangoDB/ArangoGraphStore.hpp"
 
+#include "data_access/adapters/ArangoDB/ArangoQueryVisitor.hpp"
+
 #include "data_model/Edge.hpp"
 #include "data_model/Node.hpp"
 #include "data_model/Value.hpp"
@@ -38,6 +40,19 @@ namespace cpgdb {
         auto raw =
                 visitor_->visit(GetNeighborsBatchQuery(std::vector<NodeRef>(frontier.begin(), frontier.end()), spec));
         return raw ? parse_adjacency_rows(*raw) : std::vector<AdjacencyRow>{};
+    }
+
+    std::vector<MinimalAdjacencyRow> ArangoGraphStore::get_minimal_neighbors_batch(std::span<const NodeRef> frontier,
+                                                                                   const ExpandSpec &spec, int depth) {
+        if (frontier.empty()) {
+            return {};
+        }
+
+        if (auto *visitor = dynamic_cast<ArangoQueryVisitor *>(visitor_.get())) {
+            return visitor->get_minimal_neighbors_batch_fast(frontier, spec, depth);
+        }
+
+        return IGraphStore::get_minimal_neighbors_batch(frontier, spec, depth);
     }
 
     NodeRef ArangoGraphStore::node_to_ref(const Node &node) {

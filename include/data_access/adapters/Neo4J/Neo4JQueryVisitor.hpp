@@ -8,6 +8,7 @@
 
 #include "algorithms/ExpandSpec.hpp"
 #include "data_model/AdjacencyRow.hpp"
+#include "data_model/MinimalAdjacencyRow.hpp"
 #include "infrastructure/BackendConnectionConfig.hpp"
 #include "query/QueryVisitor.hpp"
 
@@ -31,6 +32,8 @@ class Neo4JQueryVisitor final : public QueryVisitor {
     query_result_t visit(const InsertBatchQuery& query) override;
 
     [[nodiscard]] std::vector<AdjacencyRow> get_neighbors_batch_fast(
+        std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth) const;
+    [[nodiscard]] std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_fast(
         std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth) const;
 
   private:

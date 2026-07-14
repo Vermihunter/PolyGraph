@@ -20,6 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("mode", choices=["native", "implementation-full", "distributed", "all"])
     parser.add_argument("--config", help="JSON config file. Defaults are project-local paths and localhost DB credentials.")
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--run-id", required=True)
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--start-uuid", action="append", default=[], help="Can be repeated or comma-separated.")
     parser.add_argument("--start-uuids-file", help="Text file with one UUID per line or comma-separated UUIDs.")
@@ -68,6 +69,7 @@ def main() -> int:
         elif args.mode == "distributed":
             orchestrator.run_distributed(
                 start_uuids,
+                args.run_id,
                 args.repetitions,
                 compare=compare,
                 reload_each_repetition=args.reload_each_repetition,

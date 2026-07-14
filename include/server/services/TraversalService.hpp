@@ -25,11 +25,10 @@ class TraversalService {
     [[nodiscard]] BfsResult runBfs(const std::string& source_vertex_uuid, const dto::BfsRequest& request);
 
     [[nodiscard]] std::vector<MinimalAdjacencyRow>
-    getNeighbors(const std::string& source_vertex_uuid, TypeId source_vertex_type);
+    getNeighbors(const std::string& source_vertex_uuid);
 
     [[nodiscard]] BfsResult streamBfs(const std::string& graph_id,
                                       const std::string& source_vertex_id,
-                                      const std::string& source_type,
                                       std::uint32_t max_depth,
                                       bool return_predecessors,
                                       bool allow_native_pushdown,

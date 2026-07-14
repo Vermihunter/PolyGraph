@@ -23,7 +23,7 @@ def write_backend_config(config: BenchmarkConfig, output: str | Path, enabled: I
                 "credentials": {"username": config.neo4j.user, "password": config.neo4j.password},
             },
             "capabilities": {"batch_neighbors": True, "native_bfs": False, "property_filters": True},
-            "coverage": {"mode": "schema-source", "fresh": True, "complete_for_requested_subgraph": False},
+            "coverage": {"mode": "uuid-routing", "fresh": True, "complete_for_requested_subgraph": False},
         },
         {
             "id": "ArangoDB",
@@ -37,7 +37,7 @@ def write_backend_config(config: BenchmarkConfig, output: str | Path, enabled: I
                 "credentials": {"username": config.arango.user, "password": config.arango.password},
             },
             "capabilities": {"batch_neighbors": True, "native_bfs": False, "gpu_execution": False},
-            "coverage": {"mode": "schema-source", "fresh": True, "complete_for_requested_subgraph": False},
+            "coverage": {"mode": "uuid-routing", "fresh": True, "complete_for_requested_subgraph": False},
         },
         {
             "id": "GPU",
@@ -47,11 +47,14 @@ def write_backend_config(config: BenchmarkConfig, output: str | Path, enabled: I
             "priority": 1,
             "connection": {"endpoint": "", "database": ""},
             "capabilities": {"batch_neighbors": True, "native_bfs": False, "property_filters": False, "gpu_execution": True},
-            "coverage": {"mode": "schema-source", "fresh": True, "complete_for_requested_subgraph": False},
+            "coverage": {"mode": "uuid-routing", "fresh": True, "complete_for_requested_subgraph": False},
         },
     ]
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
+    routing_order = [name for name in ("Neo4J", "ArangoDB", "GPU") if name in enabled_set]
+    if not routing_order:
+        raise ValueError("At least one backend must be enabled for UUID routing")
     with open(out, "w", encoding="utf-8") as f:
-        json.dump({"version": 1, "backends": entries}, f, indent=2)
+        json.dump({"version": 1, "uuidRouting": routing_order, "backends": entries}, f, indent=2)
     return out

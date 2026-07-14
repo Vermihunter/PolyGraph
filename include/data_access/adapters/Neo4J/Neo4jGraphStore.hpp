@@ -28,6 +28,8 @@ class Neo4jGraphStore final : public IGraphStore {
     std::vector<AdjacencyRow> get_neighbors_batch(std::span<const NodeRef> frontier,
                                                   const ExpandSpec& spec,
                                                   int depth) override;
+    std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch(
+        std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth) override;
     BfsResult
     run_bfs(const NodeRef& source, const ExpandSpec& spec, const BfsOptions& options) override;
 

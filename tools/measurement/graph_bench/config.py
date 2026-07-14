@@ -111,7 +111,7 @@ def _default_path_config(base: Path) -> PathConfig:
         data=resolve_path("tools/generators/large-university.json", base=base),
         backend_config=resolve_path("config/backends.full.json", base=base),
         graph_db_binary=resolve_path("cmake-build-debug/src/bfs/bfs", base=base),
-        loader_script=resolve_path("tools/generators/from-file-to-db.py", base=base),
+        loader_script=resolve_path("tools/load_graph.py", base=base),
         reference_bfs_script=resolve_path("tools/algorithms/bfs.py", base=base),
         docker_compose=resolve_path("storage_layer/docker-compose.yml", base=base),
         implementation_full=_default_implementation_paths(base),

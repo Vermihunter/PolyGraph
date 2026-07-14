@@ -24,7 +24,7 @@ This folder contains a reusable benchmark framework for comparing:
 3. **Your full distributed system**
    - original schema/data placement
    - `config/backends.full.json`
-   - Neo4j + ArangoDB loaded through `tools/generators/from-file-to-db.py`
+   - Neo4j + ArangoDB loaded through `tools/load_graph.py`
    - GPU placement consumed directly from the JSON by the C++ runtime
 
 Every run can compare its output against the reference implementation in `tools/algorithms/bfs.py`.

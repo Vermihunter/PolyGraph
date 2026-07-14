@@ -4,11 +4,19 @@ import argparse
 import html
 import json
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from tools.event_log_average import AVERAGE_DIR_NAME, analyze_log_tree
 
 
 # ============================================================
@@ -24,10 +32,12 @@ def discover_log_files(path: Path, pattern: str = "*.jsonl") -> list[Path]:
 
     files = sorted(path.rglob(pattern))
 
-    # Skip generated visualization folders if they are inside logs/
+    # Never treat generated average executions or visualizations as source logs.
     files = [
         f for f in files
         if "log_viz" not in f.parts
+           and AVERAGE_DIR_NAME not in f.parts
+           and f.name != "execution.jsonl"
            and f.is_file()
     ]
 
@@ -56,6 +66,46 @@ def make_safe_html_id(s: str) -> str:
     if s[0].isdigit():
         s = "run_" + s
     return s
+
+
+def resolve_log_root(path: Path) -> Path:
+    path = path.expanduser().resolve()
+    if path.is_dir() and (path / "logs").is_dir():
+        return path / "logs"
+    return path
+
+
+def average_execution_entries(average_analysis: dict | None) -> list[tuple[Path, str]]:
+    if not average_analysis:
+        return []
+
+    entries: list[tuple[Path, str]] = []
+    for group in average_analysis.get("groups", []):
+        if not group.get("generated"):
+            continue
+        execution_file = Path(group["output"]) / "execution.jsonl"
+        if not execution_file.is_file():
+            continue
+        label = str(group.get("label", execution_file.parent.name))
+        entries.append((execution_file, f"Average — {label}"))
+    return entries
+
+
+def load_average_artifacts(execution_file: Path) -> tuple[dict, pd.DataFrame, Path | None]:
+    average_dir = execution_file.parent
+    summary_path = average_dir / "summary.json"
+    events_path = average_dir / "events.csv"
+    report_path = average_dir / "report.html"
+
+    summary = {}
+    if summary_path.is_file():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+    events = pd.DataFrame()
+    if events_path.is_file() and events_path.stat().st_size > 0:
+        events = pd.read_csv(events_path)
+
+    return summary, events, report_path if report_path.is_file() else None
 
 
 # ============================================================
@@ -477,6 +527,167 @@ def build_size_vs_duration_figure(spans: pd.DataFrame) -> go.Figure | None:
     return fig
 
 
+def build_average_event_figure(events: pd.DataFrame, title: str) -> go.Figure | None:
+    required = {
+        "event",
+        "avg_total_ms_per_run",
+        "p95_total_ms_per_run",
+        "stddev_total_ms_per_run",
+    }
+    if events.empty or not required.issubset(events.columns):
+        return None
+
+    top = (
+        events
+        .sort_values("avg_total_ms_per_run", ascending=False)
+        .head(30)
+        .sort_values("avg_total_ms_per_run", ascending=True)
+    )
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=top["avg_total_ms_per_run"],
+        y=top["event"],
+        orientation="h",
+        name="Average total / execution",
+        error_x={
+            "type": "data",
+            "array": top["stddev_total_ms_per_run"],
+            "visible": True,
+        },
+        customdata=top[[
+            "avg_count_per_run",
+            "avg_span_ms",
+            "presence_pct",
+            "inclusive_share_pct",
+        ]],
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "average total: %{x:.4f} ms<br>"
+            "average count: %{customdata[0]:.2f}<br>"
+            "average span: %{customdata[1]:.4f} ms<br>"
+            "presence: %{customdata[2]:.1f}%<br>"
+            "inclusive share: %{customdata[3]:.2f}%"
+            "<extra></extra>"
+        ),
+    ))
+    fig.add_trace(go.Scatter(
+        x=top["p95_total_ms_per_run"],
+        y=top["event"],
+        mode="markers",
+        name="P95 total / execution",
+        marker={"size": 9, "symbol": "diamond"},
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "P95 total: %{x:.4f} ms"
+            "<extra></extra>"
+        ),
+    ))
+    fig.update_layout(
+        title=title,
+        xaxis_title="Inclusive time per execution [ms]",
+        yaxis_title="Event type",
+        height=max(620, 150 + 32 * len(top)),
+        margin={"l": 300, "r": 50, "t": 85, "b": 65},
+        legend={"orientation": "h", "y": 1.07, "x": 0},
+    )
+    return fig
+
+
+def build_average_profile_html(run: dict) -> str:
+    if not run.get("is_average"):
+        return unavailable_view(
+            "This view is available for generated Average executions. "
+            "Choose an Average entry in the Run selector."
+        )
+
+    summary = run.get("average_summary") or {}
+    events = run.get("average_events")
+    if not isinstance(events, pd.DataFrame):
+        events = pd.DataFrame()
+
+    def metric(name: str, default=0):
+        value = summary.get(name, default)
+        return value if value is not None else default
+
+    report = run.get("average_report")
+    report_href = run.get("average_report_href")
+    report_link = (
+        f'<a class="average-report-link" href="{html.escape(str(report_href))}">'
+        "Open the standalone average report</a>"
+        if isinstance(report, Path) and report.is_file() and report_href
+        else ""
+    )
+
+    cards = f"""
+    <div class="average-cards">
+      <div class="average-card"><span>Executions</span><strong>{int(metric('validRuns'))}</strong></div>
+      <div class="average-card"><span>Average window</span><strong>{float(metric('averageWindowMs')):.3f} ms</strong></div>
+      <div class="average-card"><span>P95 window</span><strong>{float(metric('p95WindowMs')):.3f} ms</strong></div>
+      <div class="average-card"><span>Std. deviation</span><strong>{float(metric('stddevWindowMs')):.3f} ms</strong></div>
+      <div class="average-card"><span>Event types</span><strong>{int(metric('eventTypeCount'))}</strong></div>
+      <div class="average-card"><span>Source spans</span><strong>{int(metric('spanCount')):,}</strong></div>
+    </div>
+    """
+
+    chart = build_average_event_figure(
+        events,
+        title=f"Average and P95 Event Time — {run['label']}",
+    )
+    chart_html = (
+        figure_to_div(chart, div_id=f"{run['safe_id']}_average_event_chart")
+        if chart is not None
+        else unavailable_view("The average event table is missing or empty.")
+    )
+
+    rows = []
+    if not events.empty:
+        ordered = events.sort_values("avg_total_ms_per_run", ascending=False)
+        for _, row in ordered.iterrows():
+            rows.append(f"""
+            <tr>
+              <td>{html.escape(str(row['event']))}</td>
+              <td>{float(row['avg_total_ms_per_run']):.4f}</td>
+              <td>{float(row['p95_total_ms_per_run']):.4f}</td>
+              <td>{float(row['stddev_total_ms_per_run']):.4f}</td>
+              <td>{float(row['avg_count_per_run']):.2f}</td>
+              <td>{float(row['avg_span_ms']):.4f}</td>
+              <td>{float(row['presence_pct']):.1f}%</td>
+              <td>{float(row['inclusive_share_pct']):.2f}%</td>
+            </tr>
+            """)
+
+    table_html = (
+        f"""
+        <div class="average-table-wrap">
+          <table class="average-table">
+            <thead><tr>
+              <th>Event</th><th>Avg total/run ms</th><th>P95 ms</th>
+              <th>Stddev ms</th><th>Avg count/run</th><th>Avg span ms</th>
+              <th>Presence</th><th>Inclusive share</th>
+            </tr></thead>
+            <tbody>{''.join(rows)}</tbody>
+          </table>
+        </div>
+        """
+        if rows
+        else unavailable_view("No average event rows were generated.")
+    )
+
+    return f"""
+    <div class="average-profile">
+      <div class="average-profile-heading">
+        <div><h2>Average execution profile</h2><p>Inclusive event timing averaged across repeated executions.</p></div>
+        {report_link}
+      </div>
+      {cards}
+      <div class="average-chart">{chart_html}</div>
+      <h3>Complete event timing table</h3>
+      {table_html}
+    </div>
+    """
+
+
 def build_run_overview_html(run: dict) -> str:
     spans = run["spans"]
     events = run["events"]
@@ -550,6 +761,7 @@ VIEW_OPTIONS = [
     ("summary_event", "Summary: event type"),
     ("summary_depth", "Summary: BFS depth"),
     ("size_duration", "Scatter: size vs duration"),
+    ("average_profile", "Average: timing profile"),
 ]
 
 
@@ -578,6 +790,7 @@ def build_dashboard(
         runs: list[dict],
         output_html: Path,
         inline_plotly: bool = False,
+        average_index: Path | None = None,
 ):
     if inline_plotly:
         from plotly.offline import get_plotlyjs
@@ -596,6 +809,14 @@ def build_dashboard(
         f'<option value="{value}">{label}</option>'
         for value, label in VIEW_OPTIONS
     )
+
+    average_index_link = ""
+    if average_index is not None and average_index.is_file():
+        average_index_href = average_index.relative_to(output_html.parent).as_posix()
+        average_index_link = (
+            f'<a class="average-index-link" href="{html.escape(average_index_href)}">'
+            "Open average report index</a>"
+        )
 
     panels = []
 
@@ -627,6 +848,7 @@ def build_dashboard(
                 build_event_summary_figure(spans),
                 div_id=f"{run_id}_summary_event",
             ),
+            "average_profile": build_average_profile_html(run),
         }
 
         depth_timeline_fig = None
@@ -782,6 +1004,108 @@ def build_dashboard(
         margin-top: 10px;
         font-size: 13px;
       }
+
+      .average-index-link,
+      .average-report-link {
+        display: inline-flex;
+        align-items: center;
+        min-height: 38px;
+        padding: 8px 13px;
+        border-radius: 9px;
+        text-decoration: none;
+        font-weight: 700;
+        background: #2563eb;
+        color: white;
+      }
+
+      .average-profile {
+        background: #f8fafc;
+        color: #111827;
+        border-radius: 12px;
+        padding: 22px;
+      }
+
+      .average-profile-heading {
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        gap: 20px;
+        flex-wrap: wrap;
+      }
+
+      .average-profile-heading h2,
+      .average-profile-heading p {
+        margin-top: 0;
+      }
+
+      .average-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 12px;
+        margin: 18px 0;
+      }
+
+      .average-card {
+        padding: 15px;
+        border: 1px solid #dbe3ef;
+        border-radius: 12px;
+        background: white;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+      }
+
+      .average-card span {
+        display: block;
+        color: #64748b;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .average-card strong {
+        display: block;
+        margin-top: 7px;
+        font-size: 21px;
+      }
+
+      .average-chart {
+        overflow-x: auto;
+        background: white;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+      }
+
+      .average-table-wrap {
+        max-height: 680px;
+        overflow: auto;
+        border: 1px solid #dbe3ef;
+        border-radius: 12px;
+        background: white;
+      }
+
+      .average-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      .average-table th,
+      .average-table td {
+        padding: 9px 11px;
+        border-bottom: 1px solid #e5e7eb;
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      .average-table th:first-child,
+      .average-table td:first-child {
+        text-align: left;
+      }
+
+      .average-table thead {
+        position: sticky;
+        top: 0;
+        background: #eef2f7;
+      }
     </style>
     """
 
@@ -841,10 +1165,12 @@ def build_dashboard(
               {view_options}
             </select>
           </label>
+
+          {average_index_link}
         </div>
 
         <div class="hint">
-          Pass a logs directory to scan all JSONL runs recursively. Overlapping spans are vertically separated into sublanes.
+          Pass a measurement directory or its logs directory. Repeated logs are averaged per UUID directory and globally, then shown as selectable Average executions.
         </div>
       </header>
 
@@ -880,7 +1206,10 @@ def main():
         "--out-dir",
         type=Path,
         default=Path("log_viz"),
-        help="Output directory."
+        help=(
+            "Single output directory for the dashboard, reconstructed span CSVs, "
+            "per-directory averages, and global average. Source logs remain unchanged."
+        )
     )
 
     parser.add_argument(
@@ -895,50 +1224,102 @@ def main():
         help="Embed Plotly JS into the HTML for offline viewing. Makes the file larger."
     )
 
+    parser.add_argument(
+        "--no-averages",
+        action="store_true",
+        help="Do not regenerate or include per-directory/global Average executions."
+    )
+
     args = parser.parse_args()
 
+    log_root = resolve_log_root(args.input)
+    args.out_dir = args.out_dir.expanduser().resolve()
+    if log_root.is_dir() and (args.out_dir == log_root or args.out_dir.is_relative_to(log_root)):
+        raise SystemExit(
+            "--out-dir must be outside the source logs directory so reconstruction "
+            "never modifies the original logs."
+        )
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    log_files = discover_log_files(args.input, pattern=args.pattern)
+    average_analysis = None
+    if log_root.is_dir() and not args.no_averages:
+        average_analysis = analyze_log_tree(
+            log_root,
+            output_root=args.out_dir,
+        )
+        print(f"Generated average reports inside: {args.out_dir}")
 
-    if not log_files:
-        raise SystemExit(f"No log files found under {args.input}")
+    log_files = discover_log_files(log_root, pattern=args.pattern)
+    average_entries = average_execution_entries(average_analysis)
 
-    root = args.input if args.input.is_dir() else args.input.parent
+    if not log_files and not average_entries:
+        raise SystemExit(f"No log files found under {log_root}")
 
-    runs = []
+    root = log_root if log_root.is_dir() else log_root.parent
+    raw_runs = []
+    average_runs = []
     errors = []
 
-    for log_file in log_files:
+    def load_run(
+            log_file: Path,
+            *,
+            is_average: bool,
+            label_override: str | None = None,
+    ) -> None:
         try:
             events = load_jsonl(log_file)
             spans = pair_spans(events)
 
-            run_id = make_run_id(log_file, root)
+            if is_average:
+                run_id = "average__" + make_run_id(log_file.parent, args.out_dir)
+                label = label_override or f"Average — {log_file.parent.name}"
+                summary, average_events, report = load_average_artifacts(log_file)
+            else:
+                run_id = make_run_id(log_file, root)
+                rel = log_file.relative_to(root) if log_file.is_relative_to(root) else log_file
+                label = str(rel)
+                summary, average_events, report = {}, pd.DataFrame(), None
+
             safe_id = make_safe_html_id(run_id)
-
             rel = log_file.relative_to(root) if log_file.is_relative_to(root) else log_file
-
-            spans_csv = args.out_dir / f"{safe_id}.spans.csv"
+            spans_csv = args.out_dir / "spans" / f"{safe_id}.spans.csv"
+            spans_csv.parent.mkdir(parents=True, exist_ok=True)
             spans.drop(columns=["start_event", "end_event"]).to_csv(spans_csv, index=False)
+            report_href = (
+                report.relative_to(args.out_dir).as_posix()
+                if isinstance(report, Path) and report.is_file()
+                else None
+            )
 
-            runs.append({
+            run = {
                 "id": run_id,
                 "safe_id": safe_id,
-                "label": str(rel),
+                "label": label,
                 "relative_path": rel,
                 "log_file": log_file,
                 "events": events,
                 "spans": spans,
                 "spans_csv": spans_csv,
-            })
-
-            print(f"Loaded {log_file} -> {len(events)} events, {len(spans)} spans")
+                "is_average": is_average,
+                "average_summary": summary,
+                "average_events": average_events,
+                "average_report": report,
+                "average_report_href": report_href,
+            }
+            (average_runs if is_average else raw_runs).append(run)
+            kind = "average" if is_average else "run"
+            print(f"Loaded {kind} {log_file} -> {len(events)} events, {len(spans)} spans")
 
         except Exception as e:
             errors.append((log_file, str(e)))
             print(f"Skipping {log_file}: {e}")
 
+    for log_file in log_files:
+        load_run(log_file, is_average=False)
+    for log_file, label in average_entries:
+        load_run(log_file, is_average=True, label_override=label)
+
+    runs = average_runs + raw_runs
     if not runs:
         print("No valid logs found.")
         if errors:
@@ -948,14 +1329,21 @@ def main():
         raise SystemExit(1)
 
     dashboard_path = args.out_dir / "dashboard.html"
+    average_index = (
+        Path(average_analysis["index"])
+        if average_analysis and average_analysis.get("index")
+        else None
+    )
 
     build_dashboard(
         runs=runs,
         output_html=dashboard_path,
         inline_plotly=args.inline_plotly,
+        average_index=average_index,
     )
 
     print()
+    print(f"All reconstruction artifacts: {args.out_dir.resolve()}")
     print("Open:")
     print(f"  xdg-open {dashboard_path}")
 

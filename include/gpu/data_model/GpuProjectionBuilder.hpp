@@ -12,6 +12,7 @@
 #include "gpu/data_model/CsrGraphProjection.hpp"
 #include "query/QueryResult.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cuda_runtime.h>
 #include <cugraph/graph.hpp>
@@ -21,6 +22,7 @@
 #include <raft/core/handle.hpp>
 #include <rmm/device_uvector.hpp>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace cpgdb {
@@ -39,11 +41,11 @@ class GpuProjectionBuilder {
                  const std::vector<record_t>& records,
                  std::uint64_t graph_version,
                  bool mirror_edges_for_undirected_expansion = false) {
+        EVENT_SCOPE_INFO(gpu_load, "GPU data load", {"records", records.size()});
         auto stream = handle.get_stream();
 
         DenseIdMapper<vertex_t> mapper;
-        std::vector<vertex_t> h_src;
-        std::vector<vertex_t> h_dst;
+        std::vector<std::pair<vertex_t, vertex_t>> h_edges;
 
         // ------------------------------------------------------------
         // 1. Register explicit Node records.
@@ -88,18 +90,47 @@ class GpuProjectionBuilder {
                 vertex_t src = mapper.get_or_add(edge.src);
                 vertex_t dst = mapper.get_or_add(edge.dst);
 
-                h_src.push_back(src);
-                h_dst.push_back(dst);
+                h_edges.emplace_back(src, dst);
 
                 if (mirror_edges_for_undirected_expansion) {
-                    h_src.push_back(dst);
-                    h_dst.push_back(src);
+                    h_edges.emplace_back(dst, src);
                 }
             }
         }
 
         // ------------------------------------------------------------
-        // 3. Explicit dense vertex list: 0, 1, 2, ..., n - 1.
+        // 3. Collapse parallel adjacency pairs.
+        //
+        // The GPU projection is a reachability/BFS index: multiple logical
+        // relationships between the same ordered pair do not alter the BFS
+        // result. Their edge types/directions remain available in the host
+        // adjacency index, which is the authority when hydrating and
+        // filtering GPU candidates. Mirroring can also create a duplicate
+        // when the reverse relationship already exists explicitly.
+        // ------------------------------------------------------------
+        const std::size_t raw_edge_count = h_edges.size();
+        std::ranges::sort(h_edges);
+        h_edges.erase(std::unique(h_edges.begin(), h_edges.end()), h_edges.end());
+        EVENT_SCOPE_INFO_FIELD(gpu_load, "raw_adjacency_pairs", raw_edge_count);
+        EVENT_SCOPE_INFO_FIELD(gpu_load, "unique_adjacency_pairs", h_edges.size());
+        EVENT_SCOPE_INFO_FIELD(gpu_load, "parallel_pairs_removed", raw_edge_count - h_edges.size());
+
+        std::vector<vertex_t> h_src;
+        std::vector<vertex_t> h_dst;
+        h_src.reserve(h_edges.size());
+        h_dst.reserve(h_edges.size());
+        for (const auto &[source, destination]: h_edges) {
+            h_src.push_back(source);
+            h_dst.push_back(destination);
+        }
+
+        // Release the temporary pair representation before allocating GPU
+        // buffers. This matters for large graph.jsonl inputs.
+        h_edges.clear();
+        h_edges.shrink_to_fit();
+
+        // ------------------------------------------------------------
+        // 4. Explicit dense vertex list: 0, 1, 2, ..., n - 1.
         // ------------------------------------------------------------
         std::vector<vertex_t> h_vertices;
         h_vertices.reserve(mapper.size());
@@ -128,7 +159,7 @@ class GpuProjectionBuilder {
         }
 
         // ------------------------------------------------------------
-        // 4. Copy to GPU exactly in the same style as your working example.
+        // 5. Copy to GPU exactly in the same style as your working example.
         // ------------------------------------------------------------
         rmm::device_uvector<vertex_t> d_src(num_edges, stream);
         rmm::device_uvector<vertex_t> d_dst(num_edges, stream);
@@ -160,7 +191,7 @@ class GpuProjectionBuilder {
         gpu_cuda_check(cudaStreamSynchronize(stream), "sync H2D");
 
         // ------------------------------------------------------------
-        // 5. Create cuGraph graph.
+        // 6. Create cuGraph graph.
         //
         // For BFS, store_transposed must be false.
         // We already dense-renumbered manually, so cuGraph renumber=false.

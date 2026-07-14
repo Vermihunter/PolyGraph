@@ -6,8 +6,6 @@ import sys
 input_file = sys.argv[1]
 output_file = sys.argv[1]
 
-
-
 # Read CSV
 df = pd.read_csv(input_file)
 

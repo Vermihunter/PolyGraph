@@ -18,6 +18,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "logging/level/Info.hpp"
+
 namespace cpgdb {
     namespace {
 
@@ -70,7 +72,7 @@ namespace cpgdb {
 
     BfsResult BfsExecutor::run_distributed_frontier_bfs(const NodeRef &source, const ExpandSpec &spec,
                                                         const BfsOptions &options) const {
-        EVENT_SCOPE_DEBUG(full_bfs, "full_bfs", {"source-uuid", ::boost::uuids::to_string(source.global_id)});
+        EVENT_SCOPE_INFO(full_bfs, "full_bfs", {"source-uuid", ::boost::uuids::to_string(source.global_id)});
         DenseBfsState state;
         state.reserve(expected_vertex_count);
 
@@ -81,7 +83,12 @@ namespace cpgdb {
         std::uint32_t depth = 0;
 
         while (!frontier.empty() && (!options.max_depth || depth < *options.max_depth)) {
-            auto rows = expander_.expand_layer(frontier, spec, (int) depth, options.allow_partial_acceleration);
+            std::vector<MinimalAdjacencyRow> rows;
+            {
+                EVENT_SCOPE_INFO(expansion_layer, "bfs.expand_layer");
+                rows = expander_.expand_layer(frontier, spec, (int) depth, options.allow_partial_acceleration);
+            }
+
 
             std::vector<NodeRef> next_frontier;
             next_frontier.reserve(std::accumulate(rows.begin(), rows.end(), std::size_t{0},
@@ -90,7 +97,7 @@ namespace cpgdb {
                                                   }));
 
             {
-                EVENT_SCOPE_DEBUG(layer_span, "bfs.row_processing", {"depth", depth}, {"row_size", rows.size()});
+                EVENT_SCOPE_INFO(layer_span, "bfs.row_processing", {"depth", depth}, {"row_size", rows.size()});
 
                 for (const MinimalAdjacencyRow &row: rows) {
                     const std::uint32_t row_source = state.get_or_add(row.source.global_id);

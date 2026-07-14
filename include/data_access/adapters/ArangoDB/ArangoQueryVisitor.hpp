@@ -6,10 +6,14 @@
 #ifndef CPGDB_DATA_ACCESS_ARANGO_QUERY_VISITOR_HPP
 #define CPGDB_DATA_ACCESS_ARANGO_QUERY_VISITOR_HPP
 
+#include "algorithms/ExpandSpec.hpp"
+#include "data_model/MinimalAdjacencyRow.hpp"
 #include "infrastructure/BackendConnectionConfig.hpp"
 #include "query/QueryVisitor.hpp"
 
 #include <memory>
+#include <span>
+#include <vector>
 
 namespace cpgdb {
 
@@ -25,6 +29,9 @@ class ArangoQueryVisitor final : public QueryVisitor {
     query_result_t visit(const GetNeighborsBatchQuery& query) override;
     query_result_t visit(const InsertQuery& query) override;
     query_result_t visit(const InsertBatchQuery& query) override;
+
+    [[nodiscard]] std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_fast(
+        std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth) const;
 
   private:
     struct Impl;

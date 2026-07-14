@@ -20,8 +20,7 @@ namespace cpgdb::services {
 
     BfsResult TraversalService::runBfs(const std::string &source_vertex_uuid, const dto::BfsRequest &request) {
         BfsExecutor bfs(*context_.placement_catalog);
-        const NodeRef source{.global_id = boost::lexical_cast<boost::uuids::uuid>(source_vertex_uuid),
-                             .type = context_.schema->node_type_id("Faculty")};
+        const NodeRef source = context_.node_ref(boost::lexical_cast<boost::uuids::uuid>(source_vertex_uuid));
         const BfsOptions options{.max_depth = static_cast<std::uint32_t>(request.maxDepth),
                                  .return_predecessors = true,
                                  .allow_native_pushdown = false,
@@ -29,10 +28,8 @@ namespace cpgdb::services {
         return bfs.run(source, ExpandSpec{}, options);
     }
 
-    std::vector<MinimalAdjacencyRow> TraversalService::getNeighbors(const std::string &source_vertex_uuid,
-                                                                    TypeId source_vertex_type) {
-        const NodeRef source{.global_id = boost::lexical_cast<boost::uuids::uuid>(source_vertex_uuid),
-                             .type = source_vertex_type};
+    std::vector<MinimalAdjacencyRow> TraversalService::getNeighbors(const std::string &source_vertex_uuid) {
+        const NodeRef source = context_.node_ref(boost::lexical_cast<boost::uuids::uuid>(source_vertex_uuid));
         std::vector frontier{source};
 
         const ExpandSpec spec{};
@@ -45,14 +42,12 @@ namespace cpgdb::services {
     }
 
     BfsResult TraversalService::streamBfs(const std::string &graph_id, const std::string &source_vertex_id,
-                                          const std::string &source_type, std::uint32_t max_depth,
-                                          bool return_predecessors, bool allow_native_pushdown,
+                                          std::uint32_t max_depth, bool return_predecessors, bool allow_native_pushdown,
                                           bool allow_partial_acceleration,
                                           const std::function<void(const BfsLayerEvent &)> &on_layer) {
         (void) graph_id;
         BfsExecutor bfs(*context_.placement_catalog);
-        const NodeRef source{.global_id = boost::lexical_cast<boost::uuids::uuid>(source_vertex_id),
-                             .type = context_.schema->node_type_id(source_type.empty() ? "Faculty" : source_type)};
+        const NodeRef source = context_.node_ref(boost::lexical_cast<boost::uuids::uuid>(source_vertex_id));
         return bfs.run_streaming(source, ExpandSpec{},
                                  BfsOptions{.max_depth = max_depth,
                                             .return_predecessors = return_predecessors,

@@ -50,12 +50,9 @@ namespace cpgdb::server::grpc_api {
                 return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "source_vertex_id is required");
             }
 
-            const std::string source_type = request->source_type().empty() ? "Faculty" : request->source_type();
-
-            (void) traversal_service_.streamBfs(request->graph_id(), request->source_vertex_id(), source_type,
-                                                request->max_depth(), request->return_predecessors(),
-                                                request->allow_native_pushdown(), request->allow_partial_acceleration(),
-                                                [&](const BfsLayerEvent &layer) {
+            (void) traversal_service_.streamBfs(request->graph_id(), request->source_vertex_id(), request->max_depth(),
+                                                request->return_predecessors(), request->allow_native_pushdown(),
+                                                request->allow_partial_acceleration(), [&](const BfsLayerEvent &layer) {
                                                     if (context->IsCancelled()) {
                                                         throw std::runtime_error("client cancelled StreamBfs");
                                                     }

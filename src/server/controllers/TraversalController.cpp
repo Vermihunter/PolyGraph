@@ -31,15 +31,10 @@ namespace cpgdb::http::api::v1 {
             return result;
         }
 
-        std::vector<MinimalAdjacencyRow> _runGetNeighbors(const std::string &source_vertex_uuid,
-                                                          const std::string &source_vertex_name) {
+        std::vector<MinimalAdjacencyRow> _runGetNeighbors(const std::string &source_vertex_uuid) {
             EVENT_SCOPE_INFO(neighbor_layer, "getNeighbors execution call", {"source-uuid", source_vertex_uuid});
             auto *plugin = drogon::app().getPlugin<cpgdb::services::ServicesPlugin>();
-            const auto &db_context = plugin->dbContext();
-
-            TypeId source_vertex_type_id = db_context.schema->node_type_id(source_vertex_name);
-            auto source_adjacency_row =
-                    plugin->traversalService().getNeighbors(source_vertex_uuid, source_vertex_type_id);
+            auto source_adjacency_row = plugin->traversalService().getNeighbors(source_vertex_uuid);
 
             EVENT_SCOPE_INFO_FIELD(neighbor_layer, "neighbors", source_adjacency_row[0].neighbors.size());
             return source_adjacency_row;
@@ -65,9 +60,8 @@ namespace cpgdb::http::api::v1 {
                                            const std::string &source_vertex_uuid) {
 
         HttpRequestExecutor::executeRequest(std::move(callback), [&] {
-            const auto json = request->getJsonObject();
-            const std::string name = (*json)["source_vertex_type"].asString();
-            auto source_adjacency_row = _runGetNeighbors(source_vertex_uuid, name);
+            (void) request;
+            auto source_adjacency_row = _runGetNeighbors(source_vertex_uuid);
 
             return jsonOk(source_adjacency_row[0]);
         });

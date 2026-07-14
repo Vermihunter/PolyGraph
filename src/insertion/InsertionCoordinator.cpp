@@ -81,7 +81,7 @@ namespace cpgdb::insertion {
     InsertionCoordinator::PlannedEntity InsertionCoordinator::plan(Node node, PlacementContext &context) const {
         PlacementDecision decision = placement_policy_->place_node(node, context);
         validate_placement_decision(decision, context.backend_registry);
-        node.global_id = prepare_id(node.global_id, decision);
+        node.global_id = prepare_id(node.global_id, decision, database_context_.uuid_routing_backends);
         return PlannedEntity{.item = InsertionItem(std::make_shared<const Node>(std::move(node))),
                              .decision = std::move(decision)};
     }
@@ -89,17 +89,18 @@ namespace cpgdb::insertion {
     InsertionCoordinator::PlannedEntity InsertionCoordinator::plan(Edge edge, PlacementContext &context) const {
         PlacementDecision decision = placement_policy_->place_edge(edge, context);
         validate_placement_decision(decision, context.backend_registry);
-        edge.global_id = prepare_id(edge.global_id, decision);
+        edge.global_id = prepare_id(edge.global_id, decision, database_context_.uuid_routing_backends);
         return PlannedEntity{.item = InsertionItem(std::make_shared<const Edge>(std::move(edge))),
                              .decision = std::move(decision)};
     }
 
-    GlobalId InsertionCoordinator::prepare_id(GlobalId id, const PlacementDecision &decision) {
+    GlobalId InsertionCoordinator::prepare_id(GlobalId id, const PlacementDecision &decision,
+                                              const std::span<const BackendId> routing_backends) {
         if (id.is_nil()) {
             id = boost::uuids::random_generator{}();
         }
         if (decision.encode_home_backend_in_uuid) {
-            return BackendEncodedUuid::encode(id, *decision.home_backend);
+            return BackendEncodedUuid::encode(id, *decision.home_backend, routing_backends);
         }
         return id;
     }

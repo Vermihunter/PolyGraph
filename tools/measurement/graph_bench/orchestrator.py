@@ -78,6 +78,7 @@ class BfsBenchmarkOrchestrator:
                 "--input-json", self.config.paths.data,
                 "--output-csv", out,
                 "--start-uuid", start_uuid,
+                "--max-depth", str(self.config.bfs.max_depth),
             ], stderr_path=self.logs_dir / "reference.log")
             if not self.runner.dry_run:
                 record.vertex_count = len(read_bfs_csv(out))
@@ -224,11 +225,10 @@ class BfsBenchmarkOrchestrator:
                 "--neo4j-uri", self.config.neo4j.bolt_uri,
                 "--neo4j-user", self.config.neo4j.user,
                 "--neo4j-password", self.config.neo4j.password,
+                "--batch-size", str(self.config.batch_size),
             ], stderr_path=self.logs_dir / f"loader_{scenario}_{system}.log")
 
     def _graph_db_command(self, *, schema: Path, run_id: str, repetition: int, data: Path, backend_config: Path, start_uuid: str, system: str) -> list[str | Path]:
-        start_type = self.graph.start_type(start_uuid)
-
         event_log_file = (
                 self.logs_dir
                 / safe_file_part(run_id)
@@ -244,7 +244,6 @@ class BfsBenchmarkOrchestrator:
             "--log-file", event_log_file,
             "--backend-config", backend_config,
             "--start-uuid", start_uuid,
-            "--start-type", start_type,
             "--max-depth", str(self.config.bfs.max_depth),
             "--direction", self.config.bfs.direction,
         ]
@@ -295,7 +294,8 @@ class BfsBenchmarkOrchestrator:
 
         data_path = configured.data
         if data_path is None or not data_path.exists():
-            data_path = self.generated_dir / f"full_{backend}.data.json"
+            data_suffix = ".jsonl" if self.config.paths.data.suffix.lower() in {".jsonl", ".ndjson"} else ".json"
+            data_path = self.generated_dir / f"full_{backend}.data{data_suffix}"
             self.graph.write_data_with_source(data_path, backend)
 
         backend_config = configured.backend_config

@@ -95,8 +95,6 @@ namespace cpgdb::cli {
         program.add_value_option("start-uuid", {"--start-uuid"}, "UUID of the BFS source vertex",
                                  std::string{"11a96cb7-c043-4aa7-aa35-2297e9be7f06"});
 
-        program.add_value_option("start-type", {"--start-type"}, "Logical node type of the BFS source vertex",
-                                 std::string{"Faculty"});
 
         program.add_value_option("max-depth", {"--max-depth"}, "BFS max depth; use -1 for unlimited", std::string{"7"});
 
@@ -132,9 +130,9 @@ namespace cpgdb::cli {
                                   .verbose = args.bool_value("verbose")};
     }
 
-    NodeRef parse_source(const CommandLine &args, const domain::LogicalGraphSchema &schema) {
-        return NodeRef{.global_id = boost::lexical_cast<boost::uuids::uuid>(args.string_value("start-uuid")),
-                       .type = schema.node_type_id(args.string_value("start-type"))};
+    NodeRef parse_source(const CommandLine &args, const DatabaseContext &context) {
+        const auto id = boost::lexical_cast<boost::uuids::uuid>(args.string_value("start-uuid"));
+        return context.node_ref(id);
     }
 
     ExpandSpec parse_expand_spec(const CommandLine &args, const domain::LogicalGraphSchema &schema) {

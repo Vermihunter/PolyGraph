@@ -19,9 +19,11 @@
 #include "utilities/Profiling.hpp"
 #include "utilities/logging.hpp"
 
+#include <boost/container_hash/hash.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <data_model/Record.hpp>
+#include <mutex>
 #include <optional>
 #include <query/QueryResult.hpp>
 #include <query/QueryVisitor.hpp>
@@ -29,6 +31,7 @@
 #include <serialization/RecordJsonSerializer.hpp>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <utilities/curl.hpp>
 #include <utilities/json.hpp>
 #include <utilities/uuid.hpp>
@@ -39,6 +42,9 @@ namespace cpgdb {
         const BackendConnectionConfig &config_;
         DataModelJsonSerializer serializer_;
         mutable CurlHttpClient http_;
+        mutable std::mutex collection_cache_mutex_;
+        mutable std::optional<std::unordered_set<std::string>> node_collection_cache_;
+        mutable std::optional<std::unordered_set<std::string>> edge_collection_cache_;
 
         enum class collection_t : std::size_t { NODE = 2, EDGE = 3 };
 
@@ -146,7 +152,7 @@ namespace cpgdb {
                  */
                 // NOLINTBEGIN(performance-inefficient-string-concatenation)
                 const std::string query = "FOR start IN @@vertexCollection "
-                                          "FILTER start.uuid IN @frontier "
+                                          "FILTER start._key IN @frontier "
                                           "FOR neighbor, edge IN 1..1 " +
                                           direction + " start " + edgeCollectionsAql +
                                           " "
@@ -168,6 +174,17 @@ namespace cpgdb {
             }
 
             return combined;
+        }
+
+        std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier,
+                                                                          const ExpandSpec &spec, int depth) const {
+            /*
+             * Keep the switch here: one active implementation and the other
+             * two preserved immediately below it for reproducible benchmarks.
+             */
+            // return get_minimal_neighbors_batch_edge_index_union(frontier, spec, depth);
+            return get_minimal_neighbors_batch_traversal_projection(frontier, spec, depth);
+            // return get_minimal_neighbors_batch_original(frontier, spec, depth);
         }
 
         query_result_t visit(const InsertQuery &query) override {
@@ -240,58 +257,393 @@ namespace cpgdb {
         }
 
     private:
+        std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_edge_index_union(std::span<const NodeRef> frontier,
+                                                                                      const ExpandSpec &spec,
+                                                                                      int depth) const {
+            (void) depth;
+
+            if (frontier.empty()) {
+                return {};
+            }
+
+            EVENT_SCOPE_INFO(total_span, "arango.minimal_neighbors.edge_index_union",
+                             {"frontier_size", frontier.size()});
+
+            auto [rows, row_by_source] = initialize_minimal_rows(frontier);
+            const auto grouped_frontier = group_frontier_by_collection(frontier);
+            const auto edge_type_ids = edge_types_for_query(spec);
+
+            for (const auto &[vertex_collection, source_group]: grouped_frontier) {
+                if (source_group.empty() || edge_type_ids.empty()) {
+                    continue;
+                }
+
+                json frontier_json = json::array();
+                frontier_json.get_ref<json::array_t &>().reserve(source_group.size());
+
+                for (const auto &source: source_group) {
+                    frontier_json.push_back(boost::uuids::to_string(source.global_id));
+                }
+
+                json bind_vars{{"@vertexCollection", vertex_collection}, {"frontier", std::move(frontier_json)}};
+                std::vector<std::string> subqueries;
+                subqueries.reserve(edge_type_ids.size() * (spec.direction == Direction::Directed ? 1U : 2U));
+
+                for (std::size_t edge_index = 0; edge_index < edge_type_ids.size(); ++edge_index) {
+                    const std::string bind_name = "edgeCollection" + std::to_string(edge_index);
+                    bind_vars["@" + bind_name] = db_context_.schema->edge_type(edge_type_ids[edge_index]).name;
+
+                    subqueries.push_back(build_edge_index_subquery(bind_name, true));
+
+                    if (spec.direction != Direction::Directed) {
+                        subqueries.push_back(build_edge_index_subquery(bind_name, false));
+                    }
+                }
+
+                std::string query = "LET starts = ("
+                                    "  FOR start IN @@vertexCollection "
+                                    "    FILTER start._key IN @frontier "
+                                    "    RETURN { id: start._id, uuid: start.uuid }"
+                                    ") "
+                                    "RETURN UNION(";
+
+                for (std::size_t index = 0; index < subqueries.size(); ++index) {
+                    if (index > 0) {
+                        query += ", ";
+                    }
+
+                    query += subqueries[index];
+                }
+
+                query += ")";
+
+                const json response = send_req(query, bind_vars);
+                parse_minimal_response_into_rows(response, rows, row_by_source, spec);
+            }
+
+            total_span.add_end_field("result_source_rows", rows.size());
+            return rows;
+        }
+
+        std::vector<MinimalAdjacencyRow>
+        get_minimal_neighbors_batch_traversal_projection(std::span<const NodeRef> frontier, const ExpandSpec &spec,
+                                                         int depth) const {
+            (void) depth;
+
+            if (frontier.empty()) {
+                return {};
+            }
+
+            EVENT_SCOPE_INFO(total_span, "arango.minimal_neighbors.traversal_projection",
+                             {"frontier_size", frontier.size()});
+
+            auto [rows, row_by_source] = initialize_minimal_rows(frontier);
+            const auto grouped_frontier = group_frontier_by_collection(frontier);
+            const auto edge_type_ids = edge_types_for_query(spec);
+
+            for (const auto &[vertex_collection, source_group]: grouped_frontier) {
+                if (source_group.empty() || edge_type_ids.empty()) {
+                    continue;
+                }
+
+                json frontier_json = json::array();
+                frontier_json.get_ref<json::array_t &>().reserve(source_group.size());
+
+                for (const auto &source: source_group) {
+                    frontier_json.push_back(boost::uuids::to_string(source.global_id));
+                }
+
+                json bind_vars{{"@vertexCollection", vertex_collection}, {"frontier", std::move(frontier_json)}};
+                std::string edge_collections;
+
+                for (std::size_t edge_index = 0; edge_index < edge_type_ids.size(); ++edge_index) {
+                    const std::string bind_name = "edgeCollection" + std::to_string(edge_index);
+                    bind_vars["@" + bind_name] = db_context_.schema->edge_type(edge_type_ids[edge_index]).name;
+
+                    if (!edge_collections.empty()) {
+                        edge_collections += ", ";
+                    }
+
+                    edge_collections += "@@" + bind_name;
+                }
+
+                const std::string query = "FOR start IN @@vertexCollection "
+                                          "FILTER start._key IN @frontier "
+                                          "FOR neighbor IN 1..1 " +
+                                          arango_direction(spec.direction) + " start " + edge_collections +
+                                          " OPTIONS { uniqueVertices: \"none\" } "
+                                          "RETURN ["
+                                          "  start.uuid, "
+                                          "  neighbor.uuid, "
+                                          "  neighbor._id, "
+                                          "  neighbor[\"remote-type\"]"
+                                          "]";
+
+                const json response = send_req(query, bind_vars);
+                parse_minimal_response_into_rows(response, rows, row_by_source, spec);
+            }
+
+            total_span.add_end_field("result_source_rows", rows.size());
+            return rows;
+        }
+
+        std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_original(std::span<const NodeRef> frontier,
+                                                                              const ExpandSpec &spec, int depth) const {
+            (void) depth;
+
+            if (frontier.empty()) {
+                return {};
+            }
+
+            auto [rows, row_by_source] = initialize_minimal_rows(frontier);
+            auto raw = const_cast<Impl *>(this)->visit(
+                    GetNeighborsBatchQuery(std::vector<NodeRef>(frontier.begin(), frontier.end()), spec));
+
+            if (!raw) {
+                return rows;
+            }
+
+            std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+                    seen_by_source;
+
+            for (const auto &record: raw->data) {
+                if (!record || record->fields.size() < 2 || !record->fields[0].is<Node>() ||
+                    !record->fields[1].is<Node>()) {
+                    continue;
+                }
+
+                const auto &source_node = record->fields[0].as<Node>();
+                const auto &neighbor_node = record->fields[1].as<Node>();
+                const auto source_iterator = row_by_source.find(source_node.global_id);
+
+                if (source_iterator == row_by_source.end() || !spec.allows_target_type(neighbor_node.type) ||
+                    !seen_by_source[source_node.global_id].insert(neighbor_node.global_id).second) {
+                    continue;
+                }
+
+                rows[source_iterator->second].neighbors.push_back(
+                        NodeRef{.global_id = neighbor_node.global_id, .type = neighbor_node.type});
+            }
+
+            return rows;
+        }
+
+        static std::string build_edge_index_subquery(const std::string &edge_collection_bind_name, bool outbound) {
+            const std::string edge_endpoint = outbound ? "edge._from" : "edge._to";
+            const std::string neighbor_endpoint = outbound ? "edge._to" : "edge._from";
+
+            return "(FOR start IN starts "
+                   "   FOR edge IN @@" +
+                   edge_collection_bind_name +
+                   " "
+                   "     FILTER " +
+                   edge_endpoint +
+                   " == start.id "
+                   "     LET neighbor = DOCUMENT(" +
+                   neighbor_endpoint +
+                   ") "
+                   "     FILTER neighbor != null "
+                   "     RETURN ["
+                   "       start.uuid, "
+                   "       neighbor.uuid, "
+                   "       neighbor._id, "
+                   "       neighbor[\"remote-type\"]"
+                   "     ])";
+        }
+
+        static std::pair<std::vector<MinimalAdjacencyRow>,
+                         std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>>>
+        initialize_minimal_rows(std::span<const NodeRef> frontier) {
+            std::vector<MinimalAdjacencyRow> rows;
+            rows.reserve(frontier.size());
+
+            std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> row_by_source;
+            row_by_source.reserve(frontier.size());
+
+            for (const auto &source: frontier) {
+                const auto [iterator, inserted] = row_by_source.emplace(source.global_id, rows.size());
+                (void) iterator;
+
+                if (inserted) {
+                    rows.push_back(MinimalAdjacencyRow{.source = source, .neighbors = {}});
+                }
+            }
+
+            return {std::move(rows), std::move(row_by_source)};
+        }
+
+        void parse_minimal_response_into_rows(
+                const json &response, std::vector<MinimalAdjacencyRow> &rows,
+                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
+                const ExpandSpec &spec) const {
+            if (response.contains("error") && response["error"].is_boolean() && response["error"].get<bool>()) {
+                throw std::runtime_error("ArangoDB minimal neighbor query failed: " + response.dump());
+            }
+
+            if (!response.contains("result") || !response["result"].is_array()) {
+                throw std::runtime_error("ArangoDB minimal neighbor response has no result array: " + response.dump());
+            }
+
+            std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+                    seen_by_source;
+
+            for (const auto &item: response["result"]) {
+                append_minimal_result_item(item, rows, row_by_source, seen_by_source, spec);
+            }
+        }
+
+        void append_minimal_result_item(
+                const json &item, std::vector<MinimalAdjacencyRow> &rows,
+                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
+                std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+                        &seen_by_source,
+                const ExpandSpec &spec) const {
+            if (!item.is_array()) {
+                return;
+            }
+
+            const bool looks_like_row =
+                    item.size() >= 4 && item[0].is_string() && item[1].is_string() && item[2].is_string();
+
+            if (!looks_like_row) {
+                for (const auto &nested: item) {
+                    append_minimal_result_item(nested, rows, row_by_source, seen_by_source, spec);
+                }
+                return;
+            }
+
+            const auto source_id = boost::lexical_cast<GlobalId>(item[0].get<std::string>());
+            const auto neighbor_id = boost::lexical_cast<GlobalId>(item[1].get<std::string>());
+            const std::string neighbor_document_id = item[2].get<std::string>();
+            std::string logical_type_name = collection_from_arango_id(neighbor_document_id);
+
+            if (logical_type_name == "Proxy") {
+                if (item[3].is_null() || !item[3].is_string() || item[3].get<std::string>().empty()) {
+                    throw std::runtime_error("ArangoDB proxy neighbor is missing remote-type: " + item.dump());
+                }
+
+                logical_type_name = item[3].get<std::string>();
+            }
+
+            const auto source_iterator = row_by_source.find(source_id);
+
+            if (source_iterator == row_by_source.end()) {
+                return;
+            }
+
+            const TypeId neighbor_type = db_context_.schema->node_type_id(logical_type_name);
+
+            if (!spec.allows_target_type(neighbor_type) || !seen_by_source[source_id].insert(neighbor_id).second) {
+                return;
+            }
+
+            rows[source_iterator->second].neighbors.push_back(NodeRef{.global_id = neighbor_id, .type = neighbor_type});
+        }
+
         std::unordered_map<std::string, std::vector<NodeRef>>
-        group_frontier_by_collection(const std::vector<NodeRef> &frontier) const {
+        group_frontier_by_collection(std::span<const NodeRef> frontier) const {
             std::unordered_map<std::string, std::vector<NodeRef>> grouped;
+            std::vector<NodeRef> unresolved;
 
             for (const auto &node: frontier) {
-                grouped[physical_vertex_collection_for(node)].push_back(node);
+                if (node.type != unresolved_type_id) {
+                    grouped[physical_vertex_collection_for(node)].push_back(node);
+                    continue;
+                }
+                unresolved.push_back(node);
+            }
+
+            if (!unresolved.empty()) {
+                // UUID suffix bits identify ArangoDB, but not the document
+                // collection. Resolve only the initial type-free frontier by
+                // probing the materialized schema collections. Each probe uses
+                // the per-collection primary _key index; no UUID-to-type
+                // directory is retained in application RAM.
+                const auto materialized = available_node_collections();
+                for (const auto &[type_id, node_type]: db_context_.schema->node_types()) {
+                    (void) type_id;
+                    if (!materialized.contains(node_type.name)) {
+                        continue;
+                    }
+                    auto &group = grouped[node_type.name];
+                    group.insert(group.end(), unresolved.begin(), unresolved.end());
+                }
             }
 
             return grouped;
         }
 
         [[nodiscard]] std::string physical_vertex_collection_for(const NodeRef &node) const {
-            std::string logical_name = db_context_.schema->node_type(node.type).name;
+            // Frontier vertices are always sent to the home backend decoded from
+            // their UUID. Therefore an Arango-routed frontier vertex is a real
+            // document in its logical-type collection, never a cross-backend proxy.
+            return db_context_.schema->node_type(node.type).name;
+        }
 
-            if (logical_name == "Proxy") {
-                return "Proxy";
+        [[nodiscard]] std::unordered_set<std::string> available_node_collections() const {
+            std::scoped_lock lock(collection_cache_mutex_);
+            if (!node_collection_cache_.has_value()) {
+                std::string auth;
+                if (config_.credentials.has_value()) {
+                    auth = config_.credentials->username + ":" + config_.credentials->password;
+                }
+
+                const auto collections = fetchAndSortCollections(collections_endpoint(), auth, collection_t::NODE);
+                node_collection_cache_.emplace(collections.begin(), collections.end());
             }
-
-            const auto &coverage = db_context_.backend_registry->descriptor(ARANGO).coverage;
-
-            /*
-             * Arango stores real Arango-owned nodes in collections named after
-             * their logical type. Cross-backend endpoint nodes are stored in the
-             * physical Proxy collection by tools/generators/from-file-to-db.py.
-             *
-             * Example: CourseOffering is a GPU node type. For the Arango edge
-             * CourseOffering--SCHEDULED_AT--ScheduleSlot, the CourseOffering
-             * endpoint exists in Arango as Proxy/<uuid>, not CourseOffering/<uuid>.
-             */
-            if (coverage.node_types.contains(node.type)) {
-                return logical_name;
-            }
-
-            return "Proxy";
+            return *node_collection_cache_;
         }
 
         std::vector<TypeId> edge_types_for_query(const ExpandSpec &spec) const {
+            const auto available_collections = available_edge_collections();
+            std::vector<TypeId> result;
+
+            const auto append_if_materialized = [&](const TypeId edge_type_id) {
+                const auto &edge_type = db_context_.schema->edge_type(edge_type_id);
+                if (available_collections.contains(edge_type.name)) {
+                    result.push_back(edge_type_id);
+                }
+            };
+
             if (!spec.allowed_edge_types.empty()) {
-                return spec.allowed_edge_types;
+                result.reserve(spec.allowed_edge_types.size());
+                for (const TypeId edge_type_id: spec.allowed_edge_types) {
+                    append_if_materialized(edge_type_id);
+                }
+                return result;
             }
 
-
-            const auto &coverage = db_context_.backend_registry->descriptor(ARANGO).coverage;
-            std::vector result(coverage.edge_types.begin(), coverage.edge_types.end());
-
-            /*
-        for (TypeId edge_type_id: coverage.edge_types) {
-            result.push_back(edge_type_id);
-        }
-        */
-
+            result.reserve(db_context_.schema->edge_types().size());
+            for (const auto &[edge_type_id, edge_type]: db_context_.schema->edge_types()) {
+                (void) edge_type;
+                append_if_materialized(edge_type_id);
+            }
             return result;
+        }
+
+        [[nodiscard]] std::unordered_set<std::string> available_edge_collections() const {
+            std::scoped_lock lock(collection_cache_mutex_);
+            if (!edge_collection_cache_.has_value()) {
+                std::string auth;
+                if (config_.credentials.has_value()) {
+                    auth = config_.credentials->username + ":" + config_.credentials->password;
+                }
+
+                const auto collections = fetchAndSortCollections(collections_endpoint(), auth, collection_t::EDGE);
+                edge_collection_cache_.emplace(collections.begin(), collections.end());
+            }
+            return *edge_collection_cache_;
+        }
+
+        [[nodiscard]] std::string collections_endpoint() const {
+            const std::string marker = "/_api/";
+            const std::size_t api_position = config_.endpoint.find(marker);
+            if (api_position == std::string::npos) {
+                throw std::runtime_error(
+                        "ArangoDB endpoint must contain '/_api/' so the collection endpoint can be derived: " +
+                        config_.endpoint);
+            }
+            return config_.endpoint.substr(0, api_position) + "/_api/collection";
         }
 
         static std::string arango_direction(Direction direction) {
@@ -418,6 +770,10 @@ namespace cpgdb {
         }
 
         static std::string get_union_query_for_collections(const std::vector<std::string> &collectionNames) {
+            if (collectionNames.empty()) {
+                return "RETURN []";
+            }
+
             std::stringstream union_query;
 
             union_query << "RETURN UNION(";
@@ -451,10 +807,7 @@ namespace cpgdb {
              *
              * For now, simplest option: keep it configured separately later.
              */
-            const std::string collectionsEndpoint =
-                    "http://localhost:8529/_db/" + config_.database_name + "/_api/collection";
-
-            auto collectionNames = fetchAndSortCollections(collectionsEndpoint, auth, collection_type);
+            auto collectionNames = fetchAndSortCollections(collections_endpoint(), auth, collection_type);
 
             return get_union_query_for_collections(collectionNames);
         }
@@ -741,5 +1094,11 @@ namespace cpgdb {
     query_result_t ArangoQueryVisitor::visit(const GetNeighborsBatchQuery &query) { return impl_->visit(query); }
     query_result_t ArangoQueryVisitor::visit(const InsertQuery &query) { return impl_->visit(query); }
     query_result_t ArangoQueryVisitor::visit(const InsertBatchQuery &query) { return impl_->visit(query); }
+
+    std::vector<MinimalAdjacencyRow>
+    ArangoQueryVisitor::get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier, const ExpandSpec &spec,
+                                                         int depth) const {
+        return impl_->get_minimal_neighbors_batch_fast(frontier, spec, depth);
+    }
 
 } // namespace cpgdb

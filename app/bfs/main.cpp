@@ -19,6 +19,45 @@
 #include <exception>
 #include <iostream>
 
+#include "logging/sinks/JsonEventSerializer.hpp"
+#include "logging/sinks/SpdlogEventSink.hpp"
+#include "logging/sinks/TextEventSerializer.hpp"
+
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+
+void add_jsonl_sink(
+    cpgdb::EventLogger& event_logger,
+    const std::string& path) {
+
+    auto file_logger =
+        spdlog::basic_logger_mt(
+            "cpgdb-events-jsonl",
+            path);
+
+    file_logger->set_pattern("%v");
+    file_logger->set_level(spdlog::level::trace);
+
+    auto event_serializer = std::make_unique<cpgdb::JsonEventSerializer>();
+
+    event_logger.add_sink(
+        std::make_unique<cpgdb::SpdlogEventSink>(
+            std::move(file_logger), std::move(event_serializer)));
+}
+
+void add_stdout_sink(cpgdb::EventLogger& event_logger) {
+    auto stdout_logger =
+        spdlog::stdout_color_mt("cpgdb");
+
+    stdout_logger->set_level(spdlog::level::info);
+
+    auto event_serializer = std::make_unique<cpgdb::TextEventSerializer>();
+
+    event_logger.add_sink(
+        std::make_unique<cpgdb::SpdlogEventSink>(
+            std::move(stdout_logger), std::move(event_serializer)));
+}
+
 int main(int argc, char** argv) {
     cpgdb::runtime::CurlGlobalGuard curl;
 
@@ -39,7 +78,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    cpgdb::cli::parse_log_options(program);
+    auto log_options = cpgdb::cli::parse_log_options(program);
+    cpgdb::logger = std::make_unique<cpgdb::EventLogger>(log_options.log_file);
+    add_jsonl_sink(*cpgdb::logger, log_options.log_file);
+ //   add_stdout_sink(*cpgdb::logger);
 
     try {
 
@@ -47,7 +89,7 @@ int main(int argc, char** argv) {
 
         cpgdb::BfsExecutor bfs(*ctx->placement_catalog);
 
-        const cpgdb::NodeRef source = cpgdb::cli::parse_source(program, *ctx->schema);
+        const cpgdb::NodeRef source = cpgdb::cli::parse_source(program, *ctx);
         const cpgdb::ExpandSpec expand_spec = cpgdb::cli::parse_expand_spec(program, *ctx->schema);
         const cpgdb::BfsOptions options = cpgdb::cli::parse_bfs_options(program);
 

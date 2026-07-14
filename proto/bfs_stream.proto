@@ -9,7 +9,7 @@ service TraversalService {
 message BfsStreamRequest {
   string graph_id = 1;
   string source_vertex_id = 2;
-  string source_type = 3;
+  reserved 3;
   uint32 max_depth = 4;
   bool return_predecessors = 5;
   bool allow_native_pushdown = 6;

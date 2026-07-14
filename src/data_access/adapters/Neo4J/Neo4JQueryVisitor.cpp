@@ -269,6 +269,18 @@ namespace cpgdb {
             // return get_neighbors_batch_fast_sequential(frontier, spec, depth);
         }
 
+        std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier,
+                                                                          const ExpandSpec &spec, int depth) const {
+            /*
+             * Keep all three calls together so benchmarking/switching requires
+             * changing only these lines. The original APOC implementation is
+             * intentionally preserved as the third option.
+             */
+            return get_minimal_neighbors_batch_direct_union(frontier, spec, depth);
+            // return get_minimal_neighbors_batch_direct_grouped_async(frontier, spec, depth);
+            // return adjacency_rows_to_minimal(get_neighbors_batch_fast(frontier, spec, depth));
+        }
+
     private:
         std::vector<AdjacencyRow> get_neighbors_batch_fast_sequential(std::span<const NodeRef> frontier,
                                                                       const ExpandSpec &spec, int depth) const {
@@ -276,8 +288,8 @@ namespace cpgdb {
                 return {};
             }
 
-            EVENT_SCOPE_DEBUG(total_span, "neo4j.get_neighbors_batch_fast", {"depth", depth},
-                              {"frontier_size", frontier.size()});
+            // EVENT_SCOPE_DEBUG(total_span, "neo4j.get_neighbors_batch_fast", {"depth", depth},
+            //                {"frontier_size", frontier.size()});
 
             std::vector<AdjacencyRow> rows;
             rows.reserve(frontier.size());
@@ -470,6 +482,261 @@ namespace cpgdb {
             return rows;
         }
 
+        std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_direct_union(std::span<const NodeRef> frontier,
+                                                                                  const ExpandSpec &spec,
+                                                                                  int depth) const {
+            (void) depth;
+
+            if (frontier.empty()) {
+                return {};
+            }
+
+            EVENT_SCOPE_INFO(total_span, "neo4j.minimal_neighbors.direct_union", {"frontier_size", frontier.size()});
+
+            auto [rows, row_by_source] = initialize_minimal_rows(frontier);
+            const auto grouped_frontier = group_frontier_by_physical_source_label(frontier);
+
+            if (grouped_frontier.empty()) {
+                return rows;
+            }
+
+            const auto edge_type_names = edge_type_names_for_spec(spec);
+            const std::string edge_match = build_edge_match(spec.direction, relationship_type_pattern(edge_type_names));
+            const auto target_type_names = target_type_names_for_spec(spec);
+
+            json parameters = json::object();
+            parameters["target_types"] = target_type_names;
+
+            std::string query;
+            std::size_t branch_index = 0;
+
+            for (const auto &[source_label, group]: grouped_frontier) {
+                if (group.empty()) {
+                    continue;
+                }
+
+                if (!query.empty()) {
+                    query += " UNION ALL ";
+                }
+
+                const std::string parameter_name = "frontier_" + std::to_string(branch_index++);
+                json group_frontier = json::array();
+                group_frontier.get_ref<json::array_t &>().reserve(group.size());
+
+                for (const auto &source: group) {
+                    group_frontier.push_back(boost::uuids::to_string(source.global_id));
+                }
+
+                parameters[parameter_name] = std::move(group_frontier);
+
+                // NOLINTBEGIN(performance-inefficient-string-concatenation)
+                query += "UNWIND $" + parameter_name +
+                         " AS source_uuid "
+                         "MATCH (source:" +
+                         escape_cypher_identifier(source_label) + " {uuid: source_uuid}) " + edge_match;
+                // NOLINTEND(performance-inefficient-string-concatenation)
+
+                if (!target_type_names.empty()) {
+                    query += "WITH source, neighbor "
+                             "WHERE neighbor.`remote-type` IN $target_types "
+                             "   OR neighbor.type IN $target_types "
+                             "   OR any(label IN labels(neighbor) WHERE label IN $target_types) ";
+                }
+
+                query += minimal_neighbor_projection();
+            }
+
+            if (query.empty()) {
+                return rows;
+            }
+
+            const json response = send_req(query, parameters);
+            parse_minimal_response_into_rows(response, rows, row_by_source, spec);
+
+            total_span.add_end_field("result_source_rows", rows.size());
+            return rows;
+        }
+
+        std::vector<MinimalAdjacencyRow>
+        get_minimal_neighbors_batch_direct_grouped_async(std::span<const NodeRef> frontier, const ExpandSpec &spec,
+                                                         int depth) const {
+            (void) depth;
+
+            if (frontier.empty()) {
+                return {};
+            }
+
+            EVENT_SCOPE_INFO(total_span, "neo4j.minimal_neighbors.direct_grouped_async",
+                             {"frontier_size", frontier.size()});
+
+            auto [rows, row_by_source] = initialize_minimal_rows(frontier);
+            const auto grouped_frontier = group_frontier_by_physical_source_label(frontier);
+            const auto edge_type_names = edge_type_names_for_spec(spec);
+            const std::string edge_match = build_edge_match(spec.direction, relationship_type_pattern(edge_type_names));
+            const auto target_type_names = target_type_names_for_spec(spec);
+
+            std::vector<std::future<Neo4jGroupResponse>> futures;
+            futures.reserve(grouped_frontier.size());
+
+            for (const auto &[source_label, group]: grouped_frontier) {
+                if (group.empty()) {
+                    continue;
+                }
+
+                json group_frontier = json::array();
+                group_frontier.get_ref<json::array_t &>().reserve(group.size());
+
+                for (const auto &source: group) {
+                    group_frontier.push_back(boost::uuids::to_string(source.global_id));
+                }
+
+                std::string query = "UNWIND $frontier AS source_uuid "
+                                    "MATCH (source:" +
+                                    escape_cypher_identifier(source_label) + " {uuid: source_uuid}) " + edge_match;
+
+                if (!target_type_names.empty()) {
+                    query += "WITH source, neighbor "
+                             "WHERE neighbor.`remote-type` IN $target_types "
+                             "   OR neighbor.type IN $target_types "
+                             "   OR any(label IN labels(neighbor) WHERE label IN $target_types) ";
+                }
+
+                query += minimal_neighbor_projection();
+
+                const json parameters{{"frontier", std::move(group_frontier)}, {"target_types", target_type_names}};
+
+                futures.push_back(std::async(std::launch::async,
+                                             [this, source_label, group_size = group.size(), query = std::move(query),
+                                              parameters]() -> Neo4jGroupResponse {
+                                                 EVENT_SCOPE_INFO(span, "neo4j.minimal_neighbors.direct_group_query",
+                                                                  {"source_label", source_label},
+                                                                  {"group_size", group_size});
+
+                                                 return Neo4jGroupResponse{.source_label = source_label,
+                                                                           .group_size = group_size,
+                                                                           .response = send_req(query, parameters)};
+                                             }));
+            }
+
+            for (auto &future: futures) {
+                auto result = future.get();
+                parse_minimal_response_into_rows(result.response, rows, row_by_source, spec);
+            }
+
+            total_span.add_end_field("result_source_rows", rows.size());
+            return rows;
+        }
+
+        static std::string minimal_neighbor_projection() {
+            return "RETURN "
+                   "source.uuid AS source_uuid, "
+                   "neighbor.uuid AS neighbor_uuid, "
+                   "neighbor.`remote-uuid` AS neighbor_remote_uuid, "
+                   "coalesce(neighbor.is_proxy, false) AS neighbor_is_proxy, "
+                   "neighbor.`remote-type` AS neighbor_remote_type, "
+                   "neighbor.type AS neighbor_type_property, "
+                   "labels(neighbor) AS neighbor_labels";
+        }
+
+        static std::pair<std::vector<MinimalAdjacencyRow>,
+                         std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>>>
+        initialize_minimal_rows(std::span<const NodeRef> frontier) {
+            std::vector<MinimalAdjacencyRow> rows;
+            rows.reserve(frontier.size());
+
+            std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> row_by_source;
+            row_by_source.reserve(frontier.size());
+
+            for (const auto &source: frontier) {
+                const auto [iterator, inserted] = row_by_source.emplace(source.global_id, rows.size());
+                (void) iterator;
+
+                if (inserted) {
+                    rows.push_back(MinimalAdjacencyRow{.source = source, .neighbors = {}});
+                }
+            }
+
+            return {std::move(rows), std::move(row_by_source)};
+        }
+
+        void parse_minimal_response_into_rows(
+                const json &response, std::vector<MinimalAdjacencyRow> &rows,
+                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
+                const ExpandSpec &spec) const {
+            if (response.contains("errors") && !response["errors"].empty()) {
+                throw std::runtime_error("Neo4J minimal neighbor query failed: " + response["errors"].dump());
+            }
+
+            if (!response.contains("results") || response["results"].empty() ||
+                !response["results"][0].contains("data")) {
+                return;
+            }
+
+            std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+                    seen_by_source;
+
+            for (const auto &item: response["results"][0]["data"]) {
+                if (!item.contains("row") || !item["row"].is_array()) {
+                    continue;
+                }
+
+                const auto &row = item["row"];
+
+                if (row.size() < 7 || row[0].is_null() || row[1].is_null()) {
+                    continue;
+                }
+
+                const std::string source_uuid = row[0].get<std::string>();
+                const std::string physical_neighbor_uuid = row[1].get<std::string>();
+                const bool looks_like_proxy = bool_or_false(row[3]) ||
+                                              non_empty_string_opt(row[5]).value_or("") == "Proxy" ||
+                                              labels_contain(row[6], "Proxy");
+                const std::string neighbor_uuid =
+                        resolve_logical_neighbor_uuid(physical_neighbor_uuid, row[2], looks_like_proxy);
+                const std::string neighbor_type_name =
+                        resolve_logical_neighbor_type(row[3], row[4], row[5], row[6], physical_neighbor_uuid);
+
+                const auto source_id = boost::lexical_cast<GlobalId>(source_uuid);
+                const auto neighbor_id = boost::lexical_cast<GlobalId>(neighbor_uuid);
+                const auto source_iterator = row_by_source.find(source_id);
+
+                if (source_iterator == row_by_source.end()) {
+                    continue;
+                }
+
+                const TypeId neighbor_type = db_context_.schema->node_type_id(neighbor_type_name);
+
+                if (!spec.allows_target_type(neighbor_type)) {
+                    continue;
+                }
+
+                if (!seen_by_source[source_id].insert(neighbor_id).second) {
+                    continue;
+                }
+
+                rows[source_iterator->second].neighbors.push_back(
+                        NodeRef{.global_id = neighbor_id, .type = neighbor_type});
+            }
+        }
+
+        static std::vector<MinimalAdjacencyRow> adjacency_rows_to_minimal(const std::vector<AdjacencyRow> &rich_rows) {
+            std::vector<MinimalAdjacencyRow> result;
+            result.reserve(rich_rows.size());
+
+            for (auto &row: rich_rows) {
+                MinimalAdjacencyRow minimal{.source = row.source, .neighbors = {}};
+                minimal.neighbors.reserve(row.neighbors.size());
+
+                for (const auto &neighbor: row.neighbors) {
+                    minimal.neighbors.push_back(neighbor.vertex);
+                }
+
+                result.push_back(std::move(minimal));
+            }
+
+            return result;
+        }
+
         static std::string escape_cypher_identifier(const std::string &name) {
             std::string escaped;
             escaped.reserve(name.size() + 2);
@@ -510,6 +777,19 @@ namespace cpgdb {
             std::sort(names.begin(), names.end());
             names.erase(std::unique(names.begin(), names.end()), names.end());
 
+            return names;
+        }
+
+        std::vector<std::string> target_type_names_for_spec(const ExpandSpec &spec) const {
+            std::vector<std::string> names;
+            names.reserve(spec.allowed_target_node_types.size());
+
+            for (TypeId type_id: spec.allowed_target_node_types) {
+                names.push_back(db_context_.schema->node_type(type_id).name);
+            }
+
+            std::sort(names.begin(), names.end());
+            names.erase(std::unique(names.begin(), names.end()), names.end());
             return names;
         }
 
@@ -579,27 +859,36 @@ namespace cpgdb {
         }
 
         std::string physical_source_label_for_neo4j(const NodeRef &node) const {
-            std::string logical_name = db_context_.schema->node_type(node.type).name;
-
-            if (logical_name == "Proxy") {
-                return "Proxy";
+            if (node.type == unresolved_type_id) {
+                throw std::logic_error("Cannot choose a Neo4j source label for an unresolved node type");
             }
-
-            const auto &neo4j_coverage = db_context_.backend_registry->descriptor(NEO4J).coverage;
-
-            if (neo4j_coverage.covers_node_type(node.type)) {
-                return logical_name;
-            }
-
-            return "Proxy";
+            return db_context_.schema->node_type(node.type).name;
         }
 
         std::unordered_map<std::string, std::vector<NodeRef>>
         group_frontier_by_physical_source_label(std::span<const NodeRef> frontier) const {
             std::unordered_map<std::string, std::vector<NodeRef>> grouped;
+            std::vector<NodeRef> unresolved;
 
             for (const auto &source: frontier) {
-                grouped[physical_source_label_for_neo4j(source)].push_back(source);
+                if (source.type != unresolved_type_id) {
+                    grouped[physical_source_label_for_neo4j(source)].push_back(source);
+                    continue;
+                }
+                unresolved.push_back(source);
+            }
+
+            if (!unresolved.empty()) {
+                // A caller-provided UUID contains the owning backend but not the
+                // logical node type. Resolve the first expansion through the
+                // backend's label indexes instead of a process-wide UUID map.
+                // Once neighbors are returned, their logical types are carried
+                // by the backend response and subsequent layers use one label.
+                for (const auto &[type_id, node_type]: db_context_.schema->node_types()) {
+                    (void) type_id;
+                    auto &group = grouped[node_type.name];
+                    group.insert(group.end(), unresolved.begin(), unresolved.end());
+                }
             }
 
             return grouped;
@@ -990,6 +1279,12 @@ namespace cpgdb {
     std::vector<AdjacencyRow> Neo4JQueryVisitor::get_neighbors_batch_fast(std::span<const NodeRef> frontier,
                                                                           const ExpandSpec &spec, int depth) const {
         return impl_->get_neighbors_batch_fast(frontier, spec, depth);
+    }
+
+    std::vector<MinimalAdjacencyRow>
+    Neo4JQueryVisitor::get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier, const ExpandSpec &spec,
+                                                        int depth) const {
+        return impl_->get_minimal_neighbors_batch_fast(frontier, spec, depth);
     }
 
 } // namespace cpgdb

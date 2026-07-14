@@ -6,8 +6,10 @@
 
 #include "cli/BackendConfigParser.hpp"
 
+#include "insertion/BackendEncodedUuid.hpp"
 #include "utilities/BackendIds.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <stdexcept>
 #include <utility>
@@ -124,7 +126,7 @@ namespace cpgdb::config {
                                      const std::unordered_map<BackendId, std::unordered_set<TypeId>> &edges_by_backend,
                                      std::uint64_t graph_version) {
             const json coverage_json = backend_json.value("coverage", json::object());
-            const std::string mode = coverage_json.value("mode", "schema-source");
+            const std::string mode = coverage_json.value("mode", "uuid-routing");
 
             GraphCoverage coverage{.fresh = coverage_json.value("fresh", true),
                                    .covers_all_node_types = false,
@@ -142,7 +144,7 @@ namespace cpgdb::config {
                 if (auto it = edges_by_backend.find(id); it != edges_by_backend.end()) {
                     coverage.edge_types = it->second;
                 }
-            } else if (mode == "all") {
+            } else if (mode == "all" || mode == "uuid-routing") {
                 coverage.covers_all_node_types = true;
                 coverage.covers_all_edge_types = true;
             } else if (mode == "explicit") {
@@ -241,7 +243,12 @@ namespace cpgdb::config {
 #endif
 
         json default_backend_config_json() {
+            json uuid_routing = json::array({"Neo4J", "ArangoDB"});
+            if (gpu_backend_enabled) {
+                uuid_routing.push_back("GPU");
+            }
             return {{"version", 1},
+                    {"uuidRouting", std::move(uuid_routing)},
                     {"backends",
                      json::array({{{"id", "Neo4J"},
                                    {"kind", "Neo4j"},
@@ -255,7 +262,7 @@ namespace cpgdb::config {
                                    {"capabilities",
                                     {{"batch_neighbors", true}, {"native_bfs", false}, {"property_filters", true}}},
                                    {"coverage",
-                                    {{"mode", "schema-source"},
+                                    {{"mode", "uuid-routing"},
                                      {"fresh", true},
                                      {"complete_for_requested_subgraph", false}}}},
                                   {{"id", "ArangoDB"},
@@ -270,7 +277,7 @@ namespace cpgdb::config {
                                    {"capabilities",
                                     {{"batch_neighbors", true}, {"native_bfs", false}, {"gpu_execution", false}}},
                                    {"coverage",
-                                    {{"mode", "schema-source"},
+                                    {{"mode", "uuid-routing"},
                                      {"fresh", true},
                                      {"complete_for_requested_subgraph", false}}}},
                                   {{"id", "GPU"},
@@ -285,7 +292,7 @@ namespace cpgdb::config {
                                      {"property_filters", false},
                                      {"gpu_execution", true}}},
                                    {"coverage",
-                                    {{"mode", "schema-source"},
+                                    {{"mode", "uuid-routing"},
                                      {"fresh", true},
                                      {"complete_for_requested_subgraph", false}}}}})}};
         }
@@ -308,6 +315,34 @@ namespace cpgdb::config {
         return root["backends"];
     }
 
+
+    std::vector<BackendId> uuid_routing_backends(const json &root) {
+        const json &backends = backend_array_or_throw(root);
+        std::unordered_set<BackendId> enabled;
+        for (const auto &entry: backends) {
+            if (backend_json_enabled(entry)) {
+                enabled.insert(backend_id_from_string(entry.at("id").get<std::string>()));
+            }
+        }
+
+        std::vector<BackendId> result;
+        const auto configured = root.find("uuidRouting");
+        if (configured == root.end() || !configured->is_array() || configured->empty()) {
+            throw std::runtime_error("backend config field 'uuidRouting' must be a non-empty array");
+        }
+        for (const auto &value: *configured) {
+            const BackendId id = backend_id_from_string(value.get<std::string>());
+            if (!enabled.contains(id)) {
+                throw std::runtime_error("UUID routing backend is not enabled: " + backend_id_to_string(id));
+            }
+            if (std::ranges::find(result, id) != result.end()) {
+                throw std::runtime_error("UUID routing layout contains duplicate backend: " + backend_id_to_string(id));
+            }
+            result.push_back(id);
+        }
+        return result;
+    }
+
     bool backend_enabled(const DatabaseContext &context, BackendId id) {
         return context.backend_registry->contains(id);
     }
@@ -319,6 +354,12 @@ namespace cpgdb::config {
             out << ' ' << backend_id_to_string(entry.first);
         }
         out << "\n";
+
+        out << "  UUID routing:";
+        for (std::size_t code = 0; code < context.uuid_routing_backends.size(); ++code) {
+            out << ' ' << code << '=' << backend_id_to_string(context.uuid_routing_backends[code]);
+        }
+        out << " (bits=" << insertion::BackendEncodedUuid::bit_count(context.uuid_routing_backends.size()) << ")\n";
 
         out << "  backends:\n";
         for (const auto &[id, descriptor]: context.backend_registry->descriptors()) {

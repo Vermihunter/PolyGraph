@@ -46,9 +46,9 @@ class ConfiguredGraphStoreFactory {
         std::function<void()> ensure_cuda;
     };
 
-    [[nodiscard]] std::shared_ptr<IGraphStore> create_from_json(DatabaseContext& context,
+    [[nodiscard]] static std::shared_ptr<IGraphStore> create_from_json(DatabaseContext& context,
                                                                 const json& backend_json,
-                                                                const Inputs& inputs) const;
+                                                                const Inputs& inputs);
 
   private:
     [[nodiscard]] static std::shared_ptr<IGraphStore>

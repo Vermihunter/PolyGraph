@@ -24,7 +24,7 @@ namespace cpgdb {
 
     std::shared_ptr<IGraphStore> ConfiguredGraphStoreFactory::create_from_json(DatabaseContext &context,
                                                                                const json &backend_json,
-                                                                               const Inputs &inputs) const {
+                                                                               const Inputs &inputs) {
         if (!config::backend_json_enabled(backend_json)) {
             return nullptr;
         }

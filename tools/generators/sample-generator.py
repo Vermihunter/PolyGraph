@@ -3,9 +3,21 @@
 import argparse
 import json
 import random
+import sys
 import uuid
+from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Tuple, Any
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from tools.graphio.id_codec import (
+    DEFAULT_ROUTING_BACKENDS,
+    BackendLayout,
+    decode_backend_source,
+    encode_backend_id,
+)
 
 
 """
@@ -13,21 +25,8 @@ python3 sample-generator.py ../../storage_layer/sample-university-domain.graph-s
 """
 
 
-SOURCE_CODE_TO_ID = {
-    "Neo4J": 0,
-    "ArangoDB": 1,
-    "JanusGraph": 2,
-    "GPU": 3,
-}
-
-SOURCE_ID_TO_NAME = {v: k for k, v in SOURCE_CODE_TO_ID.items()}
-
-ENTITY_KIND_TO_ID = {
-    "NODE": 0,
-    "REL": 1,
-}
-
-ENTITY_ID_TO_KIND = {v: k for k, v in ENTITY_KIND_TO_ID.items()}
+ENTITY_KIND_TO_ID = {"NODE": 0, "REL": 1}
+ENTITY_ID_TO_KIND = {value: key for key, value in ENTITY_KIND_TO_ID.items()}
 
 
 def load_json(path: str) -> Dict[str, Any]:
@@ -77,91 +76,55 @@ def make_email(first: str, last: str, domain: str) -> str:
     return f"{first}.{last}@{domain}"
 
 
-def resolve_source_name(config: Dict[str, Any], sample_data: Dict[str, Any], profile_name: str, source_override: str = None) -> str:
-    if source_override:
-        source_name = source_override
-    else:
-        profile = config["profiles"][profile_name]
-        source_name = profile.get("source", sample_data.get("defaultSource", "Neo4J"))
-        
-
-    if source_name not in SOURCE_CODE_TO_ID:
-        raise ValueError(
-            f"Unsupported source '{source_name}'. Supported: {list(SOURCE_CODE_TO_ID.keys())}"
-        )
-    return source_name
-
-
-def make_encoded_uuid(source_name: str, entity_kind: str) -> str:
-    """
-    Create a real UUID with embedded source and entity kind bits.
-
-    Layout choices:
-    - keep RFC4122 variant bits valid
-    - set version = 4
-    - reserve 2 top bits of the first byte for source_id
-    - reserve 1 next bit of the first byte for entity_kind_id
-
-    First byte layout:
-    bits 127..120 = first byte
-    [source(2 bits)][kind(1 bit)][random(5 bits)]
-
-    This remains a valid UUID string and can be stored as UUID in databases.
-    """
-    if source_name not in SOURCE_CODE_TO_ID:
-        raise ValueError(f"Unknown source '{source_name}'")
+def make_routed_uuid(
+    rng: random.Random, entity_kind: str, routing_layout: BackendLayout
+) -> tuple[str, str]:
+    """Generate a seeded UUID and route it over all configured storage backends."""
     if entity_kind not in ENTITY_KIND_TO_ID:
         raise ValueError(f"Unknown entity kind '{entity_kind}'")
+    value = uuid.UUID(int=rng.getrandbits(128), version=4)
+    code = (value.int >> routing_layout.bit_count) % len(routing_layout.backends)
+    source_name = routing_layout.source_for_code(code)
+    encoded = encode_backend_id(value, source_name, routing_layout)
+    raw = bytearray(encoded.bytes)
+    raw[4] = (raw[4] & 0x7F) | (ENTITY_KIND_TO_ID[entity_kind] << 7)
+    return str(uuid.UUID(bytes=bytes(raw))), source_name
 
-    source_id = SOURCE_CODE_TO_ID[source_name]
-    kind_id = ENTITY_KIND_TO_ID[entity_kind]
 
-    raw = bytearray(uuid.uuid4().bytes)
 
-    # Encode source (2 bits) into bits 7..6 of first byte
-    raw[0] &= 0b00111111
-    raw[0] |= (source_id & 0b11) << 6
-
-    # Encode entity kind (1 bit) into bit 5 of first byte
-    raw[0] &= 0b11011111
-    raw[0] |= (kind_id & 0b1) << 5
-
-    # Force UUID version 4 (high nibble of byte 6)
-    raw[6] &= 0x0F
-    raw[6] |= 0x40
-
-    # Force RFC 4122 variant (10xxxxxx in byte 8)
-    raw[8] &= 0x3F
-    raw[8] |= 0x80
-
+def make_encoded_uuid(
+    rng: random.Random, source_name: str, entity_kind: str, routing_layout: BackendLayout
+) -> str:
+    """Generate a seeded UUID routed to the backend assigned by the schema type."""
+    if entity_kind not in ENTITY_KIND_TO_ID:
+        raise ValueError(f"Unknown entity kind '{entity_kind}'")
+    value = uuid.UUID(int=rng.getrandbits(128), version=4)
+    encoded = encode_backend_id(value, source_name, routing_layout)
+    raw = bytearray(encoded.bytes)
+    raw[4] = (raw[4] & 0x7F) | (ENTITY_KIND_TO_ID[entity_kind] << 7)
     return str(uuid.UUID(bytes=bytes(raw)))
 
-
-def decode_source_from_uuid(uuid_str: str) -> str:
-    u = uuid.UUID(uuid_str)
-    raw = u.bytes
-    source_id = (raw[0] >> 6) & 0b11
-    return SOURCE_ID_TO_NAME.get(source_id, "UNKNOWN")
+def decode_source_from_uuid(uuid_str: str, routing_layout: BackendLayout) -> str:
+    return decode_backend_source(uuid_str, routing_layout)
 
 
 def decode_kind_from_uuid(uuid_str: str) -> str:
-    u = uuid.UUID(uuid_str)
-    raw = u.bytes
-    kind_id = (raw[0] >> 5) & 0b1
-    return ENTITY_ID_TO_KIND.get(kind_id, "UNKNOWN")
+    raw = uuid.UUID(uuid_str).bytes
+    return ENTITY_ID_TO_KIND.get((raw[4] >> 7) & 0x1, "UNKNOWN")
 
 
-def validate_encoded_uuid(uuid_str: str, expected_source: str = None, expected_kind: str = None) -> bool:
-    u = uuid.UUID(uuid_str)
-    if u.version != 4:
+def validate_encoded_uuid(
+    uuid_str: str,
+    routing_layout: BackendLayout,
+    expected_source: str = None,
+    expected_kind: str = None,
+) -> bool:
+    parsed = uuid.UUID(uuid_str)
+    if parsed.version != 4:
         return False
-
-    actual_source = decode_source_from_uuid(uuid_str)
-    actual_kind = decode_kind_from_uuid(uuid_str)
-
-    if expected_source is not None and actual_source != expected_source:
+    if expected_source is not None and decode_source_from_uuid(uuid_str, routing_layout) != expected_source:
         return False
-    if expected_kind is not None and actual_kind != expected_kind:
+    if expected_kind is not None and decode_kind_from_uuid(uuid_str) != expected_kind:
         return False
     return True
 
@@ -426,7 +389,10 @@ def build_node_instance(
     rng: random.Random,
     node_schema: Dict[str, Any],
     sample_data: Dict[str, Any],
-    idx: int
+    idx: int,
+    routing_layout: BackendLayout,
+    placement_strategy: str,
+    source_override: str | None,
 ) -> Dict[str, Any]:
     node_type = node_schema["name"]
     properties = {}
@@ -436,8 +402,14 @@ def build_node_instance(
             rng, prop, sample_data, node_type=node_type, idx=idx
         )
 
-    source_name = node_schema["source"]
-    node_uuid = make_encoded_uuid(source_name, "NODE")
+    if placement_strategy == "schema":
+        configured_source = source_override or node_schema.get("source")
+        if not configured_source:
+            raise ValueError(f"Node type {node_type} has no schema source")
+        source_name = routing_layout.source_for_code(routing_layout.code_for(configured_source))
+        node_uuid = make_encoded_uuid(rng, source_name, "NODE", routing_layout)
+    else:
+        node_uuid, source_name = make_routed_uuid(rng, "NODE", routing_layout)
 
     return {
         "uuid": node_uuid,
@@ -453,7 +425,10 @@ def build_relation_instance(
     sample_data: Dict[str, Any],
     idx: int,
     from_uuid: str,
-    to_uuid: str
+    to_uuid: str,
+    routing_layout: BackendLayout,
+    placement_strategy: str,
+    source_override: str | None,
 ) -> Dict[str, Any]:
     rel_type = rel_schema["name"]
     properties = {}
@@ -463,8 +438,14 @@ def build_relation_instance(
             rng, prop, sample_data, relation_type=rel_type, idx=idx
         )
 
-    source_name = rel_schema["source"]
-    rel_uuid = make_encoded_uuid(source_name, "REL")
+    if placement_strategy == "schema":
+        configured_source = source_override or rel_schema.get("source")
+        if not configured_source:
+            raise ValueError(f"Relationship type {rel_type} has no schema source")
+        source_name = routing_layout.source_for_code(routing_layout.code_for(configured_source))
+        rel_uuid = make_encoded_uuid(rng, source_name, "REL", routing_layout)
+    else:
+        rel_uuid, source_name = make_routed_uuid(rng, "REL", routing_layout)
 
     return {
         "uuid": rel_uuid,
@@ -523,6 +504,8 @@ def generate_dataset(
     sample_data: Dict[str, Any],
     profile_name: str,
     source_override: str = None,
+    storage_backends: List[str] | None = None,
+    placement_strategy: str = "schema",
 ) -> Dict[str, Any]:
     if "profiles" not in config or profile_name not in config["profiles"]:
         raise ValueError(f"Profile '{profile_name}' not found in config")
@@ -530,24 +513,66 @@ def generate_dataset(
     profile = config["profiles"][profile_name]
     rng = random.Random(profile.get("seed", 42))
 
-    #source_name = resolve_source_name(config, sample_data, profile_name, source_override)
     node_counts = profile.get("nodeCounts", {})
     rel_counts = profile.get("relationshipCounts", {})
 
+    if placement_strategy not in {"schema", "identity-hash"}:
+        raise ValueError(f"Unsupported placement strategy: {placement_strategy}")
+
     schema_nodes = {n["name"]: n for n in schema.get("nodeTypes", [])}
     schema_rels = {r["name"]: r for r in schema.get("relations", [])}
+    schema_sources = {
+        str(entry["source"])
+        for entry in [*schema_nodes.values(), *schema_rels.values()]
+        if entry.get("source")
+    }
+
+    if source_override:
+        configured_backends = [source_override]
+    elif storage_backends:
+        configured_backends = storage_backends
+    elif placement_strategy == "identity-hash":
+        configured_backends = profile.get(
+            "storageBackends",
+            config.get(
+                "storageBackends",
+                schema.get("uuidRouting", schema.get("storageBackends")),
+            ),
+        )
+        if not configured_backends:
+            configured_backends = (
+                list(BackendLayout.from_sources(schema_sources).backends)
+                if schema_sources
+                else list(DEFAULT_ROUTING_BACKENDS)
+            )
+    else:
+        configured_backends = schema.get("uuidRouting") or schema.get("storageBackends")
+        if not configured_backends:
+            if not schema_sources:
+                raise ValueError("Schema placement requires source fields on node/relation types")
+            configured_backends = list(BackendLayout.from_sources(schema_sources).backends)
+
+    routing_layout = BackendLayout(tuple(configured_backends))
+    for source in schema_sources:
+        routing_layout.code_for(source)
 
     generated_nodes_by_type: Dict[str, List[Dict[str, Any]]] = {}
     all_nodes: List[Dict[str, Any]] = []
 
-
     for node_type, count in node_counts.items():
         if node_type not in schema_nodes:
             continue
-        
-        
+
         instances = [
-            build_node_instance(rng, schema_nodes[node_type], sample_data, i + 1)
+            build_node_instance(
+                rng,
+                schema_nodes[node_type],
+                sample_data,
+                i + 1,
+                routing_layout,
+                placement_strategy,
+                source_override,
+            )
             for i in range(count)
         ]
         generated_nodes_by_type[node_type] = instances
@@ -570,7 +595,15 @@ def generate_dataset(
 
         for idx, (from_uuid, to_uuid) in enumerate(pairs, start=1):
             rel_instance = build_relation_instance(
-                rng, rel_schema, sample_data, idx, from_uuid, to_uuid
+                rng,
+                rel_schema,
+                sample_data,
+                idx,
+                from_uuid,
+                to_uuid,
+                routing_layout,
+                placement_strategy,
+                source_override,
             )
             all_relationships.append(rel_instance)
 
@@ -579,6 +612,12 @@ def generate_dataset(
         "profile": profile_name,
         "seed": profile.get("seed", 42),
         "generatedAt": datetime.utcnow().isoformat() + "Z",
+        "uuidRoutingStrategy": (
+            "schema-type-placement-v1"
+            if placement_strategy == "schema"
+            else "seeded-random-v1"
+        ),
+        **routing_layout.metadata(),
         "counts": {
             "nodes": len(all_nodes),
             "relationships": len(all_relationships),
@@ -589,19 +628,20 @@ def generate_dataset(
 
 
 def print_decode_examples(dataset: Dict[str, Any]) -> None:
+    routing_layout = BackendLayout(tuple(dataset["uuidRouting"]))
     print("\nDecode examples:")
     if dataset["nodes"]:
         node_uuid = dataset["nodes"][0]["uuid"]
         print(
             f"  Node UUID {node_uuid} -> "
-            f"source={decode_source_from_uuid(node_uuid)}, "
+            f"source={decode_source_from_uuid(node_uuid, routing_layout)}, "
             f"kind={decode_kind_from_uuid(node_uuid)}"
         )
     if dataset["relationships"]:
         rel_uuid = dataset["relationships"][0]["uuid"]
         print(
             f"  Rel UUID  {rel_uuid} -> "
-            f"source={decode_source_from_uuid(rel_uuid)}, "
+            f"source={decode_source_from_uuid(rel_uuid, routing_layout)}, "
             f"kind={decode_kind_from_uuid(rel_uuid)}"
         )
 
@@ -610,7 +650,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "Generate concrete graph JSON from schema template, size config, and sample data pools. "
-            "Each node and relationship gets a real UUID with embedded source and entity-kind bits."
+            "Each node and relationship gets a real UUID with compact backend-routing suffix and entity-kind bits."
         )
     )
     parser.add_argument("schema", help="Path to schema template JSON")
@@ -618,7 +658,20 @@ def main():
     parser.add_argument("sample_data", help="Path to sample data JSON")
     parser.add_argument("-p", "--profile", choices=["small", "medium", "large"], help="Generation profile")
     parser.add_argument("-s", "--seed", type=int, help="Override seed from config")
-    parser.add_argument("--source", help="Override source, e.g. Neo4J, ArangoDB, JanusGraph")
+    parser.add_argument("--source", help="Legacy single-backend override")
+    parser.add_argument(
+        "--placement-strategy",
+        choices=["schema", "identity-hash"],
+        default="schema",
+        help="Use schema type sources by default, or distribute individual objects by hash.",
+    )
+    parser.add_argument(
+        "--storage-backends",
+        nargs="+",
+        choices=["Neo4J", "ArangoDB", "GPU"],
+        default=None,
+        help="Optional ordered UUID backend layout; otherwise derive it from the schema.",
+    )
     parser.add_argument("-o", "--output", default="generated_university.json", help="Output JSON file")
     args = parser.parse_args()
 
@@ -642,6 +695,8 @@ def main():
         sample_data=sample_data,
         profile_name=profile_name,
         source_override=args.source,
+        storage_backends=args.storage_backends,
+        placement_strategy=args.placement_strategy,
     )
 
     with open(args.output, "w", encoding="utf-8") as f:
