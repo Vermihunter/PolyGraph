@@ -26,7 +26,10 @@ class ArangoGraphStore final : public IGraphStore {
                                                   const ExpandSpec& spec,
                                                   int depth) override;
     std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch(
-        std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth) override;
+        std::span<const NodeRef> frontier,
+        const ExpandSpec& spec,
+        int depth,
+        const BfsOptions& options) override;
 
   private:
     [[nodiscard]] static NodeRef node_to_ref(const Node& node);

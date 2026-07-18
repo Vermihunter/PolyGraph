@@ -43,16 +43,17 @@ namespace cpgdb {
     }
 
     std::vector<MinimalAdjacencyRow> ArangoGraphStore::get_minimal_neighbors_batch(std::span<const NodeRef> frontier,
-                                                                                   const ExpandSpec &spec, int depth) {
+                                                                                   const ExpandSpec &spec, int depth,
+                                                                                   const BfsOptions &options) {
         if (frontier.empty()) {
             return {};
         }
 
         if (auto *visitor = dynamic_cast<ArangoQueryVisitor *>(visitor_.get())) {
-            return visitor->get_minimal_neighbors_batch_fast(frontier, spec, depth);
+            return visitor->get_minimal_neighbors_batch_fast(frontier, spec, depth, options.neighbor_batch_size);
         }
 
-        return IGraphStore::get_minimal_neighbors_batch(frontier, spec, depth);
+        return IGraphStore::get_minimal_neighbors_batch(frontier, spec, depth, options);
     }
 
     NodeRef ArangoGraphStore::node_to_ref(const Node &node) {

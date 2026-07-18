@@ -15,6 +15,21 @@ from typing import Any, Iterable, Sequence
 
 AVERAGE_DIR_NAME = "Average"
 
+STRUCTURAL_EVENT_FIELDS = {
+    "event",
+    "seq",
+    "steady_ns",
+    "thread_id",
+    "time",
+    "timestamp",
+    "duration_ns",
+    "duration_us",
+    "duration_ms",
+    "depth",
+}
+
+ATTRIBUTE_CONTAINER_FIELDS = {"attributes", "fields"}
+
 
 @dataclass(frozen=True)
 class Span:
@@ -52,6 +67,65 @@ def _numeric_depth(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _flatten_attribute_value(output: dict[str, Any], key: str, value: Any) -> None:
+    if isinstance(value, dict):
+        if not value:
+            output[key] = "{}"
+            return
+        for child_key, child_value in value.items():
+            child_name = f"{key}.{child_key}" if key else str(child_key)
+            _flatten_attribute_value(output, child_name, child_value)
+        return
+    if isinstance(value, (list, tuple)):
+        output[key] = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        return
+    output[key] = value
+
+
+def _extract_span_attributes(fields: dict[str, Any]) -> dict[str, Any]:
+    attributes: dict[str, Any] = {}
+    for key, value in fields.items():
+        if key in STRUCTURAL_EVENT_FIELDS:
+            continue
+        if key in ATTRIBUTE_CONTAINER_FIELDS and isinstance(value, dict):
+            for child_key, child_value in value.items():
+                _flatten_attribute_value(attributes, str(child_key), child_value)
+            continue
+        _flatten_attribute_value(attributes, str(key), value)
+    return attributes
+
+
+def _aggregate_span_attributes(spans: Sequence[Span]) -> dict[str, Any]:
+    """Preserve stable metadata and average numeric metadata in synthetic runs."""
+    samples_by_key: dict[str, list[Any]] = defaultdict(list)
+    for span in spans:
+        for key, value in _extract_span_attributes(span.fields).items():
+            if value is not None:
+                samples_by_key[key].append(value)
+
+    aggregated: dict[str, Any] = {}
+    for key, values in sorted(samples_by_key.items()):
+        if not values:
+            continue
+        if all(value == values[0] for value in values):
+            aggregated[key] = values[0]
+            continue
+        if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
+            aggregated[key] = _mean([float(value) for value in values])
+            continue
+
+        distinct = []
+        for value in values:
+            rendered = str(value)
+            if rendered not in distinct:
+                distinct.append(rendered)
+        if len(distinct) <= 4:
+            aggregated[key] = "mixed: " + " | ".join(distinct)
+        else:
+            aggregated[key] = f"mixed ({len(distinct)} values)"
+    return aggregated
 
 
 def load_run(path: Path) -> RunProfile:
@@ -195,7 +269,7 @@ def summarize_events(runs: Sequence[RunProfile]) -> list[dict[str, Any]]:
 
 
 def build_average_timeline(runs: Sequence[RunProfile]) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, int | None, int], list[tuple[float, float]]] = defaultdict(list)
+    grouped: dict[tuple[str, int | None, int], list[Span]] = defaultdict(list)
 
     for run in runs:
         occurrence_by_key: dict[tuple[str, int | None], int] = defaultdict(int)
@@ -203,14 +277,13 @@ def build_average_timeline(runs: Sequence[RunProfile]) -> list[dict[str, Any]]:
             base_key = (span.name, span.depth)
             occurrence = occurrence_by_key[base_key]
             occurrence_by_key[base_key] += 1
-            grouped[(span.name, span.depth, occurrence)].append((span.start_ms, span.duration_ms))
+            grouped[(span.name, span.depth, occurrence)].append(span)
 
     rows: list[dict[str, Any]] = []
     for (name, depth, occurrence), samples in grouped.items():
-        starts = [sample[0] for sample in samples]
-        durations = [sample[1] for sample in samples]
-        rows.append(
-            {
+        starts = [sample.start_ms for sample in samples]
+        durations = [sample.duration_ms for sample in samples]
+        row = {
                 "event": name,
                 "depth": "" if depth is None else depth,
                 "occurrence": occurrence + 1,
@@ -220,8 +293,9 @@ def build_average_timeline(runs: Sequence[RunProfile]) -> list[dict[str, Any]]:
                 "avg_duration_ms": _mean(durations),
                 "p95_duration_ms": percentile(durations, 0.95),
                 "stddev_duration_ms": _stdev(durations),
-            }
-        )
+        }
+        row.update(_aggregate_span_attributes(samples))
+        rows.append(row)
 
     return sorted(
         rows,
@@ -238,8 +312,15 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
     if not rows:
         path.write_text("", encoding="utf-8")
         return
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                fieldnames.append(key)
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -258,6 +339,21 @@ def write_average_jsonl(path: Path, timeline: Sequence[dict[str, Any]], run_coun
         }
         if row["depth"] != "":
             common["depth"] = int(row["depth"])
+
+        timeline_fields = {
+            "event",
+            "depth",
+            "occurrence",
+            "sample_runs",
+            "presence_pct",
+            "avg_start_ms",
+            "avg_duration_ms",
+            "p95_duration_ms",
+            "stddev_duration_ms",
+        }
+        for key, value in row.items():
+            if key not in timeline_fields:
+                common[key] = value
 
         synthetic.append(
             {

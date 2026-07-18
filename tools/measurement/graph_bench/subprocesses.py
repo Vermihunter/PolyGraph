@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Mapping, Optional, Sequence
 
@@ -12,10 +14,32 @@ class CommandError(RuntimeError):
 
 
 class CommandRunner:
-    def __init__(self, repo_root: str | Path, *, dry_run: bool = False, verbose: bool = True):
+    def __init__(
+        self,
+        repo_root: str | Path,
+        *,
+        dry_run: bool = False,
+        verbose: bool = True,
+        log_path: str | Path | None = None,
+    ):
         self.repo_root = Path(repo_root)
         self.dry_run = dry_run
         self.verbose = verbose
+        self.log_path = Path(log_path) if log_path else None
+
+    @staticmethod
+    def _bounded_text(value: str | None, limit: int = 65_536) -> str:
+        text = value or ""
+        if len(text) <= limit:
+            return text
+        return text[:limit] + f"\n...[truncated {len(text) - limit} characters]..."
+
+    def _write_log(self, payload: dict[str, object]) -> None:
+        if self.log_path is None:
+            return
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
     def run(
         self,
@@ -27,9 +51,20 @@ class CommandRunner:
         cwd: str | Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         normalized = [str(x) for x in cmd]
+        effective_cwd = Path(cwd or self.repo_root)
         if self.verbose:
             print("+ " + " ".join(normalized), file=sys.stderr)
         if self.dry_run:
+            self._write_log(
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "command": normalized,
+                    "cwd": str(effective_cwd),
+                    "dry_run": True,
+                    "stdout_path": str(stdout_path or ""),
+                    "stderr_path": str(stderr_path or ""),
+                }
+            )
             return subprocess.CompletedProcess(normalized, 0, "", "")
 
         stdout_handle: IO[str] | int | None = None
@@ -44,12 +79,24 @@ class CommandRunner:
 
             completed = subprocess.run(
                 normalized,
-                cwd=str(cwd or self.repo_root),
+                cwd=str(effective_cwd),
                 env={**os.environ, **dict(env or {})},
                 stdout=stdout_handle if stdout_handle else subprocess.PIPE,
                 stderr=stderr_handle if stderr_handle else subprocess.PIPE,
                 text=True,
                 check=False,
+            )
+            self._write_log(
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "command": normalized,
+                    "cwd": str(effective_cwd),
+                    "returncode": completed.returncode,
+                    "stdout_path": str(stdout_path or ""),
+                    "stderr_path": str(stderr_path or ""),
+                    "stdout": self._bounded_text(completed.stdout),
+                    "stderr": self._bounded_text(completed.stderr),
+                }
             )
             if completed.returncode != 0:
                 raise CommandError(

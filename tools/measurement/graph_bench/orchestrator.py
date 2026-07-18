@@ -47,10 +47,15 @@ class BfsBenchmarkOrchestrator:
         self.output_dir = ensure_dir(output_dir)
         self.graph = GraphData.load(config.paths.data)
         self.sink = MeasurementSink(self.output_dir)
-        self.runner = CommandRunner(repo_root(), dry_run=dry_run, verbose=verbose)
         self.generated_dir = ensure_dir(self.output_dir / "generated")
         self.outputs_dir = ensure_dir(self.output_dir / "outputs")
-        self.logs_dir = ensure_dir("logs")
+        self.logs_dir = ensure_dir(self.output_dir / "logs")
+        self.runner = CommandRunner(
+            repo_root(),
+            dry_run=dry_run,
+            verbose=verbose,
+            log_path=self.logs_dir / "commands.jsonl",
+        )
         self.diffs_dir = ensure_dir(self.output_dir / "diffs")
         self.reference_dir = ensure_dir(self.output_dir / "reference")
 
@@ -72,14 +77,20 @@ class BfsBenchmarkOrchestrator:
             output_csv=out,
             details={"data": str(self.config.paths.data)},
         ) as record:
-            self.runner.run([
+            command: list[str | Path] = [
                 sys.executable,
                 self.config.paths.reference_bfs_script,
                 "--input-json", self.config.paths.data,
                 "--output-csv", out,
                 "--start-uuid", start_uuid,
                 "--max-depth", str(self.config.bfs.max_depth),
-            ], stderr_path=self.logs_dir / "reference.log")
+            ]
+            if self.config.bfs.direction == "directed":
+                command.append("--directed")
+            self.runner.run(
+                command,
+                stderr_path=self.logs_dir / "reference" / f"{safe_file_part(start_uuid)}.log",
+            )
             if not self.runner.dry_run:
                 record.vertex_count = len(read_bfs_csv(out))
         return out
@@ -211,29 +222,53 @@ class BfsBenchmarkOrchestrator:
                 neo.close()
                 arango.close()
 
-    def _run_loader(self, data_path: Path, scenario: str, system: str, repetition: int) -> None:
-        self._reset_databases(scenario, system, repetition)
-        with self.sink.measure(scenario=scenario, system=system, phase="load", repetition=repetition, details={"data": str(data_path)}):
-            self.runner.run([
-                sys.executable,
-                self.config.paths.loader_script,
-                data_path,
-                "--arango-url", self.config.arango.base_url,
-                "--arango-user", self.config.arango.user,
-                "--arango-password", self.config.arango.password,
-                "--arango-db", self.config.arango.database,
-                "--neo4j-uri", self.config.neo4j.bolt_uri,
-                "--neo4j-user", self.config.neo4j.user,
-                "--neo4j-password", self.config.neo4j.password,
-                "--batch-size", str(self.config.batch_size),
-            ], stderr_path=self.logs_dir / f"loader_{scenario}_{system}.log")
+    def _run_loader(
+        self,
+        data_path: Path,
+        backend_config: Path,
+        scenario: str,
+        system: str,
+        repetition: int,
+    ) -> None:
+        with self.sink.measure(
+            scenario=scenario,
+            system=system,
+            phase="load",
+            repetition=repetition,
+            details={"data": str(data_path), "backend_config": str(backend_config)},
+        ):
+            self.runner.run(
+                [
+                    sys.executable,
+                    self.config.paths.loader_script,
+                    data_path,
+                    "--backend-config", backend_config,
+                    "--reset",
+                    "--batch-size", str(self.config.batch_size),
+                ],
+                stderr_path=self.logs_dir / "load" / scenario / f"{safe_file_part(system)}.log",
+            )
 
-    def _graph_db_command(self, *, schema: Path, run_id: str, repetition: int, data: Path, backend_config: Path, start_uuid: str, system: str) -> list[str | Path]:
+    def _graph_db_command(
+        self,
+        *,
+        scenario: str,
+        schema: Path,
+        run_id: str,
+        repetition: int,
+        data: Path,
+        backend_config: Path,
+        start_uuid: str,
+        system: str,
+    ) -> list[str | Path]:
         event_log_file = (
-                self.logs_dir
-                / safe_file_part(run_id)
-                / safe_file_part(system)
-                / f"rep{repetition:03d}.events.jsonl"
+            self.logs_dir
+            / "events"
+            / safe_file_part(run_id)
+            / safe_file_part(scenario)
+            / safe_file_part(system)
+            / safe_file_part(start_uuid)
+            / f"rep{repetition:03d}.events.jsonl"
         )
         event_log_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -274,9 +309,25 @@ class BfsBenchmarkOrchestrator:
         ) as record:
 
             self.runner.run(
-                self._graph_db_command(schema=schema, run_id=run_id, repetition=repetition, data=data, backend_config=backend_config, start_uuid=start_uuid, system=system),
+                self._graph_db_command(
+                    scenario=scenario,
+                    schema=schema,
+                    run_id=run_id,
+                    repetition=repetition,
+                    data=data,
+                    backend_config=backend_config,
+                    start_uuid=start_uuid,
+                    system=system,
+                ),
                 stdout_path=out,
-                stderr_path=self.logs_dir / f"graph_db_{scenario}_{system}.log",
+                stderr_path=(
+                    self.logs_dir
+                    / "stderr"
+                    / safe_file_part(scenario)
+                    / safe_file_part(system)
+                    / safe_file_part(start_uuid)
+                    / f"rep{repetition:03d}.log"
+                ),
                 env={"CPGDB_PROFILE": "1", "CPGDB_PROFILE_LAYERS": "1"},
             )
             if not self.runner.dry_run:
@@ -318,7 +369,7 @@ class BfsBenchmarkOrchestrator:
             loaded = False
             for rep in range(1, repetitions + 1):
                 if backend in {"Neo4J", "ArangoDB"} and (reload_each_repetition or not loaded):
-                    self._run_loader(data_path, "implementation_full", f"graph_db_{backend}", rep)
+                    self._run_loader(data_path, backend_config, "implementation_full", f"graph_db_{backend}", rep)
                     loaded = True
                 for start_uuid in start_uuids:
                     self._run_graph_db_bfs(
@@ -342,7 +393,7 @@ class BfsBenchmarkOrchestrator:
         loaded = False
         for rep in range(1, repetitions + 1):
             if reload_each_repetition or not loaded:
-                self._run_loader(self.config.paths.data, "distributed", "graph_db_distributed", rep)
+                self._run_loader(self.config.paths.data, backend_config, "distributed", "graph_db_distributed", rep)
                 loaded = True
             for start_uuid in start_uuids:
                 self._run_graph_db_bfs(

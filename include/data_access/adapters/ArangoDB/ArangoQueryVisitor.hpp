@@ -11,6 +11,7 @@
 #include "infrastructure/BackendConnectionConfig.hpp"
 #include "query/QueryVisitor.hpp"
 
+#include <cstddef>
 #include <memory>
 #include <span>
 #include <vector>
@@ -31,7 +32,10 @@ class ArangoQueryVisitor final : public QueryVisitor {
     query_result_t visit(const InsertBatchQuery& query) override;
 
     [[nodiscard]] std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_fast(
-        std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth) const;
+        std::span<const NodeRef> frontier,
+        const ExpandSpec& spec,
+        int depth,
+        std::size_t batch_size) const;
 
   private:
     struct Impl;

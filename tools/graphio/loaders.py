@@ -201,6 +201,18 @@ def _build_proxy_node(local_source: str, uuid: str, remote: EndpointInfo) -> Nod
     )
 
 
+class Neo4jQueryError(RuntimeError):
+    def __init__(self, errors: list[dict[str, Any]]):
+        self.errors = errors
+        super().__init__(f"Neo4j query failed: {errors}")
+
+    def is_memory_pool_oom(self) -> bool:
+        return any(
+            str(error.get("code", "")).endswith("MemoryPoolOutOfMemoryError")
+            for error in self.errors
+        )
+
+
 class Neo4jHttpAdapter:
     def __init__(self, connection: BackendConnection):
         self.source_name = "Neo4J"
@@ -218,27 +230,53 @@ class Neo4jHttpAdapter:
         )
         errors = response.get("errors", [])
         if errors:
-            raise RuntimeError(f"Neo4j query failed: {errors}")
+            raise Neo4jQueryError(errors)
         return response
 
-    def reset(self) -> None:
-        # Deleting a large graph in one transaction can exhaust Neo4j's
-        # transaction memory pool. Delete a bounded number of nodes per
-        # committed HTTP transaction instead.
-        delete_batch_size = 1_000
+    @staticmethod
+    def _deleted_count(response: dict[str, Any]) -> int:
+        results = response.get("results", [])
+        data = results[0].get("data", []) if results else []
+        return int(data[0]["row"][0]) if data else 0
+
+    def _delete_in_batches(self, statement: str, *, batch_size: int) -> None:
+        current_batch_size = batch_size
         while True:
-            response = self._cypher(
-                "MATCH (n) "
-                "WITH n LIMIT $limit "
-                "DETACH DELETE n "
-                "RETURN count(*) AS deleted",
-                {"limit": delete_batch_size},
-            )
-            results = response.get("results", [])
-            data = results[0].get("data", []) if results else []
-            deleted = int(data[0]["row"][0]) if data else 0
-            if deleted == 0:
-                break
+            try:
+                response = self._cypher(statement, {"limit": current_batch_size})
+            except Neo4jQueryError as error:
+                if not error.is_memory_pool_oom() or current_batch_size == 1:
+                    raise
+                # Dense graphs can make even a modest fixed batch unexpectedly
+                # expensive. Retry the failed transaction with a smaller batch.
+                current_batch_size = max(1, current_batch_size // 2)
+                continue
+
+            if self._deleted_count(response) == 0:
+                return
+
+    def reset(self, *, batch_size: int = 1_000) -> None:
+        if batch_size <= 0:
+            raise ValueError("reset batch size must be positive")
+
+        # DETACH DELETE on a batch of high-degree nodes may still touch millions
+        # of relationships in one transaction. Remove relationships separately
+        # first, so node deletion has small and predictable transaction state.
+        delete_batch_size = min(batch_size, 1_000)
+        self._delete_in_batches(
+            "MATCH ()-[r]->() "
+            "WITH r LIMIT $limit "
+            "DELETE r "
+            "RETURN count(r) AS deleted",
+            batch_size=delete_batch_size,
+        )
+        self._delete_in_batches(
+            "MATCH (n) "
+            "WITH n LIMIT $limit "
+            "DELETE n "
+            "RETURN count(n) AS deleted",
+            batch_size=delete_batch_size,
+        )
 
     def prepare(self, node_types: Iterable[str], _relationship_types: Iterable[str]) -> None:
         for type_name in sorted(set(node_types)):
@@ -336,7 +374,8 @@ class ArangoHttpAdapter:
                 expected=(201, 202),
             )
 
-    def reset(self) -> None:
+    def reset(self, *, batch_size: int = 1_000) -> None:
+        del batch_size  # ArangoDB resets by recreating the whole database.
         _request_json(
             "DELETE",
             self.system_api(f"/_api/database/{urllib.parse.quote(self.database, safe='')}"),
@@ -487,7 +526,7 @@ def load_source(
         return 0, 0, 0
 
     if reset:
-        adapter.reset()
+        adapter.reset(batch_size=batch_size)
     adapter.prepare(node_types, relationship_types)
 
     node_count = 0

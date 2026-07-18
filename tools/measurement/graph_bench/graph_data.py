@@ -80,6 +80,11 @@ def write_schema_with_source(input_schema: str | Path, output: str | Path, sourc
         node_type["source"] = source
     for relationship in schema.get("relations", []):
         relationship["source"] = source
+    # Full-backend benchmark variants use a one-entry UUID layout. With one backend
+    # the suffix width is zero, so the original logical UUIDs remain valid.
+    schema["uuidRouting"] = [source]
+    schema["storageBackends"] = [source]
+    schema["uuidRoutingBits"] = 0
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as handle:

@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <data_access/adapters/Neo4J/Neo4JBoltClient.hpp>
 #include <future>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -270,14 +271,15 @@ namespace cpgdb {
         }
 
         std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier,
-                                                                          const ExpandSpec &spec, int depth) const {
+                                                                          const ExpandSpec &spec, int depth,
+                                                                          std::size_t batch_size) const {
             /*
              * Keep all three calls together so benchmarking/switching requires
              * changing only these lines. The original APOC implementation is
              * intentionally preserved as the third option.
              */
-            return get_minimal_neighbors_batch_direct_union(frontier, spec, depth);
-            // return get_minimal_neighbors_batch_direct_grouped_async(frontier, spec, depth);
+            // return get_minimal_neighbors_batch_direct_union(frontier, spec, depth);
+            return get_minimal_neighbors_batch_direct_grouped_async(frontier, spec, depth, batch_size);
             // return adjacency_rows_to_minimal(get_neighbors_batch_fast(frontier, spec, depth));
         }
 
@@ -559,15 +561,18 @@ namespace cpgdb {
 
         std::vector<MinimalAdjacencyRow>
         get_minimal_neighbors_batch_direct_grouped_async(std::span<const NodeRef> frontier, const ExpandSpec &spec,
-                                                         int depth) const {
+                                                         int depth, std::size_t batch_size) const {
             (void) depth;
 
             if (frontier.empty()) {
                 return {};
             }
+            if (batch_size == 0) {
+                throw std::invalid_argument("Neo4j neighbor batch size must be greater than zero");
+            }
 
             EVENT_SCOPE_INFO(total_span, "neo4j.minimal_neighbors.direct_grouped_async",
-                             {"frontier_size", frontier.size()});
+                             {"frontier_size", frontier.size()}, {"batch_size", batch_size});
 
             auto [rows, row_by_source] = initialize_minimal_rows(frontier);
             const auto grouped_frontier = group_frontier_by_physical_source_label(frontier);
@@ -575,19 +580,29 @@ namespace cpgdb {
             const std::string edge_match = build_edge_match(spec.direction, relationship_type_pattern(edge_type_names));
             const auto target_type_names = target_type_names_for_spec(spec);
 
-            std::vector<std::future<Neo4jGroupResponse>> futures;
-            futures.reserve(grouped_frontier.size());
+            struct Neo4jPreparedBatch {
+                std::string source_label;
+                std::size_t batch_index{};
+                std::size_t batch_count{};
+                std::vector<NodeRef> nodes;
+                std::string query;
+                json parameters;
+            };
+
+            struct Neo4jMinimalBatchResponse {
+                std::string source_label;
+                std::size_t batch_index{};
+                std::size_t batch_count{};
+                std::size_t batch_size{};
+                std::size_t response_row_count{};
+                std::vector<MinimalAdjacencyRow> rows;
+            };
+
+            std::vector<Neo4jPreparedBatch> prepared_batches;
 
             for (const auto &[source_label, group]: grouped_frontier) {
                 if (group.empty()) {
                     continue;
-                }
-
-                json group_frontier = json::array();
-                group_frontier.get_ref<json::array_t &>().reserve(group.size());
-
-                for (const auto &source: group) {
-                    group_frontier.push_back(boost::uuids::to_string(source.global_id));
                 }
 
                 std::string query = "UNWIND $frontier AS source_uuid "
@@ -603,26 +618,82 @@ namespace cpgdb {
 
                 query += minimal_neighbor_projection();
 
-                const json parameters{{"frontier", std::move(group_frontier)}, {"target_types", target_type_names}};
+                const std::size_t batch_count = 1 + ((group.size() - 1) / batch_size);
+                prepared_batches.reserve(prepared_batches.size() + batch_count);
 
-                futures.push_back(std::async(std::launch::async,
-                                             [this, source_label, group_size = group.size(), query = std::move(query),
-                                              parameters]() -> Neo4jGroupResponse {
-                                                 EVENT_SCOPE_INFO(span, "neo4j.minimal_neighbors.direct_group_query",
-                                                                  {"source_label", source_label},
-                                                                  {"group_size", group_size});
+                for (std::size_t offset = 0, batch_index = 0; offset < group.size();
+                     offset += batch_size, ++batch_index) {
+                    const std::size_t current_batch_size = std::min(batch_size, group.size() - offset);
+                    std::vector<NodeRef> batch_nodes(group.begin() + static_cast<std::ptrdiff_t>(offset),
+                                                     group.begin() +
+                                                             static_cast<std::ptrdiff_t>(offset + current_batch_size));
 
-                                                 return Neo4jGroupResponse{.source_label = source_label,
-                                                                           .group_size = group_size,
-                                                                           .response = send_req(query, parameters)};
-                                             }));
+                    json batch_frontier = json::array();
+                    auto &frontier_array = batch_frontier.get_ref<json::array_t &>();
+                    frontier_array.reserve(current_batch_size);
+                    for (const NodeRef &source: batch_nodes) {
+                        frontier_array.emplace_back(boost::uuids::to_string(source.global_id));
+                    }
+
+                    prepared_batches.push_back(
+                            Neo4jPreparedBatch{.source_label = source_label,
+                                               .batch_index = batch_index,
+                                               .batch_count = batch_count,
+                                               .nodes = std::move(batch_nodes),
+                                               .query = query,
+                                               .parameters = json{{"frontier", std::move(batch_frontier)},
+                                                                  {"target_types", target_type_names}}});
+                }
             }
 
+            std::vector<std::future<Neo4jMinimalBatchResponse>> futures;
+            futures.reserve(prepared_batches.size());
+
+            // All request payloads are prepared first. The current implementation
+            // intentionally launches every batch through std::async; ThreadPool is
+            // available for a later bounded-execution change.
+            for (auto &prepared: prepared_batches) {
+                futures.push_back(std::async(
+                        std::launch::async,
+                        [this, prepared = std::move(prepared), spec]() mutable -> Neo4jMinimalBatchResponse {
+                            const std::size_t current_batch_size = prepared.nodes.size();
+                            EVENT_SCOPE_INFO(span, "neo4j.minimal_neighbors.direct_group_query",
+                                             {"source_label", prepared.source_label},
+                                             {"group_size", current_batch_size}, {"batch_index", prepared.batch_index},
+                                             {"batch_count", prepared.batch_count});
+
+                            auto [batch_rows, batch_row_by_source] = initialize_minimal_rows(prepared.nodes);
+                            std::unique_ptr<Neo4JBoltClient> bolt_client;
+                            if (use_bolt_) {
+                                bolt_client = make_bolt_client();
+                            }
+                            const std::size_t response_row_count = send_minimal_req_into_rows(
+                                    prepared.query, prepared.parameters, batch_rows, batch_row_by_source, spec,
+                                    prepared.source_label, current_batch_size, bolt_client.get());
+
+                            return Neo4jMinimalBatchResponse{.source_label = std::move(prepared.source_label),
+                                                             .batch_index = prepared.batch_index,
+                                                             .batch_count = prepared.batch_count,
+                                                             .batch_size = current_batch_size,
+                                                             .response_row_count = response_row_count,
+                                                             .rows = std::move(batch_rows)};
+                        }));
+            }
+
+            total_span.add_end_field("request_count", futures.size());
+
+            std::size_t total_response_rows = 0;
             for (auto &future: futures) {
                 auto result = future.get();
-                parse_minimal_response_into_rows(result.response, rows, row_by_source, spec);
+                EVENT_SCOPE_INFO(response_to_rows, "neo4j.minimal_neighbors.response-into-rows",
+                                 {"label", result.source_label}, {"group_size", result.batch_size},
+                                 {"batch_index", result.batch_index}, {"batch_count", result.batch_count},
+                                 {"response_row_count", result.response_row_count});
+                merge_minimal_rows(std::move(result.rows), rows, row_by_source);
+                total_response_rows += result.response_row_count;
             }
 
+            total_span.add_end_field("response_row_count", total_response_rows);
             total_span.add_end_field("result_source_rows", rows.size());
             return rows;
         }
@@ -659,6 +730,59 @@ namespace cpgdb {
             return {std::move(rows), std::move(row_by_source)};
         }
 
+        static void merge_minimal_rows(
+                std::vector<MinimalAdjacencyRow> source_rows, std::vector<MinimalAdjacencyRow> &target_rows,
+                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &target_row_by_source) {
+            for (auto &source_row: source_rows) {
+                const auto target_iterator = target_row_by_source.find(source_row.source.global_id);
+
+                if (target_iterator == target_row_by_source.end()) {
+                    continue;
+                }
+
+                auto &target_neighbors = target_rows[target_iterator->second].neighbors;
+                target_neighbors.insert(target_neighbors.end(), std::make_move_iterator(source_row.neighbors.begin()),
+                                        std::make_move_iterator(source_row.neighbors.end()));
+            }
+        }
+
+        void append_minimal_response_row(
+                const json &row, std::vector<MinimalAdjacencyRow> &rows,
+                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
+                std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+                        &seen_by_source,
+                const ExpandSpec &spec) const {
+            if (!row.is_array() || row.size() < 7 || row[0].is_null() || row[1].is_null()) {
+                return;
+            }
+
+            const std::string source_uuid = row[0].get<std::string>();
+            const std::string physical_neighbor_uuid = row[1].get<std::string>();
+            const bool looks_like_proxy = bool_or_false(row[3]) ||
+                                          non_empty_string_opt(row[5]).value_or("") == "Proxy" ||
+                                          labels_contain(row[6], "Proxy");
+            const std::string neighbor_uuid =
+                    resolve_logical_neighbor_uuid(physical_neighbor_uuid, row[2], looks_like_proxy);
+            const std::string neighbor_type_name =
+                    resolve_logical_neighbor_type(row[3], row[4], row[5], row[6], physical_neighbor_uuid);
+
+            const auto source_id = boost::lexical_cast<GlobalId>(source_uuid);
+            const auto neighbor_id = boost::lexical_cast<GlobalId>(neighbor_uuid);
+            const auto source_iterator = row_by_source.find(source_id);
+
+            if (source_iterator == row_by_source.end()) {
+                return;
+            }
+
+            const TypeId neighbor_type = db_context_.schema->node_type_id(neighbor_type_name);
+
+            if (!spec.allows_target_type(neighbor_type) || !seen_by_source[source_id].insert(neighbor_id).second) {
+                return;
+            }
+
+            rows[source_iterator->second].neighbors.push_back(NodeRef{.global_id = neighbor_id, .type = neighbor_type});
+        }
+
         void parse_minimal_response_into_rows(
                 const json &response, std::vector<MinimalAdjacencyRow> &rows,
                 const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
@@ -679,43 +803,7 @@ namespace cpgdb {
                 if (!item.contains("row") || !item["row"].is_array()) {
                     continue;
                 }
-
-                const auto &row = item["row"];
-
-                if (row.size() < 7 || row[0].is_null() || row[1].is_null()) {
-                    continue;
-                }
-
-                const std::string source_uuid = row[0].get<std::string>();
-                const std::string physical_neighbor_uuid = row[1].get<std::string>();
-                const bool looks_like_proxy = bool_or_false(row[3]) ||
-                                              non_empty_string_opt(row[5]).value_or("") == "Proxy" ||
-                                              labels_contain(row[6], "Proxy");
-                const std::string neighbor_uuid =
-                        resolve_logical_neighbor_uuid(physical_neighbor_uuid, row[2], looks_like_proxy);
-                const std::string neighbor_type_name =
-                        resolve_logical_neighbor_type(row[3], row[4], row[5], row[6], physical_neighbor_uuid);
-
-                const auto source_id = boost::lexical_cast<GlobalId>(source_uuid);
-                const auto neighbor_id = boost::lexical_cast<GlobalId>(neighbor_uuid);
-                const auto source_iterator = row_by_source.find(source_id);
-
-                if (source_iterator == row_by_source.end()) {
-                    continue;
-                }
-
-                const TypeId neighbor_type = db_context_.schema->node_type_id(neighbor_type_name);
-
-                if (!spec.allows_target_type(neighbor_type)) {
-                    continue;
-                }
-
-                if (!seen_by_source[source_id].insert(neighbor_id).second) {
-                    continue;
-                }
-
-                rows[source_iterator->second].neighbors.push_back(
-                        NodeRef{.global_id = neighbor_id, .type = neighbor_type});
+                append_minimal_response_row(item["row"], rows, row_by_source, seen_by_source, spec);
             }
         }
 
@@ -1156,6 +1244,145 @@ namespace cpgdb {
             }
         }
 
+        [[nodiscard]] std::size_t send_minimal_req_into_rows(
+                const std::string &query, const json &parameters, std::vector<MinimalAdjacencyRow> &rows,
+                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
+                const ExpandSpec &spec, const std::string &source_label, const std::size_t group_size,
+                Neo4JBoltClient *bolt_client) const {
+            std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+                    seen_by_source;
+
+            if (use_bolt_) {
+                if (bolt_client == nullptr) {
+                    throw std::logic_error("Neo4j async minimal request requires a request-local Bolt client");
+                }
+
+                EVENT_SCOPE_INFO(bolt_span, "neo4j.bfs_bolt_query", {"source_label", source_label},
+                                 {"group_size", group_size}, {"streaming_minimal_rows", false});
+                const json response = bolt_client->run(query, parameters);
+                const std::size_t response_row_count = response.contains("results") && response["results"].is_array() &&
+                                                                       !response["results"].empty() &&
+                                                                       response["results"][0].contains("data") &&
+                                                                       response["results"][0]["data"].is_array()
+                                                               ? response["results"][0]["data"].size()
+                                                               : 0;
+                parse_minimal_response_into_rows(response, rows, row_by_source, spec);
+                bolt_span.add_end_field("response_row_count", response_row_count);
+                return response_row_count;
+            }
+
+            EVENT_SCOPE_INFO(total_span, "neo4j.bfs_http_query", {"source_label", source_label},
+                             {"group_size", group_size}, {"streaming_minimal_rows", true});
+
+            json request;
+            {
+                EVENT_SCOPE_INFO(request_span, "neo4j.bfs_req_construct", {"source_label", source_label},
+                                 {"group_size", group_size});
+                request = json{{"statements", json::array({{{"statement", query}, {"parameters", parameters}}})}};
+                request_span.add_end_field("query_bytes", query.size());
+            }
+
+            std::string request_body;
+            {
+                EVENT_SCOPE_INFO(dump_span, "neo4j.bfs_json_req_dump", {"source_label", source_label});
+                request_body = request.dump();
+                dump_span.add_end_field("request_bytes", request_body.size());
+            }
+
+            std::string auth;
+            if (config_.credentials.has_value()) {
+                auth = config_.credentials->username + ":" + config_.credentials->password;
+            }
+
+            std::string response_body;
+            {
+                EVENT_SCOPE_INFO(http_span, "neo4j.bfs_http_post", {"source_label", source_label},
+                                 {"request_bytes", request_body.size()});
+                response_body = http_post(config_.endpoint, request_body, auth);
+                http_span.add_end_field("response_bytes", response_body.size());
+            }
+
+            std::size_t response_row_count = 0;
+            std::vector<bool> object_contains_consumed_row;
+
+            const auto callback = [&](const int depth, const json::parse_event_t event, json &parsed) -> bool {
+                const auto ensure_depth = [&object_contains_consumed_row](const int requested_depth) {
+                    if (requested_depth < 0) {
+                        return;
+                    }
+
+                    const auto required_size = static_cast<std::size_t>(requested_depth) + 1;
+                    if (object_contains_consumed_row.size() < required_size) {
+                        object_contains_consumed_row.resize(required_size, false);
+                    }
+                };
+
+                if (event == json::parse_event_t::object_start) {
+                    ensure_depth(depth);
+                    object_contains_consumed_row[static_cast<std::size_t>(depth)] = false;
+                    return true;
+                }
+
+                if (event == json::parse_event_t::array_end) {
+                    const bool looks_like_minimal_row =
+                            parsed.is_array() && parsed.size() >= 7 && parsed[0].is_string() && parsed[1].is_string() &&
+                            (parsed[2].is_null() || parsed[2].is_string()) &&
+                            (parsed[3].is_boolean() || parsed[3].is_null()) &&
+                            (parsed[4].is_string() || parsed[4].is_null()) &&
+                            (parsed[5].is_string() || parsed[5].is_null()) && parsed[6].is_array();
+
+                    if (!looks_like_minimal_row) {
+                        return true;
+                    }
+
+                    append_minimal_response_row(parsed, rows, row_by_source, seen_by_source, spec);
+                    ++response_row_count;
+
+                    if (depth > 0) {
+                        ensure_depth(depth - 1);
+                        object_contains_consumed_row[static_cast<std::size_t>(depth - 1)] = true;
+                    }
+
+                    // The row has already been converted to MinimalAdjacencyRow.
+                    // Discard it from the JSON DOM immediately.
+                    return false;
+                }
+
+                if (event == json::parse_event_t::object_end) {
+                    ensure_depth(depth);
+                    if (object_contains_consumed_row[static_cast<std::size_t>(depth)]) {
+                        // Discard the Neo4j data wrapper object as well. This
+                        // prevents one empty object per result row from being
+                        // retained in results[0].data.
+                        return false;
+                    }
+                }
+
+                return true;
+            };
+
+            json metadata;
+            {
+                EVENT_SCOPE_INFO(parse_span, "neo4j.bfs_response_to_minimal_rows_parse", {"source_label", source_label},
+                                 {"response_bytes", response_body.size()});
+                metadata = json::parse(response_body, callback);
+                parse_span.add_end_field("response_row_count", response_row_count);
+            }
+
+            if (metadata.contains("errors") && metadata["errors"].is_array() && !metadata["errors"].empty()) {
+                throw std::runtime_error("Neo4J minimal neighbor query failed: " + metadata["errors"].dump());
+            }
+
+            if (!metadata.contains("results") || !metadata["results"].is_array() || metadata["results"].empty() ||
+                !metadata["results"][0].contains("data")) {
+                throw std::runtime_error("Neo4J minimal neighbor response has no results[0].data: " + metadata.dump());
+            }
+
+            total_span.add_end_field("response_row_count", response_row_count);
+            total_span.add_end_field("status", "ok");
+            return response_row_count;
+        }
+
         json send_req(const std::string &query, const json &parameters) const {
             // CPGDB_PROFILE_FUNCTION();
 
@@ -1213,6 +1440,18 @@ namespace cpgdb {
             }
 
             return config.transport == "bolt";
+        }
+
+        [[nodiscard]] std::unique_ptr<Neo4JBoltClient> make_bolt_client() const {
+            std::string username;
+            std::string password;
+
+            if (config_.credentials.has_value()) {
+                username = config_.credentials->username;
+                password = config_.credentials->password;
+            }
+
+            return std::make_unique<Neo4JBoltClient>(bolt_endpoint_, username, password, config_.database_name);
         }
 
         static std::string resolve_bolt_endpoint(const BackendConnectionConfig &config) {
@@ -1283,8 +1522,8 @@ namespace cpgdb {
 
     std::vector<MinimalAdjacencyRow>
     Neo4JQueryVisitor::get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier, const ExpandSpec &spec,
-                                                        int depth) const {
-        return impl_->get_minimal_neighbors_batch_fast(frontier, spec, depth);
+                                                        int depth, std::size_t batch_size) const {
+        return impl_->get_minimal_neighbors_batch_fast(frontier, spec, depth, batch_size);
     }
 
 } // namespace cpgdb

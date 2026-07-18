@@ -7,6 +7,7 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -17,6 +18,247 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tools.event_log_average import AVERAGE_DIR_NAME, analyze_log_tree
+
+
+STRUCTURAL_EVENT_FIELDS = {
+    "event",
+    "seq",
+    "steady_ns",
+    "thread_id",
+    "time",
+    "timestamp",
+    "duration_ns",
+    "duration_us",
+    "duration_ms",
+}
+
+ATTRIBUTE_CONTAINER_FIELDS = {"attributes", "fields"}
+
+PREFERRED_ATTRIBUTE_ORDER = (
+    "depth",
+    "backend",
+    "source_backend",
+    "target_backend",
+    "frontier_size",
+    "row_size",
+    "batch_size",
+    "source_rows",
+    "result_count",
+)
+
+
+def _flatten_attribute_value(
+        output: dict[str, Any],
+        key: str,
+        value: Any,
+) -> None:
+    """Flatten nested event metadata while keeping arrays readable."""
+    if isinstance(value, dict):
+        if not value:
+            output[key] = "{}"
+            return
+        for child_key, child_value in value.items():
+            child_name = f"{key}.{child_key}" if key else str(child_key)
+            _flatten_attribute_value(output, child_name, child_value)
+        return
+
+    if isinstance(value, (list, tuple)):
+        output[key] = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        return
+
+    output[key] = value
+
+
+def is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (dict, list, tuple, set)):
+        return False
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    try:
+        return bool(missing)
+    except (TypeError, ValueError):
+        return False
+
+
+def span_field_value(
+        start_event: dict[str, Any],
+        end_event: dict[str, Any],
+        key: str,
+) -> Any:
+    end_value = end_event.get(key)
+    if not is_missing_value(end_value):
+        return end_value
+    start_value = start_event.get(key)
+    if not is_missing_value(start_value):
+        return start_value
+    return None
+
+
+def extract_event_attributes(event: dict[str, Any]) -> dict[str, Any]:
+    """Return every non-structural field attached to a log event.
+
+    Some logger implementations put custom fields directly on the event while
+    others wrap them in ``fields`` or ``attributes``. Both representations are
+    normalized into the same flat attribute namespace.
+    """
+    attributes: dict[str, Any] = {}
+    for key, value in event.items():
+        if key in STRUCTURAL_EVENT_FIELDS:
+            continue
+        if is_missing_value(value):
+            continue
+        if key in ATTRIBUTE_CONTAINER_FIELDS and isinstance(value, dict):
+            for child_key, child_value in value.items():
+                _flatten_attribute_value(attributes, str(child_key), child_value)
+            continue
+        _flatten_attribute_value(attributes, str(key), value)
+    return attributes
+
+
+def merge_span_attributes(
+        start_event: dict[str, Any],
+        end_event: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge metadata from both boundaries without hiding changed values."""
+    start_attributes = extract_event_attributes(start_event)
+    end_attributes = extract_event_attributes(end_event)
+    merged: dict[str, Any] = {}
+
+    for key in sorted(set(start_attributes) | set(end_attributes)):
+        in_start = key in start_attributes
+        in_end = key in end_attributes
+        if in_start and in_end and start_attributes[key] != end_attributes[key]:
+            merged[f"start.{key}"] = start_attributes[key]
+            merged[f"end.{key}"] = end_attributes[key]
+        elif in_end:
+            merged[key] = end_attributes[key]
+        else:
+            merged[key] = start_attributes[key]
+    return merged
+
+
+def _attribute_sort_key(key: str) -> tuple[int, str]:
+    try:
+        return PREFERRED_ATTRIBUTE_ORDER.index(key), key
+    except ValueError:
+        return len(PREFERRED_ATTRIBUTE_ORDER), key
+
+
+def format_attribute_value(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def event_name_prefix(event_name: str) -> str:
+    """Return the first namespace component used by timeline family filters."""
+    prefix, separator, _ = str(event_name).partition(".")
+    return prefix if separator else str(event_name)
+
+
+def attribute_filter_token(value: Any) -> str:
+    """Create a type-aware browser-stable token for an attribute value."""
+    if isinstance(value, bool):
+        return f"boolean:{str(value).lower()}"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"number:{json.dumps(value, separators=(',', ':'))}"
+    if isinstance(value, str):
+        return f"string:{value}"
+    return "json:" + json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def attribute_filter_label(value: Any) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    return format_attribute_value(value)
+
+
+def build_timeline_filter_metadata(spans: pd.DataFrame) -> dict[str, Any]:
+    """Describe event families and categorical attribute values for the UI."""
+    prefix_counts: dict[str, int] = defaultdict(int)
+    event_duration_stats: dict[str, dict[str, Any]] = {}
+    attribute_values: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    attribute_presence: dict[str, int] = defaultdict(int)
+
+    for _, span in spans.iterrows():
+        event_name = str(span["name"])
+        prefix_counts[event_name_prefix(event_name)] += 1
+
+        duration_ms = float(span["duration_ms"])
+        duration_entry = event_duration_stats.setdefault(
+            event_name,
+            {
+                "name": event_name,
+                "count": 0,
+                "minDurationMs": duration_ms,
+                "maxDurationMs": duration_ms,
+            },
+        )
+        duration_entry["count"] += 1
+        duration_entry["minDurationMs"] = min(
+            duration_entry["minDurationMs"], duration_ms
+        )
+        duration_entry["maxDurationMs"] = max(
+            duration_entry["maxDurationMs"], duration_ms
+        )
+
+        attributes = span.get("attributes")
+        if not isinstance(attributes, dict):
+            continue
+        for key, value in attributes.items():
+            token = attribute_filter_token(value)
+            entry = attribute_values[str(key)].setdefault(
+                token,
+                {"token": token, "label": attribute_filter_label(value), "count": 0},
+            )
+            entry["count"] += 1
+            attribute_presence[str(key)] += 1
+
+    total_spans = len(spans)
+    attributes: dict[str, Any] = {}
+    for key in sorted(attribute_values, key=_attribute_sort_key):
+        values = sorted(
+            attribute_values[key].values(),
+            key=lambda item: (str(item["label"]).lower(), str(item["token"])),
+        )
+        attributes[key] = {
+            "values": values,
+            "missingCount": total_spans - attribute_presence[key],
+        }
+
+    return {
+        "prefixes": [
+            {"name": prefix, "count": count}
+            for prefix, count in sorted(prefix_counts.items(), key=lambda item: item[0].lower())
+        ],
+        "events": sorted(
+            event_duration_stats.values(),
+            key=lambda item: str(item["name"]).lower(),
+        ),
+        "attributes": attributes,
+        "spanCount": total_spans,
+    }
+
+
+def safe_json_for_html(value: Any) -> str:
+    return (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
 
 
 # ============================================================
@@ -189,10 +431,11 @@ def pair_spans(events: pd.DataFrame) -> pd.DataFrame:
             merged = {}
             merged.update(start_row)
             merged.update(end_row)
+            attributes = merge_span_attributes(start_row, end_row)
 
             duration_ns = end_ns - start_ns
 
-            spans.append({
+            span = {
                 "name": base_name,
                 "thread_id": thread_id,
 
@@ -206,15 +449,26 @@ def pair_spans(events: pd.DataFrame) -> pd.DataFrame:
                 "duration_us_calc": duration_ns / 1_000.0,
                 "duration_ms": duration_ns / 1_000_000.0,
 
-                "duration_us_logged": merged.get("duration_us"),
+                "duration_us_logged": span_field_value(start_row, end_row, "duration_us"),
 
-                "depth": merged.get("depth"),
-                "row_size": merged.get("row_size"),
-                "frontier_size": merged.get("frontier_size"),
+                "depth": span_field_value(start_row, end_row, "depth"),
+                "row_size": span_field_value(start_row, end_row, "row_size"),
+                "frontier_size": span_field_value(start_row, end_row, "frontier_size"),
+
+                "attributes": attributes,
+                "attributes_json": json.dumps(
+                    attributes,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
 
                 "start_event": start_row,
                 "end_event": end_row,
-            })
+            }
+            for attribute_name, attribute_value in attributes.items():
+                span[f"attr.{attribute_name}"] = attribute_value
+            spans.append(span)
 
     unclosed_count = sum(len(v) for v in stacks.values())
     unmatched_end_count = len(unmatched_ends)
@@ -223,6 +477,14 @@ def pair_spans(events: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("No spans reconstructed. Make sure events use .start and .end suffixes.")
 
     span_df = pd.DataFrame(spans)
+    span_df = span_df.sort_values(["start_ns", "end_ns"]).reset_index(drop=True)
+
+    # Keep the raw logger thread identifier for reconstruction/grouping, but expose
+    # a compact and stable zero-based identifier in every generated view.  Ordering
+    # by first observed span makes the mapping deterministic for a given execution.
+    thread_order = span_df["thread_id"].drop_duplicates().tolist()
+    thread_indices = {thread_id: index for index, thread_id in enumerate(thread_order)}
+    span_df["thread_index"] = span_df["thread_id"].map(thread_indices).astype(int)
 
     t0 = span_df["start_ns"].min()
 
@@ -232,7 +494,7 @@ def pair_spans(events: pd.DataFrame) -> pd.DataFrame:
     span_df.attrs["unclosed_count"] = unclosed_count
     span_df.attrs["unmatched_end_count"] = unmatched_end_count
 
-    return span_df.sort_values(["start_ns", "end_ns"]).reset_index(drop=True)
+    return span_df
 
 
 # ============================================================
@@ -276,10 +538,13 @@ def assign_overlap_lanes(
 # ============================================================
 
 def make_hover_text(row) -> str:
+    overlap_lane = row.get("overlap_lane", 0)
+    if is_missing_value(overlap_lane):
+        overlap_lane = 0
     parts = [
         f"<b>{html.escape(str(row['name']))}</b>",
-        f"thread: {row['thread_id']}",
-        f"lane: {int(row['overlap_lane'])}",
+        f"thread: {int(row.get('thread_index', row['thread_id']))}",
+        f"lane: {int(overlap_lane)}",
         f"start: {row['start_ms']:.3f} ms",
         f"end: {row['end_ms']:.3f} ms",
         f"duration: {row['duration_ms']:.3f} ms",
@@ -302,15 +567,92 @@ def make_hover_text(row) -> str:
     if pd.notna(row.get("seq_start")) and pd.notna(row.get("seq_end")):
         parts.append(f"seq: {int(row['seq_start'])} → {int(row['seq_end'])}")
 
+    attributes = row.get("attributes")
+    if isinstance(attributes, dict) and attributes:
+        already_rendered = {"depth", "row_size", "frontier_size"}
+        dynamic_attributes = [
+            (key, value)
+            for key, value in attributes.items()
+            if key not in already_rendered
+        ]
+        if dynamic_attributes:
+            parts.append("<b>attributes</b>")
+            for key, value in sorted(dynamic_attributes, key=lambda item: _attribute_sort_key(item[0])):
+                safe_key = html.escape(str(key))
+                safe_value = html.escape(format_attribute_value(value))
+                parts.append(f"{safe_key}: {safe_value}")
+
     return "<br>".join(parts)
 
 
+def build_attributes_html(run: dict) -> str:
+    """Render every dynamic span attribute as a searchable long-form table."""
+    spans = run["spans"]
+    rows: list[str] = []
+    attribute_names: set[str] = set()
+
+    for _, span in spans.iterrows():
+        attributes = span.get("attributes")
+        if not isinstance(attributes, dict):
+            continue
+        for key, value in sorted(attributes.items(), key=lambda item: _attribute_sort_key(item[0])):
+            attribute_names.add(key)
+            rows.append(
+                "<tr>"
+                f"<td>{html.escape(str(span['name']))}</td>"
+                f"<td>{float(span['start_ms']):.3f}</td>"
+                f"<td>{float(span['duration_ms']):.3f}</td>"
+                f"<td>{int(span.get('thread_index', span['thread_id']))}</td>"
+                f"<td>{html.escape(str(key))}</td>"
+                f"<td><code>{html.escape(format_attribute_value(value))}</code></td>"
+                "</tr>"
+            )
+
+    if not rows:
+        return unavailable_view("This run has no custom event attributes.")
+
+    table_id = f"attributes_{run['safe_id']}"
+    return f"""
+    <div class="attributes-view">
+      <div class="attributes-heading">
+        <div>
+          <h2>Span attributes</h2>
+          <p>{len(attribute_names)} distinct fields across {len(rows)} attribute values.</p>
+        </div>
+        <input
+          class="attribute-filter"
+          type="search"
+          placeholder="Filter event, attribute, or value…"
+          oninput="filterAttributeTable('{table_id}', this.value)"
+        />
+      </div>
+      <div class="attribute-table-wrap">
+        <table class="attribute-table" id="{table_id}">
+          <thead><tr>
+            <th>Event</th><th>Start ms</th><th>Duration ms</th>
+            <th>Thread</th><th>Attribute</th><th>Value</th>
+          </tr></thead>
+          <tbody>{''.join(rows)}</tbody>
+        </table>
+      </div>
+    </div>
+    """
+
+
+def display_thread_index(row) -> int:
+    value = row.get("thread_index", row["thread_id"])
+    return int(value)
+
+
 def make_lane_by_thread(row) -> str:
-    return f"thread {row['thread_id']} / lane {int(row['overlap_lane'])}"
+    return f"thread {display_thread_index(row)} / lane {int(row['overlap_lane'])}"
 
 
 def make_lane_by_thread_and_event(row) -> str:
-    return f"thread {row['thread_id']} / {row['name']} / lane {int(row['overlap_lane'])}"
+    return (
+        f"thread {display_thread_index(row)} / {row['name']} "
+        f"/ lane {int(row['overlap_lane'])}"
+    )
 
 
 def make_lane_by_depth(row) -> str:
@@ -350,13 +692,20 @@ def build_timeline_figure(
     fig = go.Figure()
 
     for event_name, group in df.groupby("name", sort=False):
+        customdata = [
+            [hover, attributes_json]
+            for hover, attributes_json in zip(
+                group["hover"].tolist(),
+                group["attributes_json"].tolist(),
+            )
+        ]
         fig.add_trace(go.Bar(
             x=group["duration_ms"],
             y=group["lane"],
             base=group["start_ms"],
             orientation="h",
             name=event_name,
-            customdata=group[["hover"]],
+            customdata=customdata,
             hovertemplate="%{customdata[0]}<extra></extra>",
         ))
 
@@ -755,6 +1104,7 @@ def build_run_overview_html(run: dict) -> str:
 
 VIEW_OPTIONS = [
     ("overview", "Overview"),
+    ("attributes", "Attributes"),
     ("timeline_thread", "Timeline: by thread"),
     ("timeline_thread_event", "Timeline: by thread + event"),
     ("timeline_depth", "Timeline: by BFS depth"),
@@ -782,6 +1132,122 @@ def unavailable_view(message: str) -> str:
     <div class="empty-view">
       <h2>Unavailable view</h2>
       <p>{html.escape(message)}</p>
+    </div>
+    """
+
+
+def build_timeline_thread_view(run: dict) -> str:
+    spans = run["spans"]
+    run_id = run["safe_id"]
+    plot_id = f"{run_id}_timeline_thread"
+    metadata_id = f"{run_id}_timeline_thread_filters"
+    metadata = build_timeline_filter_metadata(spans)
+
+    prefix_controls = []
+    for index, prefix in enumerate(metadata["prefixes"]):
+        checkbox_id = f"{run_id}_prefix_{index}"
+        prefix_controls.append(
+            f'''<label class="filter-chip" for="{html.escape(checkbox_id)}">
+                 <input id="{html.escape(checkbox_id)}" type="checkbox"
+                        data-timeline-prefix value="{html.escape(prefix['name'])}" checked />
+                 <span>{html.escape(prefix['name'])}</span>
+                 <small>{int(prefix['count'])}</small>
+               </label>'''
+        )
+
+    attribute_options = [
+        '<option value="">Choose an attribute...</option>'
+    ]
+    for attribute_name in metadata["attributes"]:
+        attribute_options.append(
+            f'<option value="{html.escape(attribute_name)}">{html.escape(attribute_name)}</option>'
+        )
+
+    duration_event_options = [
+        '<option value="">Choose an event type...</option>'
+    ]
+    for event in metadata["events"]:
+        duration_event_options.append(
+            '<option '
+            f'value="{html.escape(str(event["name"]))}" '
+            f'data-min-duration-ms="{float(event["minDurationMs"]):.12g}" '
+            f'data-max-duration-ms="{float(event["maxDurationMs"]):.12g}">'
+            f'{html.escape(str(event["name"]))}'
+            '</option>'
+        )
+
+    figure = build_timeline_figure(
+        spans,
+        title=f"Execution Timeline by Thread — {run['label']}",
+        group_cols=("thread_id",),
+        lane_fn=make_lane_by_thread,
+    )
+
+    return f"""
+    <div class="timeline-filtered-view"
+         data-timeline-filter
+         data-plot-id="{html.escape(plot_id)}"
+         data-metadata-id="{html.escape(metadata_id)}">
+      <div class="timeline-filter-panel">
+        <div class="timeline-filter-section">
+          <div class="timeline-filter-heading">
+            <div>
+              <strong>Event families</strong>
+              <span>Toggle every event sharing the first name component.</span>
+            </div>
+            <div class="filter-actions">
+              <button type="button" data-prefix-action="all">Show all</button>
+              <button type="button" data-prefix-action="none">Hide all</button>
+            </div>
+          </div>
+          <div class="filter-chip-list">{''.join(prefix_controls)}</div>
+        </div>
+
+        <div class="timeline-filter-section">
+          <div class="timeline-filter-heading">
+            <div>
+              <strong>Event attributes</strong>
+              <span>Values within one attribute use OR; multiple attribute cards combine with AND.</span>
+            </div>
+            <button type="button" data-filter-reset>Reset filters</button>
+          </div>
+          <div class="attribute-filter-toolbar">
+            <label class="attribute-select-label">
+              Add attribute
+              <select data-attribute-select>{''.join(attribute_options)}</select>
+            </label>
+            <button type="button" data-add-attribute-filter disabled>Add filter</button>
+          </div>
+          <div class="attribute-filter-card-list" data-active-attribute-filters>
+            <span class="filter-empty-hint">No attribute filters active.</span>
+          </div>
+        </div>
+
+        <div class="timeline-filter-section">
+          <div class="timeline-filter-heading">
+            <div>
+              <strong>Event duration ranges</strong>
+              <span>Apply an inclusive minimum and/or maximum duration to a selected event type. Other event types remain unchanged.</span>
+            </div>
+          </div>
+          <div class="duration-filter-toolbar">
+            <label class="duration-select-label">
+              Add event
+              <select data-duration-event-select>{''.join(duration_event_options)}</select>
+            </label>
+            <button type="button" data-add-duration-filter disabled>Add range</button>
+          </div>
+          <div class="duration-filter-card-list" data-active-duration-filters>
+            <span class="filter-empty-hint">No duration ranges active.</span>
+          </div>
+        </div>
+
+        <div class="timeline-filter-status" data-filter-status></div>
+      </div>
+      <div class="timeline-plot">{figure_to_div(figure, div_id=plot_id)}</div>
+      <script type="application/json" id="{html.escape(metadata_id)}">
+        {safe_json_for_html(metadata)}
+      </script>
     </div>
     """
 
@@ -826,15 +1292,8 @@ def build_dashboard(
 
         view_html = {
             "overview": build_run_overview_html(run),
-            "timeline_thread": figure_to_div(
-                build_timeline_figure(
-                    spans,
-                    title=f"Execution Timeline by Thread — {run['label']}",
-                    group_cols=("thread_id",),
-                    lane_fn=make_lane_by_thread,
-                ),
-                div_id=f"{run_id}_timeline_thread",
-            ),
+            "attributes": build_attributes_html(run),
+            "timeline_thread": build_timeline_thread_view(run),
             "timeline_thread_event": figure_to_div(
                 build_timeline_figure(
                     spans,
@@ -1106,11 +1565,895 @@ def build_dashboard(
         top: 0;
         background: #eef2f7;
       }
+
+      .timeline-filtered-view {
+        background: #f8fafc;
+        color: #111827;
+        border-radius: 12px;
+        overflow: hidden;
+      }
+
+      .timeline-filter-panel {
+        display: grid;
+        gap: 14px;
+        padding: 18px 20px 10px;
+        border-bottom: 1px solid #dbe3ef;
+        background: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+      }
+
+      .timeline-filter-section {
+        padding: 14px;
+        border: 1px solid #dbe3ef;
+        border-radius: 12px;
+        background: white;
+      }
+
+      .timeline-filter-heading {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 11px;
+      }
+
+      .timeline-filter-heading strong,
+      .timeline-filter-heading span {
+        display: block;
+      }
+
+      .timeline-filter-heading span {
+        margin-top: 3px;
+        color: #64748b;
+        font-size: 12px;
+      }
+
+      .filter-actions {
+        display: flex;
+        gap: 7px;
+      }
+
+      .timeline-filter-panel button {
+        padding: 7px 10px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        background: #f8fafc;
+        color: #0f172a;
+        cursor: pointer;
+        font-weight: 650;
+      }
+
+      .timeline-filter-panel button:hover {
+        background: #e2e8f0;
+      }
+
+      .filter-chip-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .filter-chip {
+        display: inline-flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 10px;
+        border: 1px solid #cbd5e1;
+        border-radius: 999px;
+        background: #f8fafc;
+        color: #0f172a;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .filter-chip:has(input:checked) {
+        border-color: #60a5fa;
+        background: #dbeafe;
+      }
+
+      .filter-chip input {
+        margin: 0;
+        accent-color: #2563eb;
+      }
+
+      .filter-chip small {
+        min-width: 22px;
+        padding: 1px 6px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.09);
+        color: #475569;
+        text-align: center;
+      }
+
+      .attribute-filter-toolbar,
+      .duration-filter-toolbar {
+        display: flex;
+        align-items: end;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .attribute-filter-toolbar > button:disabled,
+      .duration-filter-toolbar > button:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+
+      .attribute-select-label,
+      .duration-select-label {
+        display: grid;
+        grid-template-columns: max-content minmax(220px, 420px);
+        align-items: center;
+        gap: 10px;
+        color: #475569;
+        font-weight: 650;
+      }
+
+      .attribute-select-label select,
+      .duration-select-label select {
+        min-width: 0;
+        width: 100%;
+        background: white;
+        color: #111827;
+        border-color: #cbd5e1;
+      }
+
+      .attribute-filter-card-list,
+      .duration-filter-card-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .attribute-filter-card,
+      .duration-filter-card {
+        min-width: 0;
+        padding: 12px;
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        background: #ffffff;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+      }
+
+      .attribute-filter-card-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .attribute-filter-card-title {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .attribute-filter-card-title strong {
+        color: #0f172a;
+        overflow-wrap: anywhere;
+      }
+
+      .attribute-filter-card-title span {
+        color: #64748b;
+        font-size: 12px;
+      }
+
+      .attribute-filter-card-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+
+      .attribute-filter-card-actions button {
+        padding: 5px 8px;
+        font-size: 12px;
+      }
+
+      .attribute-filter-card-actions .attribute-filter-remove {
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        border-color: #fecaca;
+        background: #fff1f2;
+        color: #be123c;
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      .attribute-filter-card-actions .attribute-filter-remove:hover {
+        background: #ffe4e6;
+      }
+
+      .duration-range-fields {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .duration-range-field {
+        display: grid;
+        gap: 5px;
+        color: #475569;
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .duration-range-field input {
+        min-width: 0;
+        width: 100%;
+        padding: 8px 9px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        background: white;
+        color: #111827;
+      }
+
+      .duration-range-field input:focus {
+        outline: 2px solid rgba(37, 99, 235, 0.22);
+        border-color: #60a5fa;
+      }
+
+      .duration-range-summary {
+        margin-top: 9px;
+        color: #64748b;
+        font-size: 12px;
+      }
+
+      .duration-filter-card.range-invalid {
+        border-color: #fca5a5;
+        background: #fff7f7;
+      }
+
+      .duration-filter-card.range-invalid .duration-range-summary {
+        color: #b91c1c;
+        font-weight: 700;
+      }
+
+      .attribute-filter-card > .filter-chip-list {
+        max-height: 190px;
+        overflow-y: auto;
+        padding-right: 3px;
+      }
+
+      .filter-empty-hint {
+        color: #64748b;
+        font-size: 13px;
+      }
+
+      .timeline-filter-status {
+        color: #475569;
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .timeline-plot {
+        overflow-x: auto;
+        background: white;
+      }
+
+      .attributes-view {
+        background: #f8fafc;
+        color: #111827;
+        border-radius: 12px;
+        padding: 22px;
+      }
+
+      .attributes-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+
+      .attributes-heading h2,
+      .attributes-heading p {
+        margin-top: 0;
+      }
+
+      .attribute-filter {
+        min-width: min(420px, 100%);
+        padding: 10px 12px;
+        border: 1px solid #cbd5e1;
+        border-radius: 9px;
+        background: white;
+        color: #111827;
+      }
+
+      .attribute-table-wrap {
+        max-height: 760px;
+        overflow: auto;
+        border: 1px solid #dbe3ef;
+        border-radius: 12px;
+        background: white;
+      }
+
+      .attribute-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      .attribute-table th,
+      .attribute-table td {
+        padding: 9px 11px;
+        border-bottom: 1px solid #e5e7eb;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .attribute-table thead {
+        position: sticky;
+        top: 0;
+        background: #eef2f7;
+      }
+
+      .attribute-table code {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
     </style>
     """
 
     js = """
     <script>
+      const timelineFilterStates = new WeakMap();
+
+      function filterAttributeTable(tableId, query) {
+        const normalized = query.trim().toLowerCase();
+        const table = document.getElementById(tableId);
+        if (!table) return;
+        table.querySelectorAll("tbody tr").forEach(row => {
+          row.style.display = !normalized || row.textContent.toLowerCase().includes(normalized)
+            ? ""
+            : "none";
+        });
+      }
+
+      function cloneTimelineValue(value) {
+        if (typeof structuredClone === "function") {
+          return structuredClone(value);
+        }
+        return JSON.parse(JSON.stringify(value));
+      }
+
+      function isTimelineSequence(value) {
+        return Array.isArray(value) || ArrayBuffer.isView(value);
+      }
+
+      function timelineSequenceLength(value) {
+        return isTimelineSequence(value) ? value.length : 0;
+      }
+
+      function filterTimelineSequence(value, keptIndices, pointCount) {
+        if (!isTimelineSequence(value) || value.length !== pointCount) {
+          return value;
+        }
+        // Plotly accepts normal arrays, so typed numeric arrays can safely be
+        // converted while filtering. This also avoids retaining their buffers.
+        return keptIndices.map(index => value[index]);
+      }
+
+      function timelineTracePointCount(trace) {
+        for (const key of ["x", "y", "base", "customdata"]) {
+          const length = timelineSequenceLength(trace[key]);
+          if (length > 0) return length;
+        }
+        return 0;
+      }
+
+      function timelineEventPrefix(name) {
+        const text = String(name ?? "");
+        const dot = text.indexOf(".");
+        return dot >= 0 ? text.slice(0, dot) : text;
+      }
+
+      function timelineAttributeToken(value) {
+        if (typeof value === "boolean") return `boolean:${value}`;
+        if (typeof value === "number") return `number:${JSON.stringify(value)}`;
+        if (typeof value === "string") return `string:${value}`;
+        return `json:${JSON.stringify(value)}`;
+      }
+
+      function timelinePointAttributes(customdata) {
+        if (!Array.isArray(customdata) || typeof customdata[1] !== "string") return {};
+        try {
+          const parsed = JSON.parse(customdata[1]);
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch (_) {
+          return {};
+        }
+      }
+
+      function activeTimelineAttributeNames(panel) {
+        return new Set(
+          [...panel.querySelectorAll("[data-attribute-filter-card]")]
+            .map(card => card.dataset.attributeName)
+        );
+      }
+
+      function renderEmptyAttributeFilterHint(panel) {
+        const container = panel.querySelector("[data-active-attribute-filters]");
+        if (!container || container.querySelector("[data-attribute-filter-card]")) return;
+        container.replaceChildren();
+        const hint = document.createElement("span");
+        hint.className = "filter-empty-hint";
+        hint.textContent = "No attribute filters active.";
+        container.appendChild(hint);
+      }
+
+      function updateAttributeFilterControls(panel) {
+        const select = panel.querySelector("[data-attribute-select]");
+        const addButton = panel.querySelector("[data-add-attribute-filter]");
+        const active = activeTimelineAttributeNames(panel);
+
+        [...select.options].forEach(option => {
+          option.disabled = option.value !== "" && active.has(option.value);
+        });
+
+        if (select.value && active.has(select.value)) {
+          select.value = "";
+        }
+        addButton.disabled = !select.value;
+      }
+
+      function activeTimelineDurationEventNames(panel) {
+        return new Set(
+          [...panel.querySelectorAll("[data-duration-filter-card]")]
+            .map(card => card.dataset.eventName)
+        );
+      }
+
+      function renderEmptyDurationFilterHint(panel) {
+        const container = panel.querySelector("[data-active-duration-filters]");
+        if (!container || container.querySelector("[data-duration-filter-card]")) return;
+        container.replaceChildren();
+        const hint = document.createElement("span");
+        hint.className = "filter-empty-hint";
+        hint.textContent = "No duration ranges active.";
+        container.appendChild(hint);
+      }
+
+      function updateDurationFilterControls(panel) {
+        const select = panel.querySelector("[data-duration-event-select]");
+        const addButton = panel.querySelector("[data-add-duration-filter]");
+        const active = activeTimelineDurationEventNames(panel);
+
+        [...select.options].forEach(option => {
+          option.disabled = option.value !== "" && active.has(option.value);
+        });
+
+        if (select.value && active.has(select.value)) {
+          select.value = "";
+        }
+        addButton.disabled = !select.value;
+      }
+
+      function parseOptionalDuration(value) {
+        const trimmed = String(value ?? "").trim();
+        if (trimmed === "") return null;
+        const parsed = Number(trimmed);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+
+      function updateDurationRangeCard(card) {
+        const minimum = parseOptionalDuration(
+          card.querySelector("[data-duration-min]").value
+        );
+        const maximum = parseOptionalDuration(
+          card.querySelector("[data-duration-max]").value
+        );
+        const invalid = minimum !== null && maximum !== null && minimum > maximum;
+        card.classList.toggle("range-invalid", invalid);
+
+        const summary = card.querySelector("[data-duration-summary]");
+        if (invalid) {
+          summary.textContent = "Minimum cannot be greater than maximum.";
+        } else if (minimum === null && maximum === null) {
+          summary.textContent = "No bound entered yet; this card currently keeps every span.";
+        } else if (minimum !== null && maximum !== null) {
+          summary.textContent = `Keeping durations from ${minimum} ms through ${maximum} ms.`;
+        } else if (minimum !== null) {
+          summary.textContent = `Keeping durations of at least ${minimum} ms.`;
+        } else {
+          summary.textContent = `Keeping durations of at most ${maximum} ms.`;
+        }
+      }
+
+      function addTimelineAttributeFilter(panel, attribute) {
+        const state = timelineFilterStates.get(panel);
+        if (!state || !attribute || activeTimelineAttributeNames(panel).has(attribute)) return;
+
+        const definition = state.metadata.attributes[attribute];
+        if (!definition) return;
+
+        const container = panel.querySelector("[data-active-attribute-filters]");
+        if (!container.querySelector("[data-attribute-filter-card]")) {
+          container.replaceChildren();
+        }
+
+        const card = document.createElement("section");
+        card.className = "attribute-filter-card";
+        card.dataset.attributeFilterCard = "";
+        card.dataset.attributeName = attribute;
+
+        const heading = document.createElement("div");
+        heading.className = "attribute-filter-card-heading";
+
+        const title = document.createElement("div");
+        title.className = "attribute-filter-card-title";
+        const name = document.createElement("strong");
+        name.textContent = attribute;
+        const explanation = document.createElement("span");
+        explanation.textContent = "Include any checked value";
+        title.append(name, explanation);
+
+        const actions = document.createElement("div");
+        actions.className = "attribute-filter-card-actions";
+        [
+          { action: "all", label: "All" },
+          { action: "none", label: "None" },
+        ].forEach(({ action, label }) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.attributeAction = action;
+          button.textContent = label;
+          button.addEventListener("click", () => {
+            const checked = action === "all";
+            card.querySelectorAll("[data-attribute-value]").forEach(input => {
+              input.checked = checked;
+            });
+            applyTimelineFilters(panel);
+          });
+          actions.appendChild(button);
+        });
+
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "attribute-filter-remove";
+        removeButton.dataset.removeAttributeFilter = "";
+        removeButton.setAttribute("aria-label", `Remove ${attribute} filter`);
+        removeButton.title = `Remove ${attribute} filter`;
+        removeButton.textContent = "×";
+        removeButton.addEventListener("click", () => {
+          card.remove();
+          renderEmptyAttributeFilterHint(panel);
+          updateAttributeFilterControls(panel);
+          applyTimelineFilters(panel);
+        });
+        actions.appendChild(removeButton);
+        heading.append(title, actions);
+
+        const values = document.createElement("div");
+        values.className = "filter-chip-list";
+        const choices = [...definition.values];
+        if (definition.missingCount > 0) {
+          choices.push({
+            token: "__missing__",
+            label: "Not present",
+            count: definition.missingCount,
+          });
+        }
+
+        choices.forEach((choice, index) => {
+          const label = document.createElement("label");
+          label.className = "filter-chip";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.checked = true;
+          input.value = choice.token;
+          input.dataset.attributeValue = "";
+          input.id = `${panel.dataset.plotId}_attribute_${state.nextAttributeFilterId}_${index}`;
+          input.addEventListener("change", () => applyTimelineFilters(panel));
+          const text = document.createElement("span");
+          text.textContent = choice.label;
+          const count = document.createElement("small");
+          count.textContent = String(choice.count);
+          label.append(input, text, count);
+          values.appendChild(label);
+        });
+
+        state.nextAttributeFilterId += 1;
+        card.append(heading, values);
+        container.appendChild(card);
+
+        const select = panel.querySelector("[data-attribute-select]");
+        select.value = "";
+        updateAttributeFilterControls(panel);
+        applyTimelineFilters(panel);
+      }
+
+      function addTimelineDurationFilter(panel, eventName) {
+        const state = timelineFilterStates.get(panel);
+        if (!state || !eventName || activeTimelineDurationEventNames(panel).has(eventName)) return;
+
+        const definition = state.metadata.events.find(event => event.name === eventName);
+        if (!definition) return;
+
+        const container = panel.querySelector("[data-active-duration-filters]");
+        if (!container.querySelector("[data-duration-filter-card]")) {
+          container.replaceChildren();
+        }
+
+        const card = document.createElement("section");
+        card.className = "duration-filter-card";
+        card.dataset.durationFilterCard = "";
+        card.dataset.eventName = eventName;
+
+        const heading = document.createElement("div");
+        heading.className = "attribute-filter-card-heading";
+
+        const title = document.createElement("div");
+        title.className = "attribute-filter-card-title";
+        const name = document.createElement("strong");
+        name.textContent = eventName;
+        const explanation = document.createElement("span");
+        explanation.textContent = `Observed ${definition.minDurationMs.toFixed(3)}–${definition.maxDurationMs.toFixed(3)} ms across ${definition.count} spans`;
+        title.append(name, explanation);
+
+        const actions = document.createElement("div");
+        actions.className = "attribute-filter-card-actions";
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "attribute-filter-remove";
+        removeButton.dataset.removeDurationFilter = "";
+        removeButton.setAttribute("aria-label", `Remove ${eventName} duration filter`);
+        removeButton.title = `Remove ${eventName} duration filter`;
+        removeButton.textContent = "×";
+        removeButton.addEventListener("click", () => {
+          card.remove();
+          renderEmptyDurationFilterHint(panel);
+          updateDurationFilterControls(panel);
+          applyTimelineFilters(panel);
+        });
+        actions.appendChild(removeButton);
+        heading.append(title, actions);
+
+        const fields = document.createElement("div");
+        fields.className = "duration-range-fields";
+
+        [
+          { label: "Minimum ms", dataName: "durationMin", placeholder: "No minimum" },
+          { label: "Maximum ms", dataName: "durationMax", placeholder: "No maximum" },
+        ].forEach(definition => {
+          const label = document.createElement("label");
+          label.className = "duration-range-field";
+          label.textContent = definition.label;
+          const input = document.createElement("input");
+          input.type = "number";
+          input.min = "0";
+          input.step = "any";
+          input.placeholder = definition.placeholder;
+          input.dataset[definition.dataName] = "";
+          input.id = `${panel.dataset.plotId}_duration_${state.nextDurationFilterId}_${definition.dataName}`;
+          input.addEventListener("input", () => {
+            updateDurationRangeCard(card);
+            applyTimelineFilters(panel);
+          });
+          label.appendChild(input);
+          fields.appendChild(label);
+        });
+
+        const summary = document.createElement("div");
+        summary.className = "duration-range-summary";
+        summary.dataset.durationSummary = "";
+
+        state.nextDurationFilterId += 1;
+        card.append(heading, fields, summary);
+        container.appendChild(card);
+        updateDurationRangeCard(card);
+
+        const select = panel.querySelector("[data-duration-event-select]");
+        select.value = "";
+        updateDurationFilterControls(panel);
+        applyTimelineFilters(panel);
+      }
+
+      function collectTimelineAttributeFilters(panel) {
+        return [...panel.querySelectorAll("[data-attribute-filter-card]")].map(card => ({
+          attribute: card.dataset.attributeName,
+          allowedValues: new Set(
+            [...card.querySelectorAll("[data-attribute-value]:checked")]
+              .map(input => input.value)
+          ),
+        }));
+      }
+
+      function collectTimelineDurationFilters(panel) {
+        return [...panel.querySelectorAll("[data-duration-filter-card]")].map(card => {
+          const minimum = parseOptionalDuration(
+            card.querySelector("[data-duration-min]").value
+          );
+          const maximum = parseOptionalDuration(
+            card.querySelector("[data-duration-max]").value
+          );
+          return {
+            eventName: card.dataset.eventName,
+            minimum,
+            maximum,
+            invalid: minimum !== null && maximum !== null && minimum > maximum,
+          };
+        });
+      }
+
+      function applyTimelineFilters(panel) {
+        const state = timelineFilterStates.get(panel);
+        if (!state) return;
+
+        const enabledPrefixes = new Set(
+          [...panel.querySelectorAll("[data-timeline-prefix]:checked")].map(input => input.value)
+        );
+        const attributeFilters = collectTimelineAttributeFilters(panel);
+        const durationFilters = collectTimelineDurationFilters(panel);
+        const durationFilterByEvent = new Map(
+          durationFilters.map(filter => [filter.eventName, filter])
+        );
+
+        let visibleSpanCount = 0;
+        let visibleTraceCount = 0;
+        const visibleLanes = new Set();
+        const filteredData = state.originalData.map((trace, traceIndex) => {
+          const copy = cloneTimelineValue(trace);
+          const prefixEnabled = enabledPrefixes.has(timelineEventPrefix(trace.name));
+          const durationFilter = durationFilterByEvent.get(String(trace.name));
+          const pointCount = timelineTracePointCount(trace);
+          const kept = [];
+
+          // Unknown Plotly trace storage should fail open instead of wiping the
+          // complete timeline. Prefix filtering still works at trace level.
+          if (pointCount === 0) {
+            copy.visible = prefixEnabled;
+            if (prefixEnabled) visibleTraceCount += 1;
+            if (prefixEnabled && isTimelineSequence(trace.y)) {
+              Array.from(trace.y).forEach(lane => visibleLanes.add(String(lane)));
+            }
+            return copy;
+          }
+
+          if (prefixEnabled) {
+            for (let pointIndex = 0; pointIndex < pointCount; pointIndex += 1) {
+              const attributes = state.pointAttributes[traceIndex][pointIndex] || {};
+              const matchesAllAttributes = attributeFilters.every(filter => {
+                const token = Object.prototype.hasOwnProperty.call(attributes, filter.attribute)
+                  ? timelineAttributeToken(attributes[filter.attribute])
+                  : "__missing__";
+                return filter.allowedValues.has(token);
+              });
+              const durationMs = Number(trace.x[pointIndex]);
+              const matchesDuration = !durationFilter || (
+                !durationFilter.invalid &&
+                (durationFilter.minimum === null || durationMs >= durationFilter.minimum) &&
+                (durationFilter.maximum === null || durationMs <= durationFilter.maximum)
+              );
+              if (matchesAllAttributes && matchesDuration) {
+                kept.push(pointIndex);
+                if (isTimelineSequence(trace.y) && pointIndex < trace.y.length) {
+                  visibleLanes.add(String(trace.y[pointIndex]));
+                }
+              }
+            }
+          }
+
+          ["x", "y", "base", "customdata", "text", "hovertext"].forEach(key => {
+            copy[key] = filterTimelineSequence(trace[key], kept, pointCount);
+          });
+          copy.visible = kept.length > 0;
+          visibleSpanCount += kept.length;
+          if (kept.length > 0) visibleTraceCount += 1;
+          return copy;
+        });
+
+        const filteredLayout = cloneTimelineValue(state.originalLayout);
+        const visibleLaneOrder = state.originalLaneOrder.filter(
+          lane => visibleLanes.has(String(lane))
+        );
+        filteredLayout.yaxis = {
+          ...(filteredLayout.yaxis || {}),
+          categoryorder: "array",
+          categoryarray: visibleLaneOrder,
+        };
+        filteredLayout.height = Math.max(550, 80 + 42 * visibleLaneOrder.length);
+
+        Plotly.react(
+          state.graph,
+          filteredData,
+          filteredLayout,
+          { responsive: true, displaylogo: false }
+        );
+
+        const status = panel.querySelector("[data-filter-status]");
+        const filterSummary = attributeFilters.length === 1
+          ? "1 attribute filter active"
+          : `${attributeFilters.length} attribute filters active`;
+        const durationSummary = durationFilters.length === 1
+          ? "1 duration range active"
+          : `${durationFilters.length} duration ranges active`;
+        status.textContent = `${visibleSpanCount} of ${state.metadata.spanCount} spans visible across ${visibleTraceCount} event types and ${visibleLaneOrder.length} lanes · ${filterSummary} · ${durationSummary}.`;
+      }
+
+      function initializeTimelineFilter(panel) {
+        if (timelineFilterStates.has(panel)) return;
+        const graph = document.getElementById(panel.dataset.plotId);
+        const metadataElement = document.getElementById(panel.dataset.metadataId);
+        if (!graph || !metadataElement || !Array.isArray(graph.data)) return;
+
+        const metadata = JSON.parse(metadataElement.textContent);
+        const originalData = cloneTimelineValue(graph.data);
+        const state = {
+          graph,
+          metadata,
+          originalData,
+          originalLayout: cloneTimelineValue(graph.layout),
+          originalLaneOrder: Array.isArray(graph.layout?.yaxis?.categoryarray)
+            ? [...graph.layout.yaxis.categoryarray]
+            : [],
+          pointAttributes: originalData.map(trace => {
+            if (!isTimelineSequence(trace.customdata)) return [];
+            return Array.from(trace.customdata, timelinePointAttributes);
+          }),
+          nextAttributeFilterId: 0,
+          nextDurationFilterId: 0,
+        };
+        timelineFilterStates.set(panel, state);
+
+        panel.querySelectorAll("[data-timeline-prefix]").forEach(input => {
+          input.addEventListener("change", () => applyTimelineFilters(panel));
+        });
+        panel.querySelectorAll("[data-prefix-action]").forEach(button => {
+          button.addEventListener("click", () => {
+            const checked = button.dataset.prefixAction === "all";
+            panel.querySelectorAll("[data-timeline-prefix]").forEach(input => {
+              input.checked = checked;
+            });
+            applyTimelineFilters(panel);
+          });
+        });
+
+        const attributeSelect = panel.querySelector("[data-attribute-select]");
+        const addAttributeButton = panel.querySelector("[data-add-attribute-filter]");
+        attributeSelect.addEventListener("change", () => {
+          updateAttributeFilterControls(panel);
+        });
+        addAttributeButton.addEventListener("click", () => {
+          addTimelineAttributeFilter(panel, attributeSelect.value);
+        });
+
+        const durationEventSelect = panel.querySelector("[data-duration-event-select]");
+        const addDurationButton = panel.querySelector("[data-add-duration-filter]");
+        durationEventSelect.addEventListener("change", () => {
+          updateDurationFilterControls(panel);
+        });
+        addDurationButton.addEventListener("click", () => {
+          addTimelineDurationFilter(panel, durationEventSelect.value);
+        });
+
+        panel.querySelector("[data-filter-reset]").addEventListener("click", () => {
+          panel.querySelectorAll("[data-timeline-prefix]").forEach(input => {
+            input.checked = true;
+          });
+          panel.querySelectorAll("[data-attribute-filter-card]").forEach(card => card.remove());
+          panel.querySelectorAll("[data-duration-filter-card]").forEach(card => card.remove());
+          attributeSelect.value = "";
+          durationEventSelect.value = "";
+          renderEmptyAttributeFilterHint(panel);
+          renderEmptyDurationFilterHint(panel);
+          updateAttributeFilterControls(panel);
+          updateDurationFilterControls(panel);
+          applyTimelineFilters(panel);
+        });
+
+        renderEmptyAttributeFilterHint(panel);
+        renderEmptyDurationFilterHint(panel);
+        updateAttributeFilterControls(panel);
+        updateDurationFilterControls(panel);
+        applyTimelineFilters(panel);
+      }
+
       function updateDashboard() {
         const run = document.getElementById("runSelect").value;
         const view = document.getElementById("viewSelect").value;
@@ -1123,13 +2466,13 @@ def build_dashboard(
           panel.classList.toggle("active", active);
         });
 
-        // Helps Plotly resize after switching hidden panels.
         setTimeout(() => {
           window.dispatchEvent(new Event("resize"));
         }, 50);
       }
 
       document.addEventListener("DOMContentLoaded", () => {
+        document.querySelectorAll("[data-timeline-filter]").forEach(initializeTimelineFilter);
         document.getElementById("runSelect").addEventListener("change", updateDashboard);
         document.getElementById("viewSelect").addEventListener("change", updateDashboard);
         updateDashboard();
@@ -1284,7 +2627,10 @@ def main():
             rel = log_file.relative_to(root) if log_file.is_relative_to(root) else log_file
             spans_csv = args.out_dir / "spans" / f"{safe_id}.spans.csv"
             spans_csv.parent.mkdir(parents=True, exist_ok=True)
-            spans.drop(columns=["start_event", "end_event"]).to_csv(spans_csv, index=False)
+            spans.drop(
+                columns=["start_event", "end_event", "attributes"],
+                errors="ignore",
+            ).to_csv(spans_csv, index=False)
             report_href = (
                 report.relative_to(args.out_dir).as_posix()
                 if isinstance(report, Path) and report.is_file()

@@ -455,6 +455,7 @@ class Neo4jNativeComponent:
 
     def bfs(self, start_uuid: str, relationship_filter: str, max_depth: int, output: str | Path) -> None:
         with self.perf.measure("Neo4j total BFS command", backend="neo4j", phase="bfs"):
+            # Look for an algorithm for BFS
             statement = f"""
             MATCH (start:{entity_label()} {{uuid: $startUuid}})
             CALL apoc.path.expandConfig(start, {{

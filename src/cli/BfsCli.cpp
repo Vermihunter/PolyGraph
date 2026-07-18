@@ -19,6 +19,7 @@
 #include <cctype>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 namespace cpgdb::cli {
     namespace {
@@ -42,6 +43,11 @@ namespace cpgdb::cli {
             }
 
             return result;
+        }
+
+        [[nodiscard]] std::string default_thread_count() {
+            const unsigned int detected = std::thread::hardware_concurrency();
+            return std::to_string(detected == 0 ? 1U : detected);
         }
 
         [[nodiscard]] Direction parse_direction(const std::string &value) {
@@ -114,6 +120,12 @@ namespace cpgdb::cli {
                                 "Disable partial acceleration/projection usage");
 
         program.add_flag_option("no-predecessors", {"--no-predecessors"}, "Do not request predecessor information");
+
+        program.add_value_option("neighbor-batch-size", {"--neighbor-batch-size"},
+                                 "Maximum frontier vertices per Neo4j/ArangoDB neighbor request", std::string{"10000"});
+
+        program.add_value_option("thread-count", {"--thread-count"}, "Worker count reserved for the BFS thread pool",
+                                 default_thread_count());
     }
 
     GraphRuntimeConfig parse_runtime_config(const CommandLine &args) {
@@ -144,11 +156,22 @@ namespace cpgdb::cli {
 
     BfsOptions parse_bfs_options(const CommandLine &args) {
         const int max_depth = args.int_value("max-depth");
+        const int neighbor_batch_size = args.int_value("neighbor-batch-size");
+        const int thread_count = args.int_value("thread-count");
+
+        if (neighbor_batch_size <= 0) {
+            throw std::runtime_error("--neighbor-batch-size must be greater than zero");
+        }
+        if (thread_count <= 0) {
+            throw std::runtime_error("--thread-count must be greater than zero");
+        }
 
         BfsOptions options{.max_depth = std::nullopt,
                            .return_predecessors = !args.bool_value("no-predecessors"),
                            .allow_native_pushdown = args.bool_value("allow-native-pushdown"),
-                           .allow_partial_acceleration = !args.bool_value("no-partial-acceleration")};
+                           .allow_partial_acceleration = !args.bool_value("no-partial-acceleration"),
+                           .neighbor_batch_size = static_cast<std::size_t>(neighbor_batch_size),
+                           .thread_count = static_cast<std::size_t>(thread_count)};
 
         if (max_depth >= 0) {
             options.max_depth = static_cast<std::uint32_t>(max_depth);

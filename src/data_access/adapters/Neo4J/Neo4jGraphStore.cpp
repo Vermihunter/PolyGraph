@@ -51,16 +51,17 @@ namespace cpgdb {
     }
 
     std::vector<MinimalAdjacencyRow> Neo4jGraphStore::get_minimal_neighbors_batch(std::span<const NodeRef> frontier,
-                                                                                  const ExpandSpec &spec, int depth) {
+                                                                                  const ExpandSpec &spec, int depth,
+                                                                                  const BfsOptions &options) {
         if (frontier.empty()) {
             return {};
         }
 
         if (auto *visitor = dynamic_cast<Neo4JQueryVisitor *>(visitor_.get())) {
-            return visitor->get_minimal_neighbors_batch_fast(frontier, spec, depth);
+            return visitor->get_minimal_neighbors_batch_fast(frontier, spec, depth, options.neighbor_batch_size);
         }
 
-        return IGraphStore::get_minimal_neighbors_batch(frontier, spec, depth);
+        return IGraphStore::get_minimal_neighbors_batch(frontier, spec, depth, options);
     }
 
     BfsResult Neo4jGraphStore::run_bfs(const NodeRef &, const ExpandSpec &, const BfsOptions &) { return {}; }

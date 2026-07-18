@@ -31,6 +31,7 @@ set(CPGDB_CORE_SOURCES
     "${PROJECT_SOURCE_DIR}/src/query/query_types/InsertBatchQuery.cpp"
     "${PROJECT_SOURCE_DIR}/src/query/query_types/InsertQuery.cpp"
     "${PROJECT_SOURCE_DIR}/src/utilities/Profiling.cpp"
+    "${PROJECT_SOURCE_DIR}/src/utilities/ThreadPool.cpp"
     "${PROJECT_SOURCE_DIR}/src/utilities/logging.cpp"
 )
 

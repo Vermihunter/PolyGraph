@@ -67,7 +67,25 @@ class Neo4jNativeClient:
         return payload
 
     def reset(self) -> None:
-        self.tx([{"statement": "MATCH (n) DETACH DELETE n"}], timeout=900)
+        # Never delete a large graph in one transaction. The transaction state for
+        # MATCH (n) DETACH DELETE n can exhaust Neo4j's transaction-memory pool
+        # before the following benchmark load even begins.
+        delete_batch_size = max(100, min(self.batch_size, 1_000))
+        statement = f"""
+            MATCH (n:{_entity_label()})
+            WITH n LIMIT $limit
+            DETACH DELETE n
+            RETURN count(*) AS deleted
+        """
+        while True:
+            payload = self.tx([{
+                "statement": statement,
+                "parameters": {"limit": delete_batch_size},
+            }], timeout=900)
+            rows = payload["results"][0]["data"]
+            deleted = int(rows[0]["row"][0]) if rows else 0
+            if deleted == 0:
+                break
 
     def create_constraints(self) -> None:
         self.tx([{"statement": f"""
@@ -235,7 +253,7 @@ class ArangoNativeClient:
         ]
         response = self.session.post(
             self.db_api("/_api/gharial"),
-            json={"name": GRAPH_NAME, "edgeDefinitions": edge_definitions, "orphanCollections": vertex_collections},
+            json={"name": GRAPH_NAME, "edgeDefinitions": edge_definitions, "orphanCollections": []},
             timeout=900,
         )
         self.check(response, (201, 202, 409), "Create Arango named graph")

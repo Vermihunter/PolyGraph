@@ -240,7 +240,11 @@ def prepare_ldbc(args: argparse.Namespace) -> Path:
     scale_factor = args.sf or infer_scale_factor(social_network) or "0.1"
     key = sf_key(scale_factor)
     domain_id = args.domain_id or f"ldbc-snb-{key}"
-    output_root = DATA_ROOT / "ldbc-snb" / key
+    output_root = (
+        Path(args.output_dir).expanduser().resolve()
+        if getattr(args, "output_dir", None)
+        else DATA_ROOT / "ldbc-snb" / key
+    )
     output_root.mkdir(parents=True, exist_ok=True)
 
     graph = output_root / "graph.jsonl"
@@ -425,6 +429,7 @@ def generate_ldbc(args: argparse.Namespace) -> Path:
         seed=args.seed,
         max_depth=args.max_depth,
         direction=args.direction,
+        output_dir=args.output_dir,
     )
     return prepare_ldbc(prepare_args)
 
@@ -702,6 +707,20 @@ def run_domain(args: argparse.Namespace) -> None:
     if not has_cli_option(extras, "--direction"):
         common_command.extend(["--direction", domain.direction])
 
+    thread_count = getattr(args, "thread_count", None)
+    if thread_count is not None:
+        if thread_count <= 0:
+            raise ValueError("--thread-count must be greater than zero")
+        if not has_cli_option(extras, "--thread-count"):
+            common_command.extend(["--thread-count", str(thread_count)])
+
+    neighbor_batch_size = getattr(args, "neighbor_batch_size", None)
+    if neighbor_batch_size is not None:
+        if neighbor_batch_size <= 0:
+            raise ValueError("--neighbor-batch-size must be greater than zero")
+        if not has_cli_option(extras, "--neighbor-batch-size"):
+            common_command.extend(["--neighbor-batch-size", str(neighbor_batch_size)])
+
     measurements_csv = measurement_root / "measurements.csv"
     summary_json = measurement_root / "summary.json"
     fieldnames = [
@@ -975,6 +994,32 @@ def quickstart_ldbc(args: argparse.Namespace) -> None:
         run_domain(argparse.Namespace(domain=domain.domain_id, binary=args.binary, bfs_args=args.bfs_args))
 
 
+def run_benchmark(args: argparse.Namespace) -> None:
+    from tools.measurement.benchmark_suite import load_suite_config, run_suite
+
+    run_suite(
+        load_suite_config(args.config),
+        run_id=args.run_id,
+        output_dir=args.output_dir,
+        dry_run=args.dry_run,
+        skip_build=args.skip_build,
+        skip_services=args.skip_services,
+    )
+
+
+def merge_benchmark_results_command(args: argparse.Namespace) -> None:
+    from tools.measurement.benchmark_merge import collect_merge_inputs, merge_benchmark_results
+
+    inputs = collect_merge_inputs(args.dataset, args.suite)
+    merge_benchmark_results(
+        inputs,
+        output_dir=args.output_dir,
+        run_id=args.run_id,
+        conflict_policy=args.conflict_policy,
+        reconstruct_logs=args.reconstruct_logs,
+    )
+
+
 def add_university_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--input",
@@ -1025,6 +1070,13 @@ def add_ldbc_options(parser: argparse.ArgumentParser, *, require_input: bool) ->
     parser.add_argument("--input", required=require_input, help="Extracted CsvBasic directory containing static/ and dynamic/.")
     parser.add_argument("--sf", help="Scale factor; inferred from the directory name when omitted.")
     parser.add_argument("--domain-id")
+    parser.add_argument(
+        "--output-dir",
+        help=(
+            "Directory for domain.json, graph.jsonl, schema, roots, and backend config. "
+            "Defaults to data/ldbc-snb/sf<scale>."
+        ),
+    )
     parser.add_argument("--placement-config")
     parser.add_argument(
         "--storage-backends",
@@ -1126,6 +1178,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow existing logs, result CSVs, and measurement metadata to be replaced.",
     )
+    run_parser.add_argument(
+        "--thread-count",
+        type=int,
+        help="BFS worker count reserved for the C++ thread pool.",
+    )
+    run_parser.add_argument(
+        "--neighbor-batch-size",
+        type=int,
+        help="Maximum frontier vertices sent in one Neo4j/ArangoDB request.",
+    )
     run_parser.set_defaults(handler=run_domain)
 
     analyze = commands.add_parser(
@@ -1151,6 +1213,56 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reconstruct individual runs without generating average executions.",
     )
     analyze.set_defaults(handler=analyze_measurement_logs)
+
+    benchmark = commands.add_parser(
+        "benchmark",
+        help="Run distributed, full-backend, native, and reference BFS scenarios from JSON.",
+    )
+    benchmark.add_argument("config", help="Path to the benchmark suite JSON configuration.")
+    benchmark.add_argument("--run-id", help="Override the run ID from the configuration.")
+    benchmark.add_argument("--output-dir", help="Override the benchmark output directory.")
+    benchmark.add_argument("--dry-run", action="store_true", help="Print setup and benchmark commands without executing them.")
+    benchmark.add_argument("--skip-build", action="store_true")
+    benchmark.add_argument("--skip-services", action="store_true")
+    benchmark.set_defaults(handler=run_benchmark)
+
+    benchmark_merge = commands.add_parser(
+        "benchmark-merge",
+        help="Merge partial or resumed benchmark result directories without rerunning them.",
+    )
+    benchmark_merge.add_argument(
+        "--dataset",
+        action="append",
+        default=[],
+        metavar="TARGET=PATH",
+        help=(
+            "Merge one dataset result directory into TARGET. Repeat to combine multiple "
+            "partial/resume runs under the same dataset name."
+        ),
+    )
+    benchmark_merge.add_argument(
+        "--suite",
+        action="append",
+        default=[],
+        help="Import every datasets/* result directory from an existing benchmark suite.",
+    )
+    benchmark_merge.add_argument("--output-dir", required=True)
+    benchmark_merge.add_argument("--run-id", required=True)
+    benchmark_merge.add_argument(
+        "--conflict-policy",
+        choices=["prefer-ok", "keep-first", "keep-last", "error"],
+        default="prefer-ok",
+        help=(
+            "Resolve duplicate scenario/system/phase/repetition/start-UUID records. "
+            "prefer-ok replaces failed attempts with successful retries."
+        ),
+    )
+    benchmark_merge.add_argument(
+        "--reconstruct-logs",
+        action="store_true",
+        help="Regenerate reconstruction only when CPGDB *.events.jsonl logs exist.",
+    )
+    benchmark_merge.set_defaults(handler=merge_benchmark_results_command)
 
     register = commands.add_parser("register", help="Register another schema/data/backend triple without recompiling.")
     register.add_argument("domain_id")

@@ -38,7 +38,7 @@ namespace cpgdb::services {
                                  .allow_native_pushdown = false,
                                  .allow_partial_acceleration = true};
 
-        return expander_.expand_layer(frontier, spec, 0, options.allow_partial_acceleration);
+        return expander_.expand_layer(frontier, spec, 0, options);
     }
 
     BfsResult TraversalService::streamBfs(const std::string &graph_id, const std::string &source_vertex_id,

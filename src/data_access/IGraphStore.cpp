@@ -19,7 +19,9 @@ namespace cpgdb {
     }
 
     std::vector<MinimalAdjacencyRow> IGraphStore::get_minimal_neighbors_batch(std::span<const NodeRef> frontier,
-                                                                              const ExpandSpec &spec, int depth) {
+                                                                              const ExpandSpec &spec, int depth,
+                                                                              const BfsOptions &options) {
+        (void) options;
         auto rich_rows = get_neighbors_batch(frontier, spec, depth);
         std::vector<MinimalAdjacencyRow> minimal_rows;
         minimal_rows.reserve(rich_rows.size());

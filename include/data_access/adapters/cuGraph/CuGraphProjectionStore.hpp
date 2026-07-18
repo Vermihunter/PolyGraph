@@ -86,13 +86,15 @@ template <typename ProjectionT> class CuGraphProjectionStore final : public IGra
         std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> row_by_source;
         std::vector<GlobalId> gpu_source_ids;
         gpu_source_ids.reserve(frontier.size());
+        {
+            EVENT_SCOPE_INFO(gpu_rows, "cugraph.gpu-source-ids-construction");
+            for (const auto& source : frontier) {
+                row_by_source.emplace(source.global_id, rows.size());
+                rows.push_back(AdjacencyRow{.source = source, .neighbors = {}});
 
-        for (const auto& source : frontier) {
-            row_by_source.emplace(source.global_id, rows.size());
-            rows.push_back(AdjacencyRow{.source = source, .neighbors = {}});
-
-            if (projection_->mapper().contains(source.global_id)) {
-                gpu_source_ids.push_back(source.global_id);
+                if (projection_->mapper().contains(source.global_id)) {
+                    gpu_source_ids.push_back(source.global_id);
+                }
             }
         }
 
@@ -112,11 +114,122 @@ template <typename ProjectionT> class CuGraphProjectionStore final : public IGra
             template run<vertex_t, edge_t, ProjectionT::multi_gpu, ProjectionT::store_transposed>(
                 *projection_, gpu_source_ids, one_hop_options);
 
-        std::unordered_map<GlobalId,
-                           std::unordered_set<GlobalId, boost::hash<GlobalId>>,
-                           boost::hash<GlobalId>>
-            seen_by_source;
 
+        push_neighbors(expanded, row_by_source, spec, rows);
+
+        return rows;
+    }
+
+    void push_neighbors(
+        OneHopExpansionResult& expanded,
+        std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>>& row_by_source,
+        const ExpandSpec& spec,
+        std::vector<AdjacencyRow>& rows
+    ) {
+        EVENT_SCOPE_INFO(
+            neighbors_selection,
+            "cugraph.find-neighbors",
+            {"candidate_edge_count", expanded.edges.size()},
+            {"source_row_count", rows.size()});
+
+        using SeenSet = std::unordered_set<
+            GlobalId,
+            boost::hash<GlobalId>>;
+
+        std::vector<std::size_t> candidate_counts(rows.size(), 0);
+
+        // Count candidates per row so that containers can reserve once.
+        for (const auto& [source_id, destination_id] : expanded.edges) {
+            (void)destination_id;
+
+            const auto row_it = row_by_source.find(source_id);
+            if (row_it != row_by_source.end()) {
+                ++candidate_counts[row_it->second];
+            }
+        }
+
+        std::vector<SeenSet> seen_by_row(rows.size());
+
+        for (std::size_t row_index = 0; row_index < rows.size(); ++row_index) {
+            const auto expected = candidate_counts[row_index];
+
+            seen_by_row[row_index].reserve(expected);
+
+            rows[row_index].neighbors.reserve(
+                rows[row_index].neighbors.size() + expected);
+        }
+
+        std::size_t missing_source_count = 0;
+        std::size_t rejected_candidate_count = 0;
+        std::size_t duplicate_count = 0;
+        std::size_t accepted_count = 0;
+
+        for (const auto& [source_id, destination_id] : expanded.edges) {
+            const auto row_it = row_by_source.find(source_id);
+
+            if (row_it == row_by_source.end()) {
+                ++missing_source_count;
+                continue;
+            }
+
+            const std::size_t row_index = row_it->second;
+
+            auto hydrated_neighbor =
+                host_index_->find_neighbor(
+                    source_id,
+                    destination_id,
+                    spec);
+
+            if (!hydrated_neighbor.has_value()) {
+                ++rejected_candidate_count;
+                continue;
+            }
+
+            auto& seen = seen_by_row[row_index];
+
+            if (!seen.insert(
+                    hydrated_neighbor->vertex.global_id).second) {
+                ++duplicate_count;
+                continue;
+            }
+
+            rows[row_index].neighbors.push_back(
+                std::move(*hydrated_neighbor));
+
+            ++accepted_count;
+        }
+
+        neighbors_selection.add_end_field(
+            "accepted_count",
+            accepted_count);
+
+        neighbors_selection.add_end_field(
+            "duplicate_count",
+            duplicate_count);
+
+        neighbors_selection.add_end_field(
+            "rejected_candidate_count",
+            rejected_candidate_count);
+
+        neighbors_selection.add_end_field(
+            "missing_source_count",
+            missing_source_count);
+
+    }
+
+    /*
+    void push_neighbors(
+        OneHopExpansionResult& expanded,
+        std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>>& row_by_source,
+        const ExpandSpec& spec,
+        std::vector<AdjacencyRow>& rows
+    ) {
+        EVENT_SCOPE_INFO(neighbors_selection, "cugraph.find-neighbors");
+
+        std::unordered_map<GlobalId,
+                       std::unordered_set<GlobalId, boost::hash<GlobalId>>,
+                       boost::hash<GlobalId>>
+        seen_by_source;
         for (const auto& [source_id, destination_id] : expanded.edges) {
             auto row_it = row_by_source.find(source_id);
             if (row_it == row_by_source.end()) {
@@ -140,9 +253,8 @@ template <typename ProjectionT> class CuGraphProjectionStore final : public IGra
 
             rows[row_it->second].neighbors.push_back(*hydrated_neighbor);
         }
-
-        return rows;
     }
+    */
 
   private:
     BackendDescriptor descriptor_;

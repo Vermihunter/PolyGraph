@@ -66,6 +66,23 @@ curl -s -u neo4j:password \
   }'
 ```
 
+## BFS
+
+```shell
+curl -u neo4j:password   -X POST "http://localhost:7474/db/neo4j/tx/commit"   -H "Content-Type: application/json"   -H "Accept: application/json"   -d '{
+    "statements": [
+      {
+        "statement": "MATCH (source {uuid: $sourceUuid}) CALL gds.bfs.stream($graphName, {sourceNode: source, maxDepth: toInteger(toString($maxDepth))}) YIELD sourceNode, nodeIds, path RETURN sourceNode, nodeIds, path",
+        "parameters": {
+          "graphName": "ldbc-snb-sf0_1-hash-based",
+          "sourceUuid": "d6e584ea-bee0-562c-bd82-0af0a658ed38",
+          "maxDepth": 30
+        }
+      }
+    ]
+  }'
+```
+
 # ArangoDB query
 
 ```sh

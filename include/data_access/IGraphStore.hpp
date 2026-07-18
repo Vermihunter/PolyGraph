@@ -53,7 +53,10 @@ class IGraphStore {
      * The default implementation converts @ref get_neighbors_batch output.
      */
     virtual std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch(
-        std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth);
+        std::span<const NodeRef> frontier,
+        const ExpandSpec& spec,
+        int depth,
+        const BfsOptions& options);
 
     /** @brief Returns whether this store can execute the complete requested BFS natively. */
     [[nodiscard]] virtual bool can_run_native_bfs(const NodeRef& source,

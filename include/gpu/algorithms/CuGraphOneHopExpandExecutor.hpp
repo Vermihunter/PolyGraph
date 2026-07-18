@@ -27,7 +27,7 @@ struct OneHopExpansionResult {
     std::vector<GlobalId> sources;
     std::vector<std::pair<GlobalId, GlobalId>> edges;
 
-    BfsResult to_union_bfs_result(bool return_predecessors) const {
+    [[nodiscard]] BfsResult to_union_bfs_result(bool return_predecessors) const {
         BfsResult result;
 
         for (const auto& source : sources) {
@@ -72,13 +72,16 @@ class CuGraphOneHopExpandExecutor {
 
         std::vector<vertex_t> h_dense_sources;
         h_dense_sources.reserve(source_ids.size());
+        {
+            EVENT_SCOPE_INFO(projection_get_mapper_ids, "cugraph.push_projection_mapping");
+            for (const auto& source_id : source_ids) {
+                if (!projection.mapper().contains(source_id)) {
+                    throw std::runtime_error("Source vertex is not present in this GPU projection");
+                }
 
-        for (const auto& source_id : source_ids) {
-            if (!projection.mapper().contains(source_id)) {
-                throw std::runtime_error("Source vertex is not present in this GPU projection");
+                h_dense_sources.push_back(projection.mapper().at(source_id));
             }
-
-            h_dense_sources.push_back(projection.mapper().at(source_id));
+            EVENT_SCOPE_INFO_FIELD(projection_get_mapper_ids, "dense-source-size", h_dense_sources.size());
         }
 
         const std::uint32_t depth = requested_depth(options);
@@ -160,25 +163,8 @@ class CuGraphOneHopExpandExecutor {
               d_sampled_edge_ids,
               d_sampled_edge_types,
               d_sampled_hops,
-              d_sampled_offsets] = cugraph::homogeneous_uniform_neighbor_sample<vertex_t,
-                                                                                edge_t,
-                                                                                weight_t,
-                                                                                edge_type_t,
-                                                                                STORE_TRANSPOSED,
-                                                                                MULTI_GPU>(
-            handle,
-            rng_state,
-            projection.view(),
-            std::nullopt, // edge weights
-            std::nullopt, // edge IDs
-            std::nullopt, // edge types
-            starting_vertices,
-            std::nullopt, // starting vertex labels
-            std::nullopt, // label_to_output_comm_rank
-            fan_out,
-            flags,
-            false // do_expensive_check
-        );
+              d_sampled_offsets] = execute<vertex_t, edge_t, weight_t, edge_type_t, MULTI_GPU, STORE_TRANSPOSED> (
+              handle, rng_state, projection, starting_vertices, fan_out, flags);
 
         const std::size_t edge_count = d_sampled_srcs.size();
 
@@ -196,12 +182,41 @@ class CuGraphOneHopExpandExecutor {
         return to_external_result(projection, source_ids, h_sampled_srcs, h_sampled_dsts);
     }
 
+    template <typename vertex_t, typename edge_t, typename weight_t, typename edge_type_t, bool MULTI_GPU, bool STORE_TRANSPOSED>
+    static auto execute(
+        raft::handle_t& handle,
+        raft::random::RngState& rng_state,
+        CsrGraphProjection<vertex_t, edge_t>& projection,
+        raft::device_span<vertex_t const>& starting_vertices,
+        raft::host_span<int32_t const>& fan_out,
+        cugraph::sampling_flags_t& flags)
+    {
+        EVENT_SCOPE_INFO(cugraph_native, "cugraph.gpu-exec-time");
+
+        return cugraph::homogeneous_uniform_neighbor_sample<vertex_t, edge_t, weight_t, edge_type_t, STORE_TRANSPOSED, MULTI_GPU>(
+            handle,
+            rng_state,
+            projection.view(),
+            std::nullopt, // edge weights
+            std::nullopt, // edge IDs
+            std::nullopt, // edge types
+            starting_vertices,
+            std::nullopt, // starting vertex labels
+            std::nullopt, // label_to_output_comm_rank
+            fan_out,
+            flags,
+            false // do_expensive_check
+        );
+    }
+
     template <typename vertex_t, typename edge_t>
     static OneHopExpansionResult
     to_external_result(const CsrGraphProjection<vertex_t, edge_t>& projection,
                        const std::vector<GlobalId>& source_ids,
                        const std::vector<vertex_t>& h_sampled_srcs,
                        const std::vector<vertex_t>& h_sampled_dsts) {
+
+        EVENT_SCOPE_INFO(external_result_conversion_layer, "cugraph.to-external-result-conversion");
         OneHopExpansionResult result;
         result.sources = source_ids;
         result.edges.reserve(h_sampled_srcs.size());

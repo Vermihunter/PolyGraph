@@ -86,7 +86,7 @@ namespace cpgdb {
             std::vector<MinimalAdjacencyRow> rows;
             {
                 EVENT_SCOPE_INFO(expansion_layer, "bfs.expand_layer");
-                rows = expander_.expand_layer(frontier, spec, (int) depth, options.allow_partial_acceleration);
+                rows = expander_.expand_layer(frontier, spec, static_cast<int>(depth), options);
             }
 
 
@@ -143,7 +143,7 @@ namespace cpgdb {
 
         std::uint32_t depth = 0;
         while (!frontier.empty() && (!options.max_depth || depth < *options.max_depth)) {
-            auto rows = expander_.expand_layer(frontier, spec, (int) depth, options.allow_partial_acceleration);
+            auto rows = expander_.expand_layer(frontier, spec, static_cast<int>(depth), options);
 
             const auto candidate_count = std::accumulate(rows.begin(), rows.end(), std::size_t{0},
                                                          [](const std::size_t total, const MinimalAdjacencyRow &row) {

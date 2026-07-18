@@ -5,6 +5,11 @@
 
 #include "data_access/adapters/ArangoDB/ArangoQueryVisitor.hpp"
 
+#include <algorithm>
+#include <cstddef>
+#include <future>
+#include <iterator>
+
 #include "infrastructure/BackendConnectionConfig.hpp"
 #include "infrastructure/DatabaseContext.hpp"
 #include "logging/level/Debug.hpp"
@@ -177,13 +182,16 @@ namespace cpgdb {
         }
 
         std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier,
-                                                                          const ExpandSpec &spec, int depth) const {
+                                                                          const ExpandSpec &spec, int depth,
+                                                                          std::size_t batch_size) const {
             /*
              * Keep the switch here: one active implementation and the other
              * two preserved immediately below it for reproducible benchmarks.
              */
+
             // return get_minimal_neighbors_batch_edge_index_union(frontier, spec, depth);
-            return get_minimal_neighbors_batch_traversal_projection(frontier, spec, depth);
+            //  return get_minimal_neighbors_batch_traversal_projection(frontier, spec, depth);
+            return get_minimal_neighbors_batch_traversal_projection_async(frontier, spec, depth, batch_size);
             // return get_minimal_neighbors_batch_original(frontier, spec, depth);
         }
 
@@ -387,6 +395,180 @@ namespace cpgdb {
             return rows;
         }
 
+        std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_traversal_projection_async(
+                std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth, std::size_t batch_size) const {
+            (void) depth;
+
+            if (frontier.empty()) {
+                return {};
+            }
+            if (batch_size == 0) {
+                throw std::invalid_argument("ArangoDB neighbor batch size must be greater than zero");
+            }
+
+            EVENT_SCOPE_INFO(total_span, "arango.minimal_neighbors.direct_grouped_async",
+                             {"frontier_size", frontier.size()}, {"batch_size", batch_size});
+
+            auto [rows, row_by_source] = initialize_minimal_rows(frontier);
+            const auto grouped_frontier = group_frontier_by_collection(frontier);
+            const auto edge_type_ids = edge_types_for_query(spec);
+
+            if (edge_type_ids.empty()) {
+                total_span.add_end_field("request_count", 0);
+                total_span.add_end_field("result_source_rows", rows.size());
+                return rows;
+            }
+
+            struct ArangoPreparedBatch {
+                std::string vertex_collection;
+                std::size_t batch_index{};
+                std::size_t batch_count{};
+                std::vector<NodeRef> nodes;
+                std::string query;
+                json bind_vars;
+            };
+
+            struct ArangoBatchResponse {
+                std::string vertex_collection;
+                std::size_t batch_index{};
+                std::size_t batch_count{};
+                std::size_t batch_size{};
+                std::size_t response_row_count{};
+                std::vector<MinimalAdjacencyRow> rows;
+            };
+
+            std::vector<ArangoPreparedBatch> prepared_batches;
+
+            for (const auto &[vertex_collection, source_group]: grouped_frontier) {
+                if (source_group.empty()) {
+                    continue;
+                }
+
+                json base_bind_vars{{"@vertexCollection", vertex_collection}};
+                std::string edge_collections;
+                for (std::size_t edge_index = 0; edge_index < edge_type_ids.size(); ++edge_index) {
+                    const std::string bind_name = "edgeCollection" + std::to_string(edge_index);
+                    base_bind_vars["@" + bind_name] = db_context_.schema->edge_type(edge_type_ids[edge_index]).name;
+
+                    if (!edge_collections.empty()) {
+                        edge_collections += ", ";
+                    }
+                    edge_collections += "@@" + bind_name;
+                }
+
+                const std::string query = "FOR start IN @@vertexCollection "
+                                          "FILTER start._key IN @frontier "
+                                          "FOR neighbor IN 1..1 " +
+                                          arango_direction(spec.direction) + " start " + edge_collections +
+                                          " OPTIONS { uniqueVertices: \"none\" } "
+                                          "RETURN ["
+                                          "  start.uuid, "
+                                          "  neighbor.uuid, "
+                                          "  neighbor._id, "
+                                          "  neighbor[\"remote-type\"]"
+                                          "]";
+
+                const std::size_t batch_count = 1 + ((source_group.size() - 1) / batch_size);
+                prepared_batches.reserve(prepared_batches.size() + batch_count);
+
+                for (std::size_t offset = 0, batch_index = 0; offset < source_group.size();
+                     offset += batch_size, ++batch_index) {
+                    const std::size_t current_batch_size = std::min(batch_size, source_group.size() - offset);
+                    std::vector<NodeRef> batch_nodes(source_group.begin() + static_cast<std::ptrdiff_t>(offset),
+                                                     source_group.begin() +
+                                                             static_cast<std::ptrdiff_t>(offset + current_batch_size));
+
+                    json frontier_json = json::array();
+                    auto &frontier_array = frontier_json.get_ref<json::array_t &>();
+                    frontier_array.reserve(current_batch_size);
+                    for (const NodeRef &source: batch_nodes) {
+                        frontier_array.emplace_back(boost::uuids::to_string(source.global_id));
+                    }
+
+                    json bind_vars = base_bind_vars;
+                    bind_vars["frontier"] = std::move(frontier_json);
+
+                    prepared_batches.push_back(ArangoPreparedBatch{.vertex_collection = vertex_collection,
+                                                                   .batch_index = batch_index,
+                                                                   .batch_count = batch_count,
+                                                                   .nodes = std::move(batch_nodes),
+                                                                   .query = query,
+                                                                   .bind_vars = std::move(bind_vars)});
+                }
+            }
+
+            std::vector<std::future<ArangoBatchResponse>> futures;
+            futures.reserve(prepared_batches.size());
+
+            // Payload construction is completed before launching requests, so
+            // every prepared batch can enter std::async immediately. ThreadPool
+            // is deliberately not used by this first batching implementation.
+            for (auto &prepared: prepared_batches) {
+                futures.push_back(std::async(
+                        std::launch::async,
+                        [this, prepared = std::move(prepared), spec]() mutable -> ArangoBatchResponse {
+                            const std::size_t current_batch_size = prepared.nodes.size();
+                            EVENT_SCOPE_INFO(request_span, "arango.minimal_neighbors.direct_group_query",
+                                             {"vertex_collection", prepared.vertex_collection},
+                                             {"group_size", current_batch_size}, {"batch_index", prepared.batch_index},
+                                             {"batch_count", prepared.batch_count});
+
+                            try {
+                                auto [batch_rows, batch_row_by_source] = initialize_minimal_rows(prepared.nodes);
+                                auto http = make_http_client();
+                                const std::size_t response_rows = send_minimal_req_into_rows(
+                                        http, prepared.query, prepared.bind_vars, prepared.vertex_collection,
+                                        current_batch_size, batch_rows, batch_row_by_source, spec);
+
+                                request_span.add_end_field("response_row_count", response_rows);
+                                request_span.add_end_field("status", "ok");
+
+                                return ArangoBatchResponse{.vertex_collection = std::move(prepared.vertex_collection),
+                                                           .batch_index = prepared.batch_index,
+                                                           .batch_count = prepared.batch_count,
+                                                           .batch_size = current_batch_size,
+                                                           .response_row_count = response_rows,
+                                                           .rows = std::move(batch_rows)};
+                            } catch (const std::exception &error) {
+                                request_span.add_end_field("status", "failed");
+                                request_span.add_end_field("error", error.what());
+                                throw;
+                            } catch (...) {
+                                request_span.add_end_field("status", "failed");
+                                request_span.add_end_field("error", "unknown exception");
+                                throw;
+                            }
+                        }));
+            }
+
+            total_span.add_end_field("request_count", futures.size());
+
+            std::size_t completed_requests = 0;
+            std::size_t total_response_rows = 0;
+
+            // Responses are merged on the caller thread so rows and
+            // row_by_source are never modified concurrently.
+            for (auto &future: futures) {
+                ArangoBatchResponse result = future.get();
+
+                EVENT_SCOPE_INFO(response_to_rows, "arango.minimal_neighbors.response-into-rows",
+                                 {"label", result.vertex_collection}, {"group_size", result.batch_size},
+                                 {"batch_index", result.batch_index}, {"batch_count", result.batch_count},
+                                 {"response_row_count", result.response_row_count});
+
+                merge_minimal_rows(std::move(result.rows), rows, row_by_source);
+
+                response_to_rows.add_end_field("result_source_rows", rows.size());
+                ++completed_requests;
+                total_response_rows += result.response_row_count;
+            }
+
+            total_span.add_end_field("completed_request_count", completed_requests);
+            total_span.add_end_field("response_row_count", total_response_rows);
+            total_span.add_end_field("result_source_rows", rows.size());
+            return rows;
+        }
+
         std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_original(std::span<const NodeRef> frontier,
                                                                               const ExpandSpec &spec, int depth) const {
             (void) depth;
@@ -470,6 +652,22 @@ namespace cpgdb {
             }
 
             return {std::move(rows), std::move(row_by_source)};
+        }
+
+        static void merge_minimal_rows(
+                std::vector<MinimalAdjacencyRow> source_rows, std::vector<MinimalAdjacencyRow> &target_rows,
+                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &target_row_by_source) {
+            for (auto &source_row: source_rows) {
+                const auto target_iterator = target_row_by_source.find(source_row.source.global_id);
+
+                if (target_iterator == target_row_by_source.end()) {
+                    continue;
+                }
+
+                auto &target_neighbors = target_rows[target_iterator->second].neighbors;
+                target_neighbors.insert(target_neighbors.end(), std::make_move_iterator(source_row.neighbors.begin()),
+                                        std::make_move_iterator(source_row.neighbors.end()));
+            }
         }
 
         void parse_minimal_response_into_rows(
@@ -691,54 +889,293 @@ namespace cpgdb {
             }
         }
 
-        [[nodiscard]] json send_req(const std::string &query, const json &bindVars) const {
-            json req{{"query", query},
-                     {"bindVars", bindVars},
-                     // Neighbor expansion can easily return thousands of rows for one
-                     // BFS layer. ArangoDB cursors are paginated; using a larger batch
-                     // reduces round-trips, and the loop below still handles hasMore.
-                     {"batchSize", 1000000}};
+        [[nodiscard]] CurlHttpClient make_http_client() const {
+            return CurlHttpClient(config_.credentials.has_value()
+                                          ? config_.credentials->username + ":" + config_.credentials->password
+                                          : "");
+        }
 
-            std::string res = http_.post(config_.endpoint, req.dump());
+        [[nodiscard]] json send_req(const std::string &query, const json &bind_vars) const {
+            // Synchronous visitor/write paths may continue to reuse the
+            // visitor-owned client. Async traversal paths call the overload
+            // below with a request-local client.
+            return send_req(http_, query, bind_vars, "", 0);
+        }
 
-            json response = json::parse(res);
+        struct ParsedMinimalArangoPage {
+            json metadata;
+            std::size_t row_count{};
+        };
+
+        [[nodiscard]] ParsedMinimalArangoPage parse_minimal_arango_page_into_rows(
+                const std::string &response_body, std::vector<MinimalAdjacencyRow> &rows,
+                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
+                std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+                        &seen_by_source,
+                const ExpandSpec &spec) const {
+            std::size_t row_count = 0;
+            std::vector<bool> array_contains_consumed_row;
+
+            const auto callback = [&](const int depth, const json::parse_event_t event, json &parsed) -> bool {
+                const auto ensure_depth = [&array_contains_consumed_row](const int requested_depth) {
+                    if (requested_depth < 0) {
+                        return;
+                    }
+
+                    const auto required_size = static_cast<std::size_t>(requested_depth) + 1;
+                    if (array_contains_consumed_row.size() < required_size) {
+                        array_contains_consumed_row.resize(required_size, false);
+                    }
+                };
+
+                if (event == json::parse_event_t::array_start) {
+                    ensure_depth(depth);
+                    array_contains_consumed_row[static_cast<std::size_t>(depth)] = false;
+                    return true;
+                }
+
+                if (event != json::parse_event_t::array_end) {
+                    return true;
+                }
+
+                ensure_depth(depth);
+
+                const bool looks_like_row = parsed.is_array() && parsed.size() >= 4 && parsed[0].is_string() &&
+                                            parsed[1].is_string() && parsed[2].is_string();
+
+                if (looks_like_row) {
+                    append_minimal_result_item(parsed, rows, row_by_source, seen_by_source, spec);
+                    ++row_count;
+
+                    if (depth > 0) {
+                        ensure_depth(depth - 1);
+                        array_contains_consumed_row[static_cast<std::size_t>(depth - 1)] = true;
+                    }
+
+                    // Do not retain the row inside the parsed response DOM.
+                    return false;
+                }
+
+                // AQL UNION-style responses may wrap rows in additional arrays.
+                // Propagate the discard upwards, but keep the top-level `result`
+                // array so response validation still works.
+                if (depth > 1 && array_contains_consumed_row[static_cast<std::size_t>(depth)]) {
+                    ensure_depth(depth - 1);
+                    array_contains_consumed_row[static_cast<std::size_t>(depth - 1)] = true;
+                    return false;
+                }
+
+                return true;
+            };
+
+            json metadata = json::parse(response_body, callback);
+            return ParsedMinimalArangoPage{.metadata = std::move(metadata), .row_count = row_count};
+        }
+
+        [[nodiscard]] std::size_t send_minimal_req_into_rows(
+                CurlHttpClient &http, const std::string &query, const json &bind_vars,
+                const std::string &vertex_collection, const std::size_t group_size,
+                std::vector<MinimalAdjacencyRow> &rows,
+                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
+                const ExpandSpec &spec) const {
+            EVENT_SCOPE_INFO(total_span, "arango.bfs_http_query", {"vertex_collection", vertex_collection},
+                             {"group_size", group_size}, {"streaming_minimal_rows", true});
+
+            json request;
+            {
+                EVENT_SCOPE_INFO(request_span, "arango.bfs_req_construct", {"vertex_collection", vertex_collection},
+                                 {"bind_variable_count", bind_vars.size()});
+                request = json{{"query", query}, {"bindVars", bind_vars}, {"batchSize", 50000}};
+                request_span.add_end_field("query_bytes", query.size());
+            }
+
+            std::string request_body;
+            {
+                EVENT_SCOPE_INFO(dump_span, "arango.bfs_json_req_dump", {"vertex_collection", vertex_collection});
+                request_body = request.dump();
+                dump_span.add_end_field("request_bytes", request_body.size());
+            }
+
+            std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+                    seen_by_source;
+
+            std::string response_body;
+            {
+                EVENT_SCOPE_INFO(http_span, "arango.bfs_http_post", {"vertex_collection", vertex_collection},
+                                 {"request_bytes", request_body.size()});
+                response_body = http.post(config_.endpoint, request_body);
+                http_span.add_end_field("response_bytes", response_body.size());
+            }
+
+            ParsedMinimalArangoPage page;
+            {
+                EVENT_SCOPE_INFO(parse_span, "arango.bfs_response_to_minimal_rows_parse",
+                                 {"vertex_collection", vertex_collection}, {"response_bytes", response_body.size()});
+                page = parse_minimal_arango_page_into_rows(response_body, rows, row_by_source, seen_by_source, spec);
+                parse_span.add_end_field("response_row_count", page.row_count);
+                parse_span.add_end_field("has_more", page.metadata.value("hasMore", false));
+            }
+
+            if (page.metadata.value("error", false)) {
+                throw std::runtime_error("ArangoDB minimal neighbor query failed: " + page.metadata.dump());
+            }
+
+            if (!page.metadata.contains("result") || !page.metadata["result"].is_array()) {
+                throw std::runtime_error("ArangoDB minimal neighbor response has no result array: " +
+                                         page.metadata.dump());
+            }
+
+            std::size_t total_row_count = page.row_count;
+            std::size_t cursor_page_count = 1;
+            std::size_t cursor_response_bytes = 0;
+
+            if (page.metadata.value("hasMore", false)) {
+                EVENT_SCOPE_INFO(cursor_span, "arango.bfs_cursor_drain", {"vertex_collection", vertex_collection},
+                                 {"streaming_minimal_rows", true});
+
+                while (page.metadata.value("hasMore", false)) {
+                    if (!page.metadata.contains("id") || !page.metadata["id"].is_string()) {
+                        throw std::runtime_error("ArangoDB cursor says hasMore=true but response has no cursor id: " +
+                                                 page.metadata.dump());
+                    }
+
+                    const std::string next_url = config_.endpoint + "/" + page.metadata["id"].get<std::string>();
+                    const std::string next_response_body = http.put(next_url, "{}");
+                    cursor_response_bytes += next_response_body.size();
+
+                    page = parse_minimal_arango_page_into_rows(next_response_body, rows, row_by_source, seen_by_source,
+                                                               spec);
+                    ++cursor_page_count;
+                    total_row_count += page.row_count;
+
+                    if (page.metadata.value("error", false)) {
+                        throw std::runtime_error("ArangoDB minimal neighbor cursor query failed: " +
+                                                 page.metadata.dump());
+                    }
+
+                    if (!page.metadata.contains("result") || !page.metadata["result"].is_array()) {
+                        throw std::runtime_error("ArangoDB minimal neighbor cursor page has no result array: " +
+                                                 page.metadata.dump());
+                    }
+                }
+
+                cursor_span.add_end_field("cursor_page_count", cursor_page_count);
+                cursor_span.add_end_field("cursor_response_bytes", cursor_response_bytes);
+                cursor_span.add_end_field("cursor_result_count", total_row_count);
+                cursor_span.add_end_field("status", "ok");
+            }
+
+            total_span.add_end_field("cursor_page_count", cursor_page_count);
+            total_span.add_end_field("response_row_count", total_row_count);
+            total_span.add_end_field("status", "ok");
+            return total_row_count;
+        }
+
+        [[nodiscard]] json send_req(CurlHttpClient &http, const std::string &query, const json &bind_vars,
+                                    const std::string &vertex_collection, const std::size_t group_size) const {
+            EVENT_SCOPE_INFO(total_span, "arango.bfs_http_query", {"vertex_collection", vertex_collection},
+                             {"group_size", group_size});
+
+            json request;
+            {
+                EVENT_SCOPE_INFO(request_span, "arango.bfs_req_construct", {"vertex_collection", vertex_collection},
+                                 {"bind_variable_count", bind_vars.size()});
+                request = json{{"query", query},
+                               {"bindVars", bind_vars},
+                               // Large enough to avoid excessive cursor round-trips,
+                               // but bounded so concurrent requests do not each ask
+                               // ArangoDB for a million rows at once.
+                               {"batchSize", 50000}};
+                request_span.add_end_field("query_bytes", query.size());
+            }
+
+            std::string request_body;
+            {
+                EVENT_SCOPE_INFO(dump_span, "arango.bfs_json_req_dump", {"vertex_collection", vertex_collection});
+                request_body = request.dump();
+                dump_span.add_end_field("request_bytes", request_body.size());
+            }
+
+            std::string response_body;
+            {
+                EVENT_SCOPE_INFO(http_span, "arango.bfs_http_post", {"vertex_collection", vertex_collection},
+                                 {"request_bytes", request_body.size()});
+                response_body = http.post(config_.endpoint, request_body);
+                http_span.add_end_field("response_bytes", response_body.size());
+            }
+
+            json response;
+            {
+                EVENT_SCOPE_INFO(parse_span, "arango.bfs_response_to_json_parse",
+                                 {"vertex_collection", vertex_collection}, {"response_bytes", response_body.size()});
+                response = json::parse(response_body);
+                parse_span.add_end_field("result_count", response.contains("result") && response["result"].is_array()
+                                                                 ? response["result"].size()
+                                                                 : 0);
+                parse_span.add_end_field("has_more", response.value("hasMore", false));
+            }
 
             if (response.contains("error") && response["error"].is_boolean() && response["error"].get<bool>()) {
+                total_span.add_end_field("status", "arango_error");
                 return response;
             }
 
             if (!response.contains("result") || !response["result"].is_array()) {
+                total_span.add_end_field("status", "missing_result");
                 return response;
             }
 
-            json combined_result = response["result"];
+            json combined_result = std::move(response["result"]);
+            std::size_t cursor_page_count = 1;
+            std::size_t cursor_response_bytes = 0;
+            std::size_t cursor_result_count = combined_result.size();
 
-            while (response.value("hasMore", false)) {
-                if (!response.contains("id") || !response["id"].is_string()) {
-                    throw std::runtime_error("ArangoDB cursor says hasMore=true but response has no cursor id: " +
-                                             response.dump());
+            if (response.value("hasMore", false)) {
+                // Keep pagination as one Arango-specific aggregate span rather
+                // than one tiny span per cursor HTTP/JSON operation.
+                EVENT_SCOPE_INFO(cursor_span, "arango.bfs_cursor_drain", {"vertex_collection", vertex_collection});
+
+                while (response.value("hasMore", false)) {
+                    if (!response.contains("id") || !response["id"].is_string()) {
+                        throw std::runtime_error("ArangoDB cursor says hasMore=true but response has no cursor id: " +
+                                                 response.dump());
+                    }
+
+                    const std::string next_url = config_.endpoint + "/" + response["id"].get<std::string>();
+                    std::string next_response_body = http.put(next_url, "{}");
+                    cursor_response_bytes += next_response_body.size();
+
+                    response = json::parse(next_response_body);
+                    ++cursor_page_count;
+
+                    if (response.contains("error") && response["error"].is_boolean() && response["error"].get<bool>()) {
+                        cursor_span.add_end_field("status", "arango_error");
+                        return response;
+                    }
+
+                    if (!response.contains("result") || !response["result"].is_array()) {
+                        throw std::runtime_error("ArangoDB cursor page does not contain result array: " +
+                                                 response.dump());
+                    }
+
+                    cursor_result_count += response["result"].size();
+                    for (auto &item: response["result"]) {
+                        combined_result.push_back(std::move(item));
+                    }
                 }
 
-                const std::string next_url = config_.endpoint + "/" + response["id"].get<std::string>();
-
-                std::string next_res = http_.put(next_url, "{}");
-                response = json::parse(next_res);
-
-                if (response.contains("error") && response["error"].is_boolean() && response["error"].get<bool>()) {
-                    return response;
-                }
-
-                if (!response.contains("result") || !response["result"].is_array()) {
-                    throw std::runtime_error("ArangoDB cursor page does not contain result array: " + response.dump());
-                }
-
-                for (const auto &item: response["result"]) {
-                    combined_result.push_back(item);
-                }
+                cursor_span.add_end_field("cursor_page_count", cursor_page_count);
+                cursor_span.add_end_field("cursor_response_bytes", cursor_response_bytes);
+                cursor_span.add_end_field("cursor_result_count", cursor_result_count);
+                cursor_span.add_end_field("status", "ok");
             }
 
             response["result"] = std::move(combined_result);
             response["hasMore"] = false;
+
+            total_span.add_end_field("cursor_page_count", cursor_page_count);
+            total_span.add_end_field("combined_result_count", response["result"].size());
+            total_span.add_end_field("status", "ok");
             return response;
         }
 
@@ -1097,8 +1534,8 @@ namespace cpgdb {
 
     std::vector<MinimalAdjacencyRow>
     ArangoQueryVisitor::get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier, const ExpandSpec &spec,
-                                                         int depth) const {
-        return impl_->get_minimal_neighbors_batch_fast(frontier, spec, depth);
+                                                         int depth, std::size_t batch_size) const {
+        return impl_->get_minimal_neighbors_batch_fast(frontier, spec, depth, batch_size);
     }
 
 } // namespace cpgdb

@@ -141,3 +141,7 @@ measurements.csv
 measurements.jsonl
 summary.json
 ```
+
+
+
+python3 tools/cpgdb.py load   data/ldbc-snb/sf0_1/hash-based/domain.json   --reset && python3 tools/cpgdb.py run   data/ldbc-snb/sf0_1/hash-based/domain.json   --run-id ldbc-hash-single-d6e584ea-bee0-562c-bd82-0af0a658ed38-depth7   --start-uuid "d6e584ea-bee0-562c-bd82-0af0a658ed38"   --repetitions 5   --   --max-depth 7   --direction undirected

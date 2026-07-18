@@ -17,11 +17,14 @@ class NeighborExpander {
     expand_layer(const std::vector<NodeRef>& frontier,
                  const ExpandSpec& spec,
                  int depth,
-                 bool parallel) const;
+                 const BfsOptions& options) const;
 
   private:
     [[nodiscard]] std::vector<MinimalAdjacencyRow> expand_layer_parallel(
-        const PlacementCatalog::LayerExpansionPlan& plan, const ExpandSpec& spec, int depth) const;
+        const PlacementCatalog::LayerExpansionPlan& plan,
+        const ExpandSpec& spec,
+        int depth,
+        const BfsOptions& options) const;
 
   private:
     const PlacementCatalog& catalog_;
