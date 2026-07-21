@@ -4,8 +4,8 @@
  */
 
 #include "server/grpc/GrpcTraversalService.hpp"
+#include "utilities/uuid.hpp"
 
-#include <boost/uuid/uuid_io.hpp>
 #include <exception>
 #include <stdexcept>
 #include <string>
@@ -13,7 +13,7 @@
 namespace cpgdb::server::grpc_api {
     namespace {
 
-        std::string uuid_to_string(const GlobalId &id) { return boost::uuids::to_string(id); }
+        std::string uuid_to_string(const GlobalId &id) { return global_id_to_string(id); }
 
         void fill_proto_layer(pb::BfsLayer &out, const std::string &graph_id, const BfsLayerEvent &layer) {
             out.set_graph_id(graph_id);

@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--start-uuid", action="append", default=[], help="Can be repeated or comma-separated.")
-    parser.add_argument("--start-uuids-file", help="Text file with one UUID per line or comma-separated UUIDs.")
+    parser.add_argument("--start-uuids-file", help="Text file with one uint64 ID per line or comma-separated IDs.")
     parser.add_argument("--native-backends", default="neo4j,arango")
     parser.add_argument("--implementation-backends", default="neo4j,arango,gpu")
     parser.add_argument("--no-compare", action="store_true", help="Do not compare outputs to tools/algorithms/bfs.py")
@@ -40,7 +40,7 @@ def main() -> int:
     if not start_uuids:
         graph = GraphData.load(config.paths.data)
         if not graph.nodes:
-            raise SystemExit("No start UUID supplied and data file contains no nodes")
+            raise SystemExit("No start ID supplied and data file contains no nodes")
         start_uuids = [graph.nodes[0].uuid]
         print(f"No --start-uuid supplied; using first data node: {start_uuids[0]}", file=sys.stderr)
 

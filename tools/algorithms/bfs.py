@@ -11,24 +11,26 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tools.graphio import open_graph_reader
+from tools.graphio.id_codec import parse_global_id
 
 
 class Graph:
     def __init__(self) -> None:
-        self.nodes: dict[str, object] = {}
-        self.adj: dict[str, list[str]] = {}
+        # Node/relationship records now expose uint64 IDs as Python ints.  Keep
+        # only adjacency here: retaining full NodeRecord objects (and all LDBC
+        # properties) makes the reference implementation unnecessarily large.
+        self.adj: dict[int, list[int]] = {}
 
     def add_node(self, node) -> None:
-        self.nodes[node.uuid] = node
         self.adj.setdefault(node.uuid, [])
 
-    def add_edge(self, from_uuid: str, to_uuid: str, *, undirected: bool = True) -> None:
+    def add_edge(self, from_uuid: int, to_uuid: int, *, undirected: bool = True) -> None:
         self.adj.setdefault(from_uuid, []).append(to_uuid)
         self.adj.setdefault(to_uuid, [])
         if undirected:
             self.adj[to_uuid].append(from_uuid)
 
-    def bfs_depths(self, start_uuid: str, max_depth: int | None = None) -> dict[str, int]:
+    def bfs_depths(self, start_uuid: int, max_depth: int | None = None) -> dict[int, int]:
         if start_uuid not in self.adj:
             raise ValueError(f"Start node {start_uuid} not found in graph")
         visited = {start_uuid}
@@ -56,7 +58,7 @@ def load_graph(path: str, *, undirected: bool = True) -> Graph:
     return graph
 
 
-def save_depths_to_csv(depths: dict[str, int], path: str) -> None:
+def save_depths_to_csv(depths: dict[int, int], path: str) -> None:
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle, delimiter=";")
         writer.writerow(["vertex_id", "distance"])
@@ -69,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", help="Path to .json/.jsonl graph data")
     parser.add_argument("--input-json", dest="input_json", help="Backward-compatible alias for --input")
     parser.add_argument("--output-csv", required=True)
-    parser.add_argument("--start-uuid", required=True)
+    parser.add_argument("--start-uuid", required=True, type=parse_global_id)
     parser.add_argument("--max-depth", type=int, default=7, help="Use -1 for unlimited")
     parser.add_argument("--directed", action="store_true", help="Treat relationships as directed")
     args = parser.parse_args()

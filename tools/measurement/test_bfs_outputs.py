@@ -14,7 +14,7 @@ from tools.measurement.graph_bench.orchestrator import BfsBenchmarkOrchestrator
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run distributed graph_db BFS for many start UUIDs and compare each output to tools/algorithms/bfs.py.")
+    parser = argparse.ArgumentParser(description="Run distributed graph_db BFS for many start IDs and compare each output to tools/algorithms/bfs.py.")
     parser.add_argument("--config")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--start-uuid", action="append", default=[], help="Can be repeated or comma-separated.")

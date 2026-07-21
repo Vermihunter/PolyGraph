@@ -16,7 +16,7 @@
 namespace cpgdb {
 struct NodeRef {
     GlobalId global_id;
-    // A UUID-only API entry point leaves this unresolved. Storage adapters
+    // An ID-only API entry point leaves this unresolved. Storage adapters
     // return concrete logical types for discovered neighbors.
     TypeId type = unresolved_type_id;
 };

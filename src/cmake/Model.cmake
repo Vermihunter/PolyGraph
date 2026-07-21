@@ -7,5 +7,5 @@ set(CPGDB_MODEL_SOURCES
 add_library(cpgdb_model STATIC ${CPGDB_MODEL_SOURCES})
 add_library(cpgdb::model ALIAS cpgdb_model)
 
-target_link_libraries(cpgdb_model PUBLIC cpgdb::boost spdlog::spdlog)
+target_link_libraries(cpgdb_model PUBLIC spdlog::spdlog)
 cpgdb_configure_target(cpgdb_model)

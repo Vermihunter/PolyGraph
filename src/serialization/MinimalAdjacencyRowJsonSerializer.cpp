@@ -3,15 +3,14 @@
 //
 
 #include "serialization/MinimalAdjacencyRowJsonSerializer.hpp"
+#include "utilities/uuid.hpp"
 
 #include "serialization/NodeRefJsonSerializer.hpp"
 
-#include <boost/uuid/uuid_io.hpp>
 
 namespace cpgdb {
     void to_json(json &value, const MinimalAdjacencyRow &adj_row) {
-        value = json{{"source-id", boost::uuids::to_string(adj_row.source.global_id)},
-                     {"neighbors", adj_row.neighbors}};
+        value = json{{"source-id", global_id_to_string(adj_row.source.global_id)}, {"neighbors", adj_row.neighbors}};
     }
 
     /*

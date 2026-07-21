@@ -9,5 +9,5 @@ set(CPGDB_SERIALIZATION_SOURCES
 add_library(cpgdb_serialization STATIC ${CPGDB_SERIALIZATION_SOURCES})
 add_library(cpgdb::serialization ALIAS cpgdb_serialization)
 
-target_link_libraries(cpgdb_serialization PUBLIC cpgdb::core cpgdb::boost spdlog::spdlog)
+target_link_libraries(cpgdb_serialization PUBLIC cpgdb::core spdlog::spdlog)
 cpgdb_configure_target(cpgdb_serialization)

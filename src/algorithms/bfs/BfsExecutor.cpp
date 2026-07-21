@@ -4,13 +4,12 @@
  */
 
 #include "algorithms/bfs/BfsExecutor.hpp"
+#include "utilities/uuid.hpp"
 
 #include "logging/level/Debug.hpp"
 #include "utilities/Profiling.hpp"
 #include "utilities/logging.hpp"
 
-#include <boost/lexical_cast.hpp>
-#include <boost/uuid/uuid_io.hpp>
 #include <future>
 #include <iterator>
 #include <limits>
@@ -72,7 +71,7 @@ namespace cpgdb {
 
     BfsResult BfsExecutor::run_distributed_frontier_bfs(const NodeRef &source, const ExpandSpec &spec,
                                                         const BfsOptions &options) const {
-        EVENT_SCOPE_INFO(full_bfs, "full_bfs", {"source-uuid", ::boost::uuids::to_string(source.global_id)});
+        EVENT_SCOPE_INFO(full_bfs, "full_bfs", {"source-uuid", global_id_to_string(source.global_id)});
         DenseBfsState state;
         state.reserve(expected_vertex_count);
 

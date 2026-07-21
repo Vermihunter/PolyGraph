@@ -14,7 +14,6 @@
 #include "data_model/MinimalAdjacencyRow.hpp"
 #include "infrastructure/PlacementCatalog.hpp"
 
-#include <boost/container_hash/hash.hpp>
 #include <cstdint>
 #include <functional>
 #include <unordered_map>
@@ -57,14 +56,14 @@ class BfsExecutor {
                   const std::function<void(const BfsLayerEvent&)>& on_layer) const;
 
   private:
-    /** @brief Compact per-run state that avoids UUID-keyed predecessor storage. */
+    /** @brief Compact per-run state that avoids ID-keyed predecessor storage. */
     struct DenseBfsState {
         /// Sentinel indicating that a dense vertex has no predecessor.
         static constexpr std::uint32_t no_predecessor = UINT32_MAX;
 
-        /// Stable UUID to dense-index lookup.
-        std::unordered_map<GlobalId, std::uint32_t, boost::hash<GlobalId>> to_dense;
-        /// Reverse dense-index to UUID lookup.
+        /// Stable ID to dense-index lookup.
+        std::unordered_map<GlobalId, std::uint32_t, std::hash<GlobalId>> to_dense;
+        /// Reverse dense-index to ID lookup.
         std::vector<GlobalId> to_global;
         /// Distance for each dense vertex; negative values mean undiscovered.
         std::vector<int> distance;
@@ -89,7 +88,7 @@ class BfsExecutor {
         const BfsOptions& options,
         const std::function<void(const BfsLayerEvent&)>& on_layer) const;
 
-    /** @brief Converts compact dense state to the external UUID-keyed representation. */
+    /** @brief Converts compact dense state to the external ID-keyed representation. */
     [[nodiscard]] static BfsResult make_result(const DenseBfsState& state,
                                                bool include_predecessors);
 

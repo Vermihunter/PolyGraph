@@ -150,7 +150,7 @@ def load_placement(
         raw = json.load(handle)
     configured_backends = tuple(
         str(value)
-        for value in raw.get("storageBackends", raw.get("uuidRouting", storage_backends))
+        for value in raw.get("storageBackends", raw.get("idRouting", storage_backends))
     )
     node_sources = dict(raw.get("nodeSources", raw.get("node_sources", {})))
     relationship_sources = dict(
@@ -415,7 +415,7 @@ def write_jsonl(
         output,
         {
             "dataset": "ldbc-snb-interactive-v1",
-            "uuidRoutingStrategy": placement.strategy_name,
+            "idRoutingStrategy": placement.strategy_name,
             **routing_layout.metadata(),
         },
     ) as writer:
@@ -441,7 +441,7 @@ def write_monolithic_json(
         nodes,
         relationships,
         metadata={
-            "uuidRoutingStrategy": placement.strategy_name,
+            "idRoutingStrategy": placement.strategy_name,
             **placement.routing_layout().metadata(),
         },
     )
@@ -519,14 +519,14 @@ def main() -> int:
     parser.add_argument("--backend-config-output", help="Generated backend configuration matching placement.")
     parser.add_argument(
         "--placement-config",
-        help="Optional legacy type overrides; omitted means deterministic per-object UUID routing.",
+        help="Optional legacy type overrides; omitted means deterministic per-object ID routing.",
     )
     parser.add_argument(
         "--storage-backends",
         nargs="+",
         choices=["Neo4J", "ArangoDB", "GPU"],
         default=list(DEFAULT_ROUTING_BACKENDS),
-        help="Ordered backend list; B=3 automatically uses two UUID suffix bits.",
+        help="Ordered backend list; B=3 automatically uses two ID MSB routing bits.",
     )
     parser.add_argument("--default-source", default="Neo4J", choices=["Neo4J", "ArangoDB", "GPU"])
     parser.add_argument("--arango-database", default="university")

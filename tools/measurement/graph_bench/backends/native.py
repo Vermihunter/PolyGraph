@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, DefaultDict, Iterable, Optional, Sequence
 
@@ -9,6 +9,7 @@ import requests
 
 from ..common import sanitize_db_identifier
 from ..graph_data import GraphData, NodeRecord, RelationshipRecord
+from tools.graphio.id_codec import parse_global_id, to_signed_storage
 
 GRAPH_NODE_LABEL = "__GraphNode"
 GRAPH_NAME = "UnifiedGraph"
@@ -33,7 +34,7 @@ def relationship_filter_from_schema(schema_path: str | Path) -> str:
     return "|".join(sanitize_db_identifier(r["name"]) for r in schema.get("relations", []))
 
 
-def write_bfs_csv(path: str | Path, rows: Iterable[tuple[str, int]]) -> None:
+def write_bfs_csv(path: str | Path, rows: Iterable[tuple[int | str, int]]) -> None:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     ordered = sorted(rows, key=lambda x: (x[1], x[0]))
@@ -44,12 +45,21 @@ def write_bfs_csv(path: str | Path, rows: Iterable[tuple[str, int]]) -> None:
 
 
 class Neo4jNativeClient:
-    """Native full-replica Neo4j loader + APOC BFS query client."""
+    """Native full-replica Neo4j loader + GDS BFS query client.
+
+    Real Neo4j entities deliberately carry no logical ``uuid`` property. The
+    benchmark keeps the input-global <-> Neo4j-native mapping in this process,
+    projects the database into GDS once after loading, and translates GDS native
+    IDs back to the benchmark's uint64 IDs when writing CSV output.
+    """
 
     def __init__(self, endpoint: str, user: str, password: str, *, batch_size: int = 10000):
         self.endpoint = endpoint
         self.batch_size = batch_size
         self.session = requests.Session()
+        self._graph: GraphData | None = None
+        self._native_by_global: dict[int, int] = {}
+        self._global_by_native: dict[int, int] = {}
         if user:
             self.session.auth = (user, password)
         self.session.headers.update({"Content-Type": "application/json"})
@@ -66,40 +76,90 @@ class Neo4jNativeClient:
             raise RuntimeError(f"Neo4j returned errors: {json.dumps(payload['errors'], indent=2)}")
         return payload
 
+    def _drop_gds_projection(self) -> None:
+        self.tx([{
+            "statement": "CALL gds.graph.drop($graphName, false) YIELD graphName RETURN graphName",
+            "parameters": {"graphName": GRAPH_NAME},
+        }], timeout=300)
+
     def reset(self) -> None:
-        # Never delete a large graph in one transaction. The transaction state for
-        # MATCH (n) DETACH DELETE n can exhaust Neo4j's transaction-memory pool
-        # before the following benchmark load even begins.
-        delete_batch_size = max(100, min(self.batch_size, 1_000))
-        statement = f"""
-            MATCH (n:{_entity_label()})
-            WITH n LIMIT $limit
-            DETACH DELETE n
+        # A named projection retains the previous native IDs and must be dropped
+        # before deleting/reloading the physical graph.
+        self._drop_gds_projection()
+        self._graph = None
+        self._native_by_global.clear()
+        self._global_by_native.clear()
+
+        # Delete relationships before nodes. A batch of N DETACH DELETE nodes can
+        # still detach hundreds of thousands of relationships when it happens to
+        # contain high-degree vertices, which makes the transaction-state size
+        # unrelated to N and can exhaust Neo4j's transaction-memory pool.
+        relationship_delete_batch_size = max(1_000, min(self.batch_size * 4, 10_000))
+        relationship_statement = f"""
+            MATCH (n:{_entity_label()})-[r]-()
+            WITH DISTINCT r LIMIT $limit
+            DELETE r
             RETURN count(*) AS deleted
         """
         while True:
             payload = self.tx([{
-                "statement": statement,
-                "parameters": {"limit": delete_batch_size},
+                "statement": relationship_statement,
+                "parameters": {"limit": relationship_delete_batch_size},
             }], timeout=900)
             rows = payload["results"][0]["data"]
             deleted = int(rows[0]["row"][0]) if rows else 0
             if deleted == 0:
                 break
 
-    def create_constraints(self) -> None:
-        self.tx([{"statement": f"""
-            CREATE CONSTRAINT graphnode_uuid_unique IF NOT EXISTS
-            FOR (n:{_entity_label()}) REQUIRE n.uuid IS UNIQUE
-        """}], timeout=300)
+        # All benchmark nodes are isolated now, so plain DELETE has predictable
+        # transaction memory and does not trigger implicit relationship deletion.
+        node_delete_batch_size = max(1_000, min(self.batch_size * 10, 10_000))
+        node_statement = f"""
+            MATCH (n:{_entity_label()})
+            WITH n LIMIT $limit
+            DELETE n
+            RETURN count(*) AS deleted
+        """
+        while True:
+            payload = self.tx([{
+                "statement": node_statement,
+                "parameters": {"limit": node_delete_batch_size},
+            }], timeout=900)
+            rows = payload["results"][0]["data"]
+            deleted = int(rows[0]["row"][0]) if rows else 0
+            if deleted == 0:
+                break
+
+    def _project_gds_graph(self, relationship_types: Iterable[str]) -> None:
+        relationship_projection = {
+            relationship_type: {
+                "type": relationship_type,
+                "orientation": "UNDIRECTED",
+            }
+            for relationship_type in sorted(set(relationship_types))
+        }
+        self.tx([{
+            "statement": (
+                "CALL gds.graph.project($graphName, $nodeLabel, $relationshipProjection) "
+                "YIELD graphName, nodeCount, relationshipCount "
+                "RETURN graphName, nodeCount, relationshipCount"
+            ),
+            "parameters": {
+                "graphName": GRAPH_NAME,
+                "nodeLabel": GRAPH_NODE_LABEL,
+                "relationshipProjection": relationship_projection,
+            },
+        }], timeout=900)
 
     def load_full_graph(self, graph: GraphData) -> None:
         self.reset()
+        self._graph = graph
 
         nodes_by_type: DefaultDict[str, list[dict[str, Any]]] = defaultdict(list)
         for node in graph.nodes:
-            props = {**node.properties, "uuid": node.uuid, "type": node.type, "source": node.source}
-            nodes_by_type[node.type].append({"props": props})
+            props = {**node.properties, "type": node.type, "source": node.source}
+            props.pop("uuid", None)
+            nodes_by_type[node.type].append({"input_id": str(node.uuid), "props": props})
 
         for node_type, rows in sorted(nodes_by_type.items()):
             label = _cypher_ident(node_type)
@@ -107,53 +167,138 @@ class Neo4jNativeClient:
                 UNWIND $rows AS row
                 CREATE (n:{_entity_label()}:{label})
                 SET n = row.props
+                RETURN row.input_id AS input_id, id(n) AS native_id
             """
             for batch in _chunks(rows, self.batch_size):
-                self.tx([{"statement": statement, "parameters": {"rows": list(batch)}}], timeout=900)
+                payload = self.tx([{"statement": statement, "parameters": {"rows": list(batch)}}], timeout=900)
+                for item in payload["results"][0]["data"]:
+                    input_id, native_id = item["row"]
+                    global_id = parse_global_id(input_id)
+                    native = int(native_id)
+                    self._native_by_global[global_id] = native
+                    self._global_by_native[native] = global_id
 
-        self.create_constraints()
+        if len(self._native_by_global) != len(graph.nodes):
+            raise RuntimeError(
+                f"Neo4j returned {len(self._native_by_global)} native node IDs for {len(graph.nodes)} nodes"
+            )
 
         rels_by_type: DefaultDict[str, list[dict[str, Any]]] = defaultdict(list)
         for rel in graph.relationships:
-            props = {**rel.properties, "uuid": rel.uuid, "type": rel.type, "source": rel.source}
-            rels_by_type[rel.type].append({"from_uuid": rel.from_uuid, "to_uuid": rel.to_uuid, "props": props})
+            props = {**rel.properties, "type": rel.type, "source": rel.source}
+            props.pop("uuid", None)
+            rels_by_type[rel.type].append({
+                "from_native": self._native_by_global[rel.from_uuid],
+                "to_native": self._native_by_global[rel.to_uuid],
+                "props": props,
+            })
 
         for rel_type, rows in sorted(rels_by_type.items()):
             rtype = _cypher_ident(rel_type)
             statement = f"""
                 UNWIND $rows AS row
-                MATCH (a:{_entity_label()} {{uuid: row.from_uuid}})
-                MATCH (b:{_entity_label()} {{uuid: row.to_uuid}})
+                MATCH (a:{_entity_label()}) WHERE id(a) = row.from_native
+                MATCH (b:{_entity_label()}) WHERE id(b) = row.to_native
                 CREATE (a)-[r:{rtype}]->(b)
                 SET r = row.props
             """
             for batch in _chunks(rows, self.batch_size):
                 self.tx([{"statement": statement, "parameters": {"rows": list(batch)}}], timeout=900)
 
+        self._project_gds_graph(rels_by_type)
+
+    @staticmethod
+    def _reference_distances(
+        graph: GraphData,
+        start_id: int,
+        max_depth: int,
+        relationship_types: set[str] | None,
+    ) -> dict[int, int]:
+        adjacency: DefaultDict[int, list[int]] = defaultdict(list)
+        for relationship in graph.relationships:
+            if relationship_types and relationship.type not in relationship_types:
+                continue
+            adjacency[relationship.from_uuid].append(relationship.to_uuid)
+            adjacency[relationship.to_uuid].append(relationship.from_uuid)
+
+        distances = {start_id: 0}
+        queue = deque([start_id])
+        while queue:
+            source = queue.popleft()
+            depth = distances[source]
+            if depth >= max_depth:
+                continue
+            for neighbor in adjacency.get(source, []):
+                if neighbor in distances:
+                    continue
+                distances[neighbor] = depth + 1
+                queue.append(neighbor)
+        return distances
+
     def bfs(self, start_uuid: str, relationship_filter: str, max_depth: int, output_csv: str | Path) -> int:
-        statement = f"""
-            MATCH (start:{_entity_label()} {{uuid: $startUuid}})
-            CALL apoc.path.expandConfig(start, {{
-              minLevel: 0,
-              maxLevel: $maxDepth,
-              relationshipFilter: $relationshipFilter,
-              bfs: true,
-              uniqueness: 'NODE_GLOBAL'
-            }}) YIELD path
-            WITH last(nodes(path)) AS node, length(path) AS distance
-            RETURN node.uuid AS vertex_id, distance AS distance
-        """
+        if self._graph is None:
+            raise RuntimeError("Neo4j graph must be loaded before running GDS BFS")
+
+        start_id = parse_global_id(start_uuid)
+        try:
+            source_native = self._native_by_global[start_id]
+        except KeyError as exc:
+            raise ValueError(f"Start ID is not present in loaded Neo4j graph: {start_uuid}") from exc
+
+        relationship_types = {value for value in relationship_filter.split("|") if value}
+        configuration: dict[str, Any] = {
+            "sourceNode": source_native,
+            "maxDepth": int(max_depth),
+            "logProgress": False,
+        }
+        if relationship_types:
+            configuration["relationshipTypes"] = sorted(relationship_types)
+
         payload = self.tx([{
-            "statement": statement,
-            "parameters": {
-                "startUuid": start_uuid,
-                "maxDepth": max_depth,
-                "relationshipFilter": relationship_filter,
-            },
+            "statement": (
+                "WITH $configuration AS config "
+                "CALL gds.bfs.stream("
+                "$graphName, "
+                "config {"
+                ".*, "
+                "sourceNode: toInteger(toString(config.sourceNode)), "
+                "maxDepth: toInteger(toString(config.maxDepth))"
+                "}"
+                ") "
+                "YIELD sourceNode, nodeIds "
+                "RETURN sourceNode, nodeIds"
+            ),
+            "parameters": {"graphName": GRAPH_NAME, "configuration": configuration},
         }], timeout=900)
-        rows = [(row["row"][0], int(row["row"][1])) for row in payload["results"][0]["data"]]
-        write_bfs_csv(output_csv, rows)
-        return len(rows)
+
+        data = payload["results"][0]["data"]
+        if len(data) != 1 or len(data[0].get("row", [])) < 2:
+            raise RuntimeError(f"Unexpected gds.bfs.stream output: {data}")
+        returned_source, native_ids = data[0]["row"]
+        if int(returned_source) != source_native or not isinstance(native_ids, list):
+            raise RuntimeError(f"Unexpected gds.bfs.stream output row: {data[0]['row']}")
+
+        try:
+            visited = {self._global_by_native[int(native_id)] for native_id in native_ids}
+        except KeyError as exc:
+            raise RuntimeError(f"GDS returned an unknown Neo4j native node ID: {exc.args[0]}") from exc
+
+        # gds.bfs returns the visited native IDs and a traversal-order path, not
+        # per-vertex levels. Reconstruct levels from the same in-memory input and
+        # assert that the visited set exactly matches GDS before writing the CSV.
+        distances = self._reference_distances(
+            self._graph, start_id, max_depth, relationship_types or None
+        )
+        if visited != set(distances):
+            missing = sorted(set(distances) - visited)[:10]
+            extra = sorted(visited - set(distances))[:10]
+            raise RuntimeError(
+                "gds.bfs.stream visited-set mismatch "
+                f"(missing={missing}, extra={extra}, gds={len(visited)}, expected={len(distances)})"
+            )
+
+        write_bfs_csv(output_csv, distances.items())
+        return len(distances)
 
 
 class ArangoNativeClient:
@@ -196,18 +341,38 @@ class ArangoNativeClient:
         if response.status_code not in (200, 201, 409):
             raise RuntimeError(f"Create Arango collection {name} failed: HTTP {response.status_code}: {response.text}")
 
+    def ensure_uuid_index(self, name: str) -> None:
+        collection = sanitize_db_identifier(name)
+        response = self.session.post(
+            self.db_api(f"/_api/index?collection={collection}"),
+            json={
+                "type": "persistent",
+                "fields": ["uuid"],
+                "unique": True,
+                "sparse": False,
+                "name": sanitize_db_identifier(f"{collection}_uuid_unique"),
+            },
+            timeout=300,
+        )
+        if response.status_code not in (200, 201, 409):
+            raise RuntimeError(
+                f"Create Arango uuid index for {name} failed: HTTP {response.status_code}: {response.text}"
+            )
+
     def load_full_graph(self, graph: GraphData) -> None:
         self.reset_database()
         vertex_collections = sorted({sanitize_db_identifier(n.type) for n in graph.nodes})
         edge_collections = sorted({sanitize_db_identifier(r.type) for r in graph.relationships})
         for collection in vertex_collections:
             self.ensure_collection(collection, edge=False)
+            self.ensure_uuid_index(collection)
         for collection in edge_collections:
             self.ensure_collection(collection, edge=True)
+            self.ensure_uuid_index(collection)
 
         nodes_by_type: DefaultDict[str, list[dict[str, Any]]] = defaultdict(list)
         for node in graph.nodes:
-            doc = {**node.properties, "_key": node.uuid, "uuid": node.uuid, "type": node.type, "source": node.source}
+            doc = {**node.properties, "_key": str(node.uuid), "uuid": to_signed_storage(node.uuid), "type": node.type, "source": node.source}
             nodes_by_type[node.type].append(doc)
 
         for node_type, docs in sorted(nodes_by_type.items()):
@@ -227,10 +392,10 @@ class ArangoNativeClient:
             to_type = graph.node_type_by_uuid[rel.to_uuid]
             doc = {
                 **rel.properties,
-                "_key": rel.uuid,
+                "_key": str(rel.uuid),
                 "_from": f"{sanitize_db_identifier(from_type)}/{rel.from_uuid}",
                 "_to": f"{sanitize_db_identifier(to_type)}/{rel.to_uuid}",
-                "uuid": rel.uuid,
+                "uuid": to_signed_storage(rel.uuid),
                 "type": rel.type,
                 "source": rel.source,
             }
@@ -276,7 +441,8 @@ class ArangoNativeClient:
 
     def bfs(self, graph: GraphData, start_uuid: str, max_depth: int, output_csv: str | Path) -> int:
         try:
-            start_id = f"{sanitize_db_identifier(graph.start_type(start_uuid))}/{start_uuid}"
+            normalized_start = parse_global_id(start_uuid)
+            start_id = f"{sanitize_db_identifier(graph.start_type(normalized_start))}/{normalized_start}"
         except ValueError as exc:
             raise ValueError(f"Cannot build Arango start id for {start_uuid}") from exc
         query = f"""
@@ -285,6 +451,6 @@ class ArangoNativeClient:
               RETURN {{ vertex_id: v.uuid, distance: LENGTH(p.edges) }}
         """
         rows = self._cursor_query(query, {"startId": start_id, "maxDepth": max_depth})
-        pairs = [(r["vertex_id"], int(r["distance"])) for r in rows]
+        pairs = [(parse_global_id(r["vertex_id"]), int(r["distance"])) for r in rows]
         write_bfs_csv(output_csv, pairs)
         return len(pairs)

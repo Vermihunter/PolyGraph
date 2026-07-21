@@ -24,7 +24,15 @@ struct BfsOptions {
     bool allow_partial_acceleration = true;
     /// Maximum number of frontier vertices included in one backend neighbor request.
     std::size_t neighbor_batch_size = 10'000;
-    /// Requested worker count for the reusable BFS thread pool (not used by batching yet).
+    /// Maximum number of Neo4j neighbor requests allowed to execute concurrently.
+    std::size_t neo4j_max_concurrent_requests = 4;
+    /// Maximum number of ArangoDB neighbor requests allowed to execute concurrently.
+    std::size_t arango_max_concurrent_requests = 4;
+    /// Number of retries after the initial backend request attempt.
+    std::size_t backend_request_retries = 2;
+    /// Initial retry delay; each subsequent retry doubles this value.
+    std::size_t backend_retry_delay_ms = 100;
+    /// Requested worker count for the reusable BFS thread pool.
     std::size_t thread_count = 1;
 };
 

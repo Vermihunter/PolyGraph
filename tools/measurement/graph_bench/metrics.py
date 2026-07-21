@@ -29,11 +29,69 @@ class RunRecord:
 
 
 class MeasurementSink:
-    """Append-only collector for benchmark measurements and validation metadata."""
+    """Checkpointed collector for benchmark measurements and validation metadata."""
 
-    def __init__(self, output_dir: str | Path):
+    def __init__(self, output_dir: str | Path, *, resume: bool = False):
         self.output_dir = ensure_dir(output_dir)
         self.records: list[RunRecord] = []
+        self._record_indexes: dict[tuple[str, str, str, int, str], int] = {}
+        if resume:
+            self._load_existing()
+
+    @staticmethod
+    def _key(record: RunRecord) -> tuple[str, str, str, int, str]:
+        return (
+            record.scenario,
+            record.system,
+            record.phase,
+            int(record.repetition),
+            str(record.start_uuid),
+        )
+
+    def _load_existing(self) -> None:
+        path = self.output_dir / "measurements.jsonl"
+        if not path.is_file():
+            return
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+                record = RunRecord(**payload)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    f"Cannot resume from malformed measurement at {path}:{line_number}: {exc}"
+                ) from exc
+            self.add(record)
+
+    def find(
+        self,
+        *,
+        scenario: str,
+        system: str,
+        phase: str,
+        repetition: int = 0,
+        start_uuid: str = "",
+    ) -> Optional[RunRecord]:
+        key = (scenario, system, phase, int(repetition), str(start_uuid))
+        index = self._record_indexes.get(key)
+        return None if index is None else self.records[index]
+
+    def successful(self, **key: Any) -> bool:
+        record = self.find(**key)
+        return record is not None and record.status == "ok"
+
+    def remove(self, **key: Any) -> None:
+        record = self.find(**key)
+        if record is None:
+            return
+        removed_key = self._key(record)
+        index = self._record_indexes.pop(removed_key)
+        self.records.pop(index)
+        self._record_indexes = {
+            self._key(existing): existing_index
+            for existing_index, existing in enumerate(self.records)
+        }
 
     @contextmanager
     def measure(
@@ -72,10 +130,16 @@ class MeasurementSink:
             record.status = "ok"
         finally:
             record.seconds = time.perf_counter() - started
-            self.records.append(record)
+            self.add(record)
 
     def add(self, record: RunRecord) -> None:
-        self.records.append(record)
+        key = self._key(record)
+        existing_index = self._record_indexes.get(key)
+        if existing_index is None:
+            self._record_indexes[key] = len(self.records)
+            self.records.append(record)
+        else:
+            self.records[existing_index] = record
 
     def write_jsonl(self, path: str | Path | None = None) -> Path:
         out = Path(path) if path else self.output_dir / "measurements.jsonl"

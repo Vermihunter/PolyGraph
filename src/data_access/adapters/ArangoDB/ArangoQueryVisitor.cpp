@@ -6,9 +6,12 @@
 #include "data_access/adapters/ArangoDB/ArangoQueryVisitor.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <future>
 #include <iterator>
+#include <thread>
 
 #include "infrastructure/BackendConnectionConfig.hpp"
 #include "infrastructure/DatabaseContext.hpp"
@@ -24,9 +27,6 @@
 #include "utilities/Profiling.hpp"
 #include "utilities/logging.hpp"
 
-#include <boost/container_hash/hash.hpp>
-#include <boost/lexical_cast.hpp>
-#include <boost/uuid/uuid_io.hpp>
 #include <data_model/Record.hpp>
 #include <mutex>
 #include <optional>
@@ -86,12 +86,10 @@ namespace cpgdb {
 
             const std::string collection = db_context_.schema->node_type(node.type).name;
 
-            const std::string query = "FOR doc IN @@collection "
-                                      "FILTER doc.uuid == @uuid "
-                                      "LIMIT 1 "
-                                      "RETURN doc";
+            const std::string query = "LET doc = DOCUMENT(@@collection, @key) "
+                                      "FILTER doc != null RETURN doc";
 
-            json bindVars = {{"@collection", collection}, {"uuid", boost::uuids::to_string(node.global_id)}};
+            json bindVars = {{"@collection", collection}, {"key", global_id_to_string(node.global_id)}};
 
             return evaluate(query, bindVars, ResultParseType::Node);
         }
@@ -112,7 +110,7 @@ namespace cpgdb {
                 json frontierJson = json::array();
 
                 for (const auto &v: frontier) {
-                    frontierJson.push_back(boost::uuids::to_string(v.global_id));
+                    frontierJson.push_back(global_id_to_string(v.global_id));
                 }
 
                 std::vector<TypeId> edge_type_ids = edge_types_for_query(q.spec());
@@ -156,8 +154,9 @@ namespace cpgdb {
                  * the real stored edge direction even when traversal uses ANY.
                  */
                 // NOLINTBEGIN(performance-inefficient-string-concatenation)
-                const std::string query = "FOR start IN @@vertexCollection "
-                                          "FILTER start._key IN @frontier "
+                const std::string query = "FOR source_key IN @frontier "
+                                          "LET start = DOCUMENT(@@vertexCollection, source_key) "
+                                          "FILTER start != null "
                                           "FOR neighbor, edge IN 1..1 " +
                                           direction + " start " + edgeCollectionsAql +
                                           " "
@@ -181,9 +180,10 @@ namespace cpgdb {
             return combined;
         }
 
-        std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier,
-                                                                          const ExpandSpec &spec, int depth,
-                                                                          std::size_t batch_size) const {
+        std::vector<MinimalAdjacencyRow>
+        get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth,
+                                         std::size_t batch_size, std::size_t max_concurrent_requests,
+                                         std::size_t request_retries, std::size_t retry_delay_ms) const {
             /*
              * Keep the switch here: one active implementation and the other
              * two preserved immediately below it for reproducible benchmarks.
@@ -191,7 +191,8 @@ namespace cpgdb {
 
             // return get_minimal_neighbors_batch_edge_index_union(frontier, spec, depth);
             //  return get_minimal_neighbors_batch_traversal_projection(frontier, spec, depth);
-            return get_minimal_neighbors_batch_traversal_projection_async(frontier, spec, depth, batch_size);
+            return get_minimal_neighbors_batch_traversal_projection_async(
+                    frontier, spec, depth, batch_size, max_concurrent_requests, request_retries, retry_delay_ms);
             // return get_minimal_neighbors_batch_original(frontier, spec, depth);
         }
 
@@ -225,35 +226,31 @@ namespace cpgdb {
             }
 
             for (const auto &[node_type, rows]: node_groups) {
-                const std::string query_text = "LET inserted = ("
-                                               "  FOR row IN @rows "
-                                               "    INSERT MERGE(row.properties, {"
-                                               "      uuid: row.uuid, cpgdb_type_id: row.type, labels: row.labels"
-                                               "    }) INTO @@collection "
-                                               "    RETURN 1"
-                                               ") RETURN LENGTH(inserted)";
+                const std::string query_text =
+                        "LET inserted = ("
+                        "  FOR row IN @rows "
+                        "    INSERT MERGE(row.properties, {"
+                        "      _key: row.key, uuid: row.uuid, cpgdb_type_id: row.type, labels: row.labels"
+                        "    }) INTO @@collection "
+                        "    RETURN 1"
+                        ") RETURN LENGTH(inserted)";
                 const json bind_vars{{"rows", rows}, {"@collection", db_context_.schema->node_type(node_type).name}};
                 execute_write(query_text, bind_vars, rows.size());
             }
 
             for (const auto &[edge_type, rows]: edge_groups) {
                 const auto &schema_edge = db_context_.schema->edge_type(edge_type);
-                const std::string query_text =
-                        "LET inserted = ("
-                        "  FOR row IN @rows "
-                        "    LET source = FIRST("
-                        "      FOR doc IN @@sourceCollection FILTER doc.uuid == row.src LIMIT 1 RETURN doc"
-                        "    ) "
-                        "    LET target = FIRST("
-                        "      FOR doc IN @@targetCollection FILTER doc.uuid == row.dst LIMIT 1 RETURN doc"
-                        "    ) "
-                        "    FILTER source != null AND target != null "
-                        "    INSERT MERGE(row.properties, {"
-                        "      uuid: row.uuid, cpgdb_type_id: row.type,"
-                        "      _from: source._id, _to: target._id"
-                        "    }) INTO @@edgeCollection "
-                        "    RETURN 1"
-                        ") RETURN LENGTH(inserted)";
+                const std::string query_text = "LET inserted = ("
+                                               "  FOR row IN @rows "
+                                               "    LET source = DOCUMENT(@@sourceCollection, row.src_key) "
+                                               "    LET target = DOCUMENT(@@targetCollection, row.dst_key) "
+                                               "    FILTER source != null AND target != null "
+                                               "    INSERT MERGE(row.properties, {"
+                                               "      _key: row.key, uuid: row.uuid, cpgdb_type_id: row.type,"
+                                               "      _from: source._id, _to: target._id"
+                                               "    }) INTO @@edgeCollection "
+                                               "    RETURN 1"
+                                               ") RETURN LENGTH(inserted)";
                 const json bind_vars{{"rows", rows},
                                      {"@sourceCollection", db_context_.schema->node_type(schema_edge.from).name},
                                      {"@targetCollection", db_context_.schema->node_type(schema_edge.to).name},
@@ -265,6 +262,19 @@ namespace cpgdb {
         }
 
     private:
+        static GlobalId json_global_id(const json &value) {
+            if (value.is_number_unsigned()) {
+                return value.get<GlobalId>();
+            }
+            if (value.is_number_integer()) {
+                return global_id_from_signed_storage(value.get<std::int64_t>());
+            }
+            if (value.is_string()) {
+                return global_id_from_string(value.get<std::string>());
+            }
+            throw std::runtime_error("ArangoDB global ID must be an integer or string: " + value.dump());
+        }
+
         std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_edge_index_union(std::span<const NodeRef> frontier,
                                                                                       const ExpandSpec &spec,
                                                                                       int depth) const {
@@ -290,7 +300,7 @@ namespace cpgdb {
                 frontier_json.get_ref<json::array_t &>().reserve(source_group.size());
 
                 for (const auto &source: source_group) {
-                    frontier_json.push_back(boost::uuids::to_string(source.global_id));
+                    frontier_json.push_back(global_id_to_string(source.global_id));
                 }
 
                 json bind_vars{{"@vertexCollection", vertex_collection}, {"frontier", std::move(frontier_json)}};
@@ -309,8 +319,9 @@ namespace cpgdb {
                 }
 
                 std::string query = "LET starts = ("
-                                    "  FOR start IN @@vertexCollection "
-                                    "    FILTER start._key IN @frontier "
+                                    "  FOR source_key IN @frontier "
+                                    "    LET start = DOCUMENT(@@vertexCollection, source_key) "
+                                    "    FILTER start != null "
                                     "    RETURN { id: start._id, uuid: start.uuid }"
                                     ") "
                                     "RETURN UNION(";
@@ -358,7 +369,7 @@ namespace cpgdb {
                 frontier_json.get_ref<json::array_t &>().reserve(source_group.size());
 
                 for (const auto &source: source_group) {
-                    frontier_json.push_back(boost::uuids::to_string(source.global_id));
+                    frontier_json.push_back(global_id_to_string(source.global_id));
                 }
 
                 json bind_vars{{"@vertexCollection", vertex_collection}, {"frontier", std::move(frontier_json)}};
@@ -375,8 +386,9 @@ namespace cpgdb {
                     edge_collections += "@@" + bind_name;
                 }
 
-                const std::string query = "FOR start IN @@vertexCollection "
-                                          "FILTER start._key IN @frontier "
+                const std::string query = "FOR source_key IN @frontier "
+                                          "LET start = DOCUMENT(@@vertexCollection, source_key) "
+                                          "FILTER start != null "
                                           "FOR neighbor IN 1..1 " +
                                           arango_direction(spec.direction) + " start " + edge_collections +
                                           " OPTIONS { uniqueVertices: \"none\" } "
@@ -396,7 +408,8 @@ namespace cpgdb {
         }
 
         std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_traversal_projection_async(
-                std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth, std::size_t batch_size) const {
+                std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth, std::size_t batch_size,
+                std::size_t max_concurrent_requests, std::size_t request_retries, std::size_t retry_delay_ms) const {
             (void) depth;
 
             if (frontier.empty()) {
@@ -405,9 +418,14 @@ namespace cpgdb {
             if (batch_size == 0) {
                 throw std::invalid_argument("ArangoDB neighbor batch size must be greater than zero");
             }
+            if (max_concurrent_requests == 0) {
+                throw std::invalid_argument("ArangoDB max concurrent requests must be greater than zero");
+            }
 
-            EVENT_SCOPE_INFO(total_span, "arango.minimal_neighbors.direct_grouped_async",
-                             {"frontier_size", frontier.size()}, {"batch_size", batch_size});
+            EVENT_SCOPE_INFO(total_span, "arango.minimal_neighbors.direct_grouped_bounded",
+                             {"frontier_size", frontier.size()}, {"batch_size", batch_size},
+                             {"max_concurrent_requests", max_concurrent_requests},
+                             {"request_retries", request_retries});
 
             auto [rows, row_by_source] = initialize_minimal_rows(frontier);
             const auto grouped_frontier = group_frontier_by_collection(frontier);
@@ -428,13 +446,9 @@ namespace cpgdb {
                 json bind_vars;
             };
 
-            struct ArangoBatchResponse {
-                std::string vertex_collection;
-                std::size_t batch_index{};
-                std::size_t batch_count{};
-                std::size_t batch_size{};
+            struct ArangoWorkerStats {
+                std::size_t completed_requests{};
                 std::size_t response_row_count{};
-                std::vector<MinimalAdjacencyRow> rows;
             };
 
             std::vector<ArangoPreparedBatch> prepared_batches;
@@ -456,8 +470,9 @@ namespace cpgdb {
                     edge_collections += "@@" + bind_name;
                 }
 
-                const std::string query = "FOR start IN @@vertexCollection "
-                                          "FILTER start._key IN @frontier "
+                const std::string query = "FOR source_key IN @frontier "
+                                          "LET start = DOCUMENT(@@vertexCollection, source_key) "
+                                          "FILTER start != null "
                                           "FOR neighbor IN 1..1 " +
                                           arango_direction(spec.direction) + " start " + edge_collections +
                                           " OPTIONS { uniqueVertices: \"none\" } "
@@ -482,7 +497,7 @@ namespace cpgdb {
                     auto &frontier_array = frontier_json.get_ref<json::array_t &>();
                     frontier_array.reserve(current_batch_size);
                     for (const NodeRef &source: batch_nodes) {
-                        frontier_array.emplace_back(boost::uuids::to_string(source.global_id));
+                        frontier_array.emplace_back(global_id_to_string(source.global_id));
                     }
 
                     json bind_vars = base_bind_vars;
@@ -497,70 +512,99 @@ namespace cpgdb {
                 }
             }
 
-            std::vector<std::future<ArangoBatchResponse>> futures;
-            futures.reserve(prepared_batches.size());
+            const std::size_t worker_count = std::min(max_concurrent_requests, prepared_batches.size());
+            std::atomic_size_t next_batch{0};
+            std::mutex rows_mutex;
+            std::vector<std::future<ArangoWorkerStats>> workers;
+            workers.reserve(worker_count);
 
-            // Payload construction is completed before launching requests, so
-            // every prepared batch can enter std::async immediately. ThreadPool
-            // is deliberately not used by this first batching implementation.
-            for (auto &prepared: prepared_batches) {
-                futures.push_back(std::async(
+            for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
+                workers.push_back(std::async(
                         std::launch::async,
-                        [this, prepared = std::move(prepared), spec]() mutable -> ArangoBatchResponse {
-                            const std::size_t current_batch_size = prepared.nodes.size();
-                            EVENT_SCOPE_INFO(request_span, "arango.minimal_neighbors.direct_group_query",
-                                             {"vertex_collection", prepared.vertex_collection},
-                                             {"group_size", current_batch_size}, {"batch_index", prepared.batch_index},
-                                             {"batch_count", prepared.batch_count});
+                        [this, &prepared_batches, &next_batch, &rows, &row_by_source, &rows_mutex, spec,
+                         request_retries, retry_delay_ms, worker_index]() mutable -> ArangoWorkerStats {
+                            ArangoWorkerStats stats;
 
-                            try {
-                                auto [batch_rows, batch_row_by_source] = initialize_minimal_rows(prepared.nodes);
-                                auto http = make_http_client();
-                                const std::size_t response_rows = send_minimal_req_into_rows(
-                                        http, prepared.query, prepared.bind_vars, prepared.vertex_collection,
-                                        current_batch_size, batch_rows, batch_row_by_source, spec);
+                            while (true) {
+                                const std::size_t prepared_index = next_batch.fetch_add(1, std::memory_order_relaxed);
+                                if (prepared_index >= prepared_batches.size()) {
+                                    break;
+                                }
 
-                                request_span.add_end_field("response_row_count", response_rows);
-                                request_span.add_end_field("status", "ok");
+                                auto prepared = std::move(prepared_batches[prepared_index]);
+                                const std::size_t current_batch_size = prepared.nodes.size();
+                                EVENT_SCOPE_INFO(request_span, "arango.minimal_neighbors.direct_group_query",
+                                                 {"vertex_collection", prepared.vertex_collection},
+                                                 {"group_size", current_batch_size},
+                                                 {"batch_index", prepared.batch_index},
+                                                 {"batch_count", prepared.batch_count}, {"worker_index", worker_index});
 
-                                return ArangoBatchResponse{.vertex_collection = std::move(prepared.vertex_collection),
-                                                           .batch_index = prepared.batch_index,
-                                                           .batch_count = prepared.batch_count,
-                                                           .batch_size = current_batch_size,
-                                                           .response_row_count = response_rows,
-                                                           .rows = std::move(batch_rows)};
-                            } catch (const std::exception &error) {
-                                request_span.add_end_field("status", "failed");
-                                request_span.add_end_field("error", error.what());
-                                throw;
-                            } catch (...) {
-                                request_span.add_end_field("status", "failed");
-                                request_span.add_end_field("error", "unknown exception");
-                                throw;
+                                for (std::size_t attempt = 0;; ++attempt) {
+                                    try {
+                                        auto [batch_rows, batch_row_by_source] =
+                                                initialize_minimal_rows(prepared.nodes);
+                                        auto http = make_http_client();
+                                        const std::size_t response_rows = send_minimal_req_into_rows(
+                                                http, prepared.query, prepared.bind_vars, prepared.vertex_collection,
+                                                current_batch_size, batch_rows, batch_row_by_source, spec);
+
+                                        {
+                                            EVENT_SCOPE_INFO(response_to_rows,
+                                                             "arango.minimal_neighbors.response-into-rows",
+                                                             {"label", prepared.vertex_collection},
+                                                             {"group_size", current_batch_size},
+                                                             {"batch_index", prepared.batch_index},
+                                                             {"batch_count", prepared.batch_count},
+                                                             {"response_row_count", response_rows});
+                                            std::scoped_lock lock(rows_mutex);
+                                            merge_minimal_rows(std::move(batch_rows), rows, row_by_source);
+                                            response_to_rows.add_end_field("result_source_rows", rows.size());
+                                        }
+
+                                        request_span.add_end_field("attempts", attempt + 1);
+                                        request_span.add_end_field("response_row_count", response_rows);
+                                        request_span.add_end_field("status", "ok");
+                                        ++stats.completed_requests;
+                                        stats.response_row_count += response_rows;
+                                        break;
+                                    } catch (const std::exception &error) {
+                                        if (attempt >= request_retries) {
+                                            request_span.add_end_field("attempts", attempt + 1);
+                                            request_span.add_end_field("status", "failed");
+                                            request_span.add_end_field("error", error.what());
+                                            throw std::runtime_error("ArangoDB neighbor batch " +
+                                                                     std::to_string(prepared.batch_index + 1) + "/" +
+                                                                     std::to_string(prepared.batch_count) +
+                                                                     " for collection '" + prepared.vertex_collection +
+                                                                     "' failed after " + std::to_string(attempt + 1) +
+                                                                     " attempt(s): " + error.what());
+                                        }
+
+                                        const std::size_t delay =
+                                                retry_delay_ms * (std::size_t{1} << std::min(attempt, std::size_t{10}));
+                                        EVENT_SCOPE_INFO(retry_span, "arango.minimal_neighbors.request_retry",
+                                                         {"vertex_collection", prepared.vertex_collection},
+                                                         {"batch_index", prepared.batch_index},
+                                                         {"attempt", attempt + 1}, {"delay_ms", delay},
+                                                         {"error", error.what()});
+                                        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+                                    }
+                                }
                             }
+
+                            return stats;
                         }));
             }
 
-            total_span.add_end_field("request_count", futures.size());
+            total_span.add_end_field("request_count", prepared_batches.size());
+            total_span.add_end_field("worker_count", worker_count);
 
             std::size_t completed_requests = 0;
             std::size_t total_response_rows = 0;
-
-            // Responses are merged on the caller thread so rows and
-            // row_by_source are never modified concurrently.
-            for (auto &future: futures) {
-                ArangoBatchResponse result = future.get();
-
-                EVENT_SCOPE_INFO(response_to_rows, "arango.minimal_neighbors.response-into-rows",
-                                 {"label", result.vertex_collection}, {"group_size", result.batch_size},
-                                 {"batch_index", result.batch_index}, {"batch_count", result.batch_count},
-                                 {"response_row_count", result.response_row_count});
-
-                merge_minimal_rows(std::move(result.rows), rows, row_by_source);
-
-                response_to_rows.add_end_field("result_source_rows", rows.size());
-                ++completed_requests;
-                total_response_rows += result.response_row_count;
+            for (auto &worker: workers) {
+                const ArangoWorkerStats stats = worker.get();
+                completed_requests += stats.completed_requests;
+                total_response_rows += stats.response_row_count;
             }
 
             total_span.add_end_field("completed_request_count", completed_requests);
@@ -585,7 +629,7 @@ namespace cpgdb {
                 return rows;
             }
 
-            std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+            std::unordered_map<GlobalId, std::unordered_set<GlobalId, std::hash<GlobalId>>, std::hash<GlobalId>>
                     seen_by_source;
 
             for (const auto &record: raw->data) {
@@ -634,12 +678,12 @@ namespace cpgdb {
         }
 
         static std::pair<std::vector<MinimalAdjacencyRow>,
-                         std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>>>
+                         std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>>>
         initialize_minimal_rows(std::span<const NodeRef> frontier) {
             std::vector<MinimalAdjacencyRow> rows;
             rows.reserve(frontier.size());
 
-            std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> row_by_source;
+            std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> row_by_source;
             row_by_source.reserve(frontier.size());
 
             for (const auto &source: frontier) {
@@ -654,9 +698,9 @@ namespace cpgdb {
             return {std::move(rows), std::move(row_by_source)};
         }
 
-        static void merge_minimal_rows(
-                std::vector<MinimalAdjacencyRow> source_rows, std::vector<MinimalAdjacencyRow> &target_rows,
-                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &target_row_by_source) {
+        static void
+        merge_minimal_rows(std::vector<MinimalAdjacencyRow> source_rows, std::vector<MinimalAdjacencyRow> &target_rows,
+                           const std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> &target_row_by_source) {
             for (auto &source_row: source_rows) {
                 const auto target_iterator = target_row_by_source.find(source_row.source.global_id);
 
@@ -672,7 +716,7 @@ namespace cpgdb {
 
         void parse_minimal_response_into_rows(
                 const json &response, std::vector<MinimalAdjacencyRow> &rows,
-                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
+                const std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> &row_by_source,
                 const ExpandSpec &spec) const {
             if (response.contains("error") && response["error"].is_boolean() && response["error"].get<bool>()) {
                 throw std::runtime_error("ArangoDB minimal neighbor query failed: " + response.dump());
@@ -682,7 +726,7 @@ namespace cpgdb {
                 throw std::runtime_error("ArangoDB minimal neighbor response has no result array: " + response.dump());
             }
 
-            std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+            std::unordered_map<GlobalId, std::unordered_set<GlobalId, std::hash<GlobalId>>, std::hash<GlobalId>>
                     seen_by_source;
 
             for (const auto &item: response["result"]) {
@@ -692,16 +736,16 @@ namespace cpgdb {
 
         void append_minimal_result_item(
                 const json &item, std::vector<MinimalAdjacencyRow> &rows,
-                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
-                std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+                const std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> &row_by_source,
+                std::unordered_map<GlobalId, std::unordered_set<GlobalId, std::hash<GlobalId>>, std::hash<GlobalId>>
                         &seen_by_source,
                 const ExpandSpec &spec) const {
             if (!item.is_array()) {
                 return;
             }
 
-            const bool looks_like_row =
-                    item.size() >= 4 && item[0].is_string() && item[1].is_string() && item[2].is_string();
+            const bool looks_like_row = item.size() >= 4 && (item[0].is_number_integer() || item[0].is_string()) &&
+                                        (item[1].is_number_integer() || item[1].is_string()) && item[2].is_string();
 
             if (!looks_like_row) {
                 for (const auto &nested: item) {
@@ -710,8 +754,8 @@ namespace cpgdb {
                 return;
             }
 
-            const auto source_id = boost::lexical_cast<GlobalId>(item[0].get<std::string>());
-            const auto neighbor_id = boost::lexical_cast<GlobalId>(item[1].get<std::string>());
+            const auto source_id = json_global_id(item[0]);
+            const auto neighbor_id = json_global_id(item[1]);
             const std::string neighbor_document_id = item[2].get<std::string>();
             std::string logical_type_name = collection_from_arango_id(neighbor_document_id);
 
@@ -752,10 +796,10 @@ namespace cpgdb {
             }
 
             if (!unresolved.empty()) {
-                // UUID suffix bits identify ArangoDB, but not the document
+                // ID routing MSBs identify ArangoDB, but not the document
                 // collection. Resolve only the initial type-free frontier by
                 // probing the materialized schema collections. Each probe uses
-                // the per-collection primary _key index; no UUID-to-type
+                // the per-collection primary _key index; no ID-to-type
                 // directory is retained in application RAM.
                 const auto materialized = available_node_collections();
                 for (const auto &[type_id, node_type]: db_context_.schema->node_types()) {
@@ -773,7 +817,7 @@ namespace cpgdb {
 
         [[nodiscard]] std::string physical_vertex_collection_for(const NodeRef &node) const {
             // Frontier vertices are always sent to the home backend decoded from
-            // their UUID. Therefore an Arango-routed frontier vertex is a real
+            // their global ID. Therefore an Arango-routed frontier vertex is a real
             // document in its logical-type collection, never a cross-backend proxy.
             return db_context_.schema->node_type(node.type).name;
         }
@@ -859,17 +903,19 @@ namespace cpgdb {
         }
 
         static json node_to_write_row(const Node &node) {
-            return json{{"uuid", boost::uuids::to_string(node.global_id)},
+            return json{{"key", global_id_to_string(node.global_id)},
+                        {"uuid", global_id_to_signed_storage(node.global_id)},
                         {"type", node.type},
                         {"labels", node.labels},
                         {"properties", node.properties}};
         }
 
         static json edge_to_write_row(const Edge &edge) {
-            return json{{"uuid", boost::uuids::to_string(edge.global_id)},
+            return json{{"key", global_id_to_string(edge.global_id)},
+                        {"uuid", global_id_to_signed_storage(edge.global_id)},
                         {"type", edge.type},
-                        {"src", boost::uuids::to_string(edge.src)},
-                        {"dst", boost::uuids::to_string(edge.dst)},
+                        {"src_key", global_id_to_string(edge.src)},
+                        {"dst_key", global_id_to_string(edge.dst)},
                         {"properties", edge.properties}};
         }
 
@@ -909,8 +955,8 @@ namespace cpgdb {
 
         [[nodiscard]] ParsedMinimalArangoPage parse_minimal_arango_page_into_rows(
                 const std::string &response_body, std::vector<MinimalAdjacencyRow> &rows,
-                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
-                std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+                const std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> &row_by_source,
+                std::unordered_map<GlobalId, std::unordered_set<GlobalId, std::hash<GlobalId>>, std::hash<GlobalId>>
                         &seen_by_source,
                 const ExpandSpec &spec) const {
             std::size_t row_count = 0;
@@ -940,8 +986,10 @@ namespace cpgdb {
 
                 ensure_depth(depth);
 
-                const bool looks_like_row = parsed.is_array() && parsed.size() >= 4 && parsed[0].is_string() &&
-                                            parsed[1].is_string() && parsed[2].is_string();
+                const bool looks_like_row = parsed.is_array() && parsed.size() >= 4 &&
+                                            (parsed[0].is_number_integer() || parsed[0].is_string()) &&
+                                            (parsed[1].is_number_integer() || parsed[1].is_string()) &&
+                                            parsed[2].is_string();
 
                 if (looks_like_row) {
                     append_minimal_result_item(parsed, rows, row_by_source, seen_by_source, spec);
@@ -972,12 +1020,12 @@ namespace cpgdb {
             return ParsedMinimalArangoPage{.metadata = std::move(metadata), .row_count = row_count};
         }
 
-        [[nodiscard]] std::size_t send_minimal_req_into_rows(
-                CurlHttpClient &http, const std::string &query, const json &bind_vars,
-                const std::string &vertex_collection, const std::size_t group_size,
-                std::vector<MinimalAdjacencyRow> &rows,
-                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
-                const ExpandSpec &spec) const {
+        [[nodiscard]] std::size_t
+        send_minimal_req_into_rows(CurlHttpClient &http, const std::string &query, const json &bind_vars,
+                                   const std::string &vertex_collection, const std::size_t group_size,
+                                   std::vector<MinimalAdjacencyRow> &rows,
+                                   const std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> &row_by_source,
+                                   const ExpandSpec &spec) const {
             EVENT_SCOPE_INFO(total_span, "arango.bfs_http_query", {"vertex_collection", vertex_collection},
                              {"group_size", group_size}, {"streaming_minimal_rows", true});
 
@@ -996,7 +1044,7 @@ namespace cpgdb {
                 dump_span.add_end_field("request_bytes", request_body.size());
             }
 
-            std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+            std::unordered_map<GlobalId, std::unordered_set<GlobalId, std::hash<GlobalId>>, std::hash<GlobalId>>
                     seen_by_source;
 
             std::string response_body;
@@ -1330,7 +1378,7 @@ namespace cpgdb {
                 throw std::runtime_error("Arango node row does not contain uuid: " + row.dump());
             }
 
-            const std::string uuid_str = row["uuid"].get<std::string>();
+            const GlobalId global_id = json_global_id(row["uuid"]);
 
             /*
              * Important:
@@ -1351,7 +1399,7 @@ namespace cpgdb {
                 }
             }
 
-            return Node{.global_id = boost::lexical_cast<uuid>(uuid_str),
+            return Node{.global_id = global_id,
                         .type = db_context_.schema->node_type_id(logical_type_name),
                         .labels = {logical_type_name},
                         .properties = arango_document_properties(row)};
@@ -1444,7 +1492,7 @@ namespace cpgdb {
                 throw std::runtime_error("Arango edge row does not contain uuid: " + row.dump());
             }
 
-            const std::string uuid_str = row["uuid"].get<std::string>();
+            const GlobalId global_id = json_global_id(row["uuid"]);
 
             /*
              * Same rule as nodes:
@@ -1452,23 +1500,23 @@ namespace cpgdb {
              */
             const std::string logical_edge_type_name = arango_collection_from_document(row);
 
-            std::string start_uuid;
-            std::string end_uuid;
+            GlobalId start_id{};
+            GlobalId end_id{};
 
             if (row.contains("start") && row.contains("end")) {
-                start_uuid = row["start"].get<std::string>();
-                end_uuid = row["end"].get<std::string>();
+                start_id = json_global_id(row["start"]);
+                end_id = json_global_id(row["end"]);
             } else if (row.contains("_from") && row.contains("_to")) {
-                start_uuid = uuid_from_arango_document_id(row["_from"].get<std::string>());
-                end_uuid = uuid_from_arango_document_id(row["_to"].get<std::string>());
+                start_id = global_id_from_string(uuid_from_arango_document_id(row["_from"].get<std::string>()));
+                end_id = global_id_from_string(uuid_from_arango_document_id(row["_to"].get<std::string>()));
             } else {
                 throw std::runtime_error("Arango edge row does not contain start/end or _from/_to: " + row.dump());
             }
 
-            return Edge{.global_id = boost::lexical_cast<uuid>(uuid_str),
+            return Edge{.global_id = global_id,
                         .type = db_context_.schema->edge_type_id(logical_edge_type_name),
-                        .src = boost::lexical_cast<uuid>(start_uuid),
-                        .dst = boost::lexical_cast<uuid>(end_uuid),
+                        .src = start_id,
+                        .dst = end_id,
                         .properties = arango_edge_properties(row)};
         }
 
@@ -1532,10 +1580,11 @@ namespace cpgdb {
     query_result_t ArangoQueryVisitor::visit(const InsertQuery &query) { return impl_->visit(query); }
     query_result_t ArangoQueryVisitor::visit(const InsertBatchQuery &query) { return impl_->visit(query); }
 
-    std::vector<MinimalAdjacencyRow>
-    ArangoQueryVisitor::get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier, const ExpandSpec &spec,
-                                                         int depth, std::size_t batch_size) const {
-        return impl_->get_minimal_neighbors_batch_fast(frontier, spec, depth, batch_size);
+    std::vector<MinimalAdjacencyRow> ArangoQueryVisitor::get_minimal_neighbors_batch_fast(
+            std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth, std::size_t batch_size,
+            std::size_t max_concurrent_requests, std::size_t request_retries, std::size_t retry_delay_ms) const {
+        return impl_->get_minimal_neighbors_batch_fast(frontier, spec, depth, batch_size, max_concurrent_requests,
+                                                       request_retries, retry_delay_ms);
     }
 
 } // namespace cpgdb

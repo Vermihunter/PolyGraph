@@ -21,21 +21,21 @@ namespace cpgdb {
         }
     }
 
-    void PlacementCatalog::set_uuid_routing_backends(std::vector<BackendId> routing_backends) {
+    void PlacementCatalog::set_id_routing_backends(std::vector<BackendId> routing_backends) {
         if (routing_backends.empty()) {
-            throw std::invalid_argument("UUID routing layout must contain at least one backend");
+            throw std::invalid_argument("ID routing layout must contain at least one backend");
         }
-        uuid_routing_backends_ = std::move(routing_backends);
+        id_routing_backends_ = std::move(routing_backends);
     }
 
     NodeRef PlacementCatalog::node_ref(const GlobalId &id) const {
-        if (uuid_routing_backends_.empty()) {
-            throw std::runtime_error("PlacementCatalog has no UUID routing layout");
+        if (id_routing_backends_.empty()) {
+            throw std::runtime_error("PlacementCatalog has no ID routing layout");
         }
 
-        const BackendId owner = insertion::BackendEncodedUuid::decode(id, uuid_routing_backends_);
+        const BackendId owner = insertion::BackendEncodedId::decode(id, id_routing_backends_);
         if (!backend_registry_->contains(owner)) {
-            throw std::runtime_error("UUID routes to a backend that is not enabled");
+            throw std::runtime_error("Global ID routes to a backend that is not enabled");
         }
 
         return NodeRef{.global_id = id, .type = unresolved_type_id};
@@ -93,19 +93,19 @@ namespace cpgdb {
         (void) spec;
         (void) options;
 
-        if (uuid_routing_backends_.empty()) {
-            throw std::runtime_error("PlacementCatalog has no UUID routing layout");
+        if (id_routing_backends_.empty()) {
+            throw std::runtime_error("PlacementCatalog has no ID routing layout");
         }
 
-        const BackendId owner = insertion::BackendEncodedUuid::decode(vertex.global_id, uuid_routing_backends_);
+        const BackendId owner = insertion::BackendEncodedId::decode(vertex.global_id, id_routing_backends_);
         const auto descriptor_iterator = backend_registry_->descriptors().find(owner);
         if (descriptor_iterator == backend_registry_->descriptors().end()) {
-            throw std::runtime_error("UUID routes to a backend that is not enabled");
+            throw std::runtime_error("Global ID routes to a backend that is not enabled");
         }
 
         const BackendDescriptor &descriptor = descriptor_iterator->second;
         if (!descriptor.capabilities.supports_batch_neighbors || !descriptor.coverage.fresh) {
-            throw std::runtime_error("UUID-routed backend cannot execute neighbor expansion");
+            throw std::runtime_error("ID-routed backend cannot execute neighbor expansion");
         }
 
         return {owner};

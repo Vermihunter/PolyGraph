@@ -38,7 +38,7 @@ def main() -> int:
     if not start_uuids:
         graph = GraphData.load(config.paths.data)
         if not graph.nodes:
-            raise SystemExit("No start UUID supplied and data file contains no nodes")
+            raise SystemExit("No start ID supplied and data file contains no nodes")
         # Use a few deterministic nodes from different positions to avoid benchmarking only a tiny component.
         indexes = [0, len(graph.nodes) // 3, (2 * len(graph.nodes)) // 3]
         start_uuids = []
@@ -46,7 +46,7 @@ def main() -> int:
             uuid = graph.nodes[i].uuid
             if uuid not in start_uuids:
                 start_uuids.append(uuid)
-        print("No start UUID supplied; using deterministic sample:", ", ".join(start_uuids), file=sys.stderr)
+        print("No start ID supplied; using deterministic sample:", ", ".join(start_uuids), file=sys.stderr)
 
     if args.start_services:
         start_services(config, CommandRunner(ROOT, dry_run=args.dry_run), timeout_seconds=args.service_timeout)

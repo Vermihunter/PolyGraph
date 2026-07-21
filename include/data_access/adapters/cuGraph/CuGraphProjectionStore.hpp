@@ -17,6 +17,8 @@
 
 #include <memory>
 #include <span>
+#include <unordered_map>
+#include <unordered_set>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -83,7 +85,8 @@ template <typename ProjectionT> class CuGraphProjectionStore final : public IGra
         std::vector<AdjacencyRow> rows;
         rows.reserve(frontier.size());
 
-        std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> row_by_source;
+        std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> row_by_source;
+        row_by_source.reserve(frontier.size());
         std::vector<GlobalId> gpu_source_ids;
         gpu_source_ids.reserve(frontier.size());
         {
@@ -121,11 +124,11 @@ template <typename ProjectionT> class CuGraphProjectionStore final : public IGra
     }
 
     void push_neighbors(
-        OneHopExpansionResult& expanded,
-        std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>>& row_by_source,
+        const OneHopExpansionResult& expanded,
+        const std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>>& row_by_source,
         const ExpandSpec& spec,
         std::vector<AdjacencyRow>& rows
-    ) {
+    ) const {
         EVENT_SCOPE_INFO(
             neighbors_selection,
             "cugraph.find-neighbors",
@@ -134,7 +137,7 @@ template <typename ProjectionT> class CuGraphProjectionStore final : public IGra
 
         using SeenSet = std::unordered_set<
             GlobalId,
-            boost::hash<GlobalId>>;
+            std::hash<GlobalId>>;
 
         std::vector<std::size_t> candidate_counts(rows.size(), 0);
 
@@ -217,44 +220,6 @@ template <typename ProjectionT> class CuGraphProjectionStore final : public IGra
 
     }
 
-    /*
-    void push_neighbors(
-        OneHopExpansionResult& expanded,
-        std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>>& row_by_source,
-        const ExpandSpec& spec,
-        std::vector<AdjacencyRow>& rows
-    ) {
-        EVENT_SCOPE_INFO(neighbors_selection, "cugraph.find-neighbors");
-
-        std::unordered_map<GlobalId,
-                       std::unordered_set<GlobalId, boost::hash<GlobalId>>,
-                       boost::hash<GlobalId>>
-        seen_by_source;
-        for (const auto& [source_id, destination_id] : expanded.edges) {
-            auto row_it = row_by_source.find(source_id);
-            if (row_it == row_by_source.end()) {
-                continue;
-            }
-
-            auto hydrated_neighbor = host_index_->find_neighbor(source_id, destination_id, spec);
-
-            if (!hydrated_neighbor.has_value()) {
-                // The GPU graph may intentionally contain mirrored edges for
-                // fast undirected expansion. The CPU metadata index is the
-                // authority for edge direction, edge type and target type, so
-                // invalid sampled candidates are discarded here.
-                continue;
-            }
-
-            auto& seen = seen_by_source[source_id];
-            if (!seen.insert(hydrated_neighbor->vertex.global_id).second) {
-                continue;
-            }
-
-            rows[row_it->second].neighbors.push_back(*hydrated_neighbor);
-        }
-    }
-    */
 
   private:
     BackendDescriptor descriptor_;

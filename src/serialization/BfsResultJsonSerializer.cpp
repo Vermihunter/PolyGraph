@@ -4,14 +4,14 @@
  */
 
 #include "serialization/BfsResultJsonSerializer.hpp"
+#include "utilities/uuid.hpp"
 
-#include <boost/uuid/uuid_io.hpp>
 #include <utility>
 
 namespace cpgdb {
 
     namespace {
-        std::string globalIdToString(const GlobalId &id) { return boost::uuids::to_string(id); }
+        std::string globalIdToString(const GlobalId &id) { return global_id_to_string(id); }
     } // namespace
 
     void to_json(nlohmann::json &json, const BfsResult &result) {

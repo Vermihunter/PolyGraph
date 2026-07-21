@@ -1,119 +1,110 @@
-# Neo4J query
+# Storage-layer inspection queries
 
-```sh
+## Neo4j
+
+Real Neo4j entities use native `id(n)`/`id(r)` values and deliberately do not
+store a `uuid` property. Only `:Proxy` nodes and replicated relationships keep a
+numeric `uuid` property for a remote global ID.
+
+### Counts and samples
+
+```bash
 curl -s -u neo4j:password \
-  -H 'Accept: application/json;charset=UTF-8' \
   -H 'Content-Type: application/json' \
   http://localhost:7474/db/neo4j/tx/commit \
   --data-raw '{
-    "statements": [
-      {
-        "statement": "CALL { MATCH (n) WHERE NOT n:Proxy RETURN count(n) AS real_nodes, collect(n.uuid)[0..3] AS sample_real_nodes } CALL { MATCH (p:Proxy) RETURN count(p) AS proxy_nodes, collect(p.uuid)[0..3] AS sample_proxy_nodes } CALL { MATCH (a)-[r]->(b) RETURN count(r) AS relationships, collect({rel_uuid: r.uuid, from_uuid: a.uuid, to_uuid: b.uuid})[0..3] AS sample_relationships } RETURN real_nodes, proxy_nodes, relationships, sample_real_nodes, sample_proxy_nodes, sample_relationships"
-      }
-    ]
-  }'
+    "statements": [{
+      "statement": "CALL { MATCH (n:__GraphNode) WHERE NOT n:Proxy RETURN count(n) AS real_nodes, collect(id(n))[0..3] AS sample_native_node_ids } CALL { MATCH (p:Proxy) RETURN count(p) AS proxy_nodes, collect(p.uuid)[0..3] AS sample_proxy_global_ids } CALL { MATCH ()-[r]->() RETURN count(r) AS relationships, collect({native_id: id(r), replica_global_id: r.uuid})[0..3] AS sample_relationships } RETURN real_nodes, proxy_nodes, relationships, sample_native_node_ids, sample_proxy_global_ids, sample_relationships"
+    }]
+  }' | jq
 ```
 
-## Neighbors
+### One native node and its neighbors
 
-```sh
+Pass the Neo4j-local payload, not the complete routed uint64 ID:
+
+```bash
+NATIVE_ID=123
 curl -s -u neo4j:password \
-  -H 'Accept: application/json;charset=UTF-8' \
+  -H 'Content-Type: application/json' \
+  http://localhost:7474/db/neo4j/tx/commit \
+  --data-raw "{
+    \"statements\": [{
+      \"statement\": \"MATCH (n:__GraphNode) WHERE id(n) = \\$nativeId MATCH (n)-[r]-(neighbor) RETURN id(n) AS source_native_id, id(neighbor) AS neighbor_native_id, neighbor.uuid AS remote_global_id, labels(neighbor) AS labels, id(r) AS relationship_native_id, r.uuid AS replica_global_id\",
+      \"parameters\": {\"nativeId\": ${NATIVE_ID}}
+    }]
+  }" | jq
+```
+
+### Create a GDS projection and run BFS
+
+The benchmark code creates a projection named `UnifiedGraph` with every logical
+relationship type projected as undirected. A simple all-types manual projection:
+
+```bash
+curl -s -u neo4j:password \
   -H 'Content-Type: application/json' \
   http://localhost:7474/db/neo4j/tx/commit \
   --data-raw '{
-    "statements": [
-      {
-        "statement": "MATCH (n)-[]->(neighbor) WHERE n.uuid = $globalNodeId RETURN { id: elementId(neighbor), labels: labels(neighbor), properties: properties(neighbor)} AS node;",
-        "parameters": {"globalNodeId": "047fbced-eed8-430b-8c70-e1ed54c96030"}
-      }
-    ]
-  }'
+    "statements": [{
+      "statement": "CALL gds.graph.drop($graphName, false) YIELD graphName RETURN graphName",
+      "parameters": {"graphName": "UnifiedGraph"}
+    }, {
+      "statement": "CALL gds.graph.project($graphName, $nodeLabel, {ALL_RELATIONSHIPS: {type: \"*\", orientation: \"UNDIRECTED\"}}) YIELD graphName, nodeCount, relationshipCount RETURN graphName, nodeCount, relationshipCount",
+      "parameters": {"graphName": "UnifiedGraph", "nodeLabel": "__GraphNode"}
+    }]
+  }' | jq
 ```
 
-## Node with at least 3 relations
-
-```sh
+```bash
+SOURCE_NATIVE_ID=123
 curl -s -u neo4j:password \
-  -H 'Accept: application/json;charset=UTF-8' \
   -H 'Content-Type: application/json' \
   http://localhost:7474/db/neo4j/tx/commit \
-  --data-raw '{
-    "statements": [
-      {
-        "statement": "MATCH (n) WHERE COUNT { (n)--() } >= 3 RETURN n.uuid AS uuid LIMIT 5"
+  --data-raw "{
+    \"statements\": [{
+      \"statement\": \"CALL gds.bfs.stream(\\$graphName, \\$configuration) YIELD sourceNode, nodeIds RETURN sourceNode, nodeIds\",
+      \"parameters\": {
+        \"graphName\": \"UnifiedGraph\",
+        \"configuration\": {\"sourceNode\": ${SOURCE_NATIVE_ID}, \"maxDepth\": 7, \"logProgress\": false}
       }
-    ]
-  }'
+    }]
+  }" | jq
 ```
 
-result: 047fbced-eed8-430b-8c70-e1ed54c96030
+## ArangoDB
 
-## Vertices by uuid
+Every real/proxy vertex and every edge stores numeric `uuid`; `_key` is the
+unsigned decimal global ID. Frontier expansion therefore uses direct
+`DOCUMENT(collection, key)` point lookups rather than scanning the `uuid` index.
 
-```sh
-curl -s -u neo4j:password \
-  -H 'Accept: application/json;charset=UTF-8' \
-  -H 'Content-Type: application/json' \
-  http://localhost:7474/db/neo4j/tx/commit \
-  --data-raw '{
-    "statements": [
-      {
-        "statement": "MATCH (n) WHERE n.uuid = $globalNodeId RETURN { id: elementId(n), labels: labels(n), properties: properties(n)} AS node;",
-        "parameters": {"globalNodeId": "047fbced-eed8-430b-8c70-e1ed54c96030"}
-      }
-    ]
-  }'
-```
-
-## BFS
-
-```shell
-curl -u neo4j:password   -X POST "http://localhost:7474/db/neo4j/tx/commit"   -H "Content-Type: application/json"   -H "Accept: application/json"   -d '{
-    "statements": [
-      {
-        "statement": "MATCH (source {uuid: $sourceUuid}) CALL gds.bfs.stream($graphName, {sourceNode: source, maxDepth: toInteger(toString($maxDepth))}) YIELD sourceNode, nodeIds, path RETURN sourceNode, nodeIds, path",
-        "parameters": {
-          "graphName": "ldbc-snb-sf0_1-hash-based",
-          "sourceUuid": "d6e584ea-bee0-562c-bd82-0af0a658ed38",
-          "maxDepth": 30
-        }
-      }
-    ]
-  }'
-```
-
-# ArangoDB query
-
-```sh
+```bash
 curl -s -u root:rootpassword \
   'http://localhost:8529/_db/university/_api/collection?excludeSystem=true' \
-| jq -r '.result[] | "\(.name)\t\(.type)"' \
-| while IFS=$'\t' read -r name type; do
-    count=$(curl -s -u root:rootpassword \
-      "http://localhost:8529/_db/university/_api/collection/$name/count" \
-      | jq -r '.count')
-
-    case "$type:$name" in
-      2:Proxy) kind="proxy_nodes" ;;
-      2:*)     kind="real_nodes" ;;
-      3:*)     kind="relationships" ;;
-      *)       kind="other" ;;
-    esac
-
-    [ "$kind" != "other" ] && printf '%s\t%s\t%s\n' "$kind" "$name" "$count"
-  done
+  | jq -r '.result[] | "\(.name)\t\(.type)"'
 ```
 
-```sh
-curl -u root:rootpassword -X POST "http://localhost:8529/_db/university/_api/cursor"   -H "Content-Type: application/json"   -d '{
-    "query": "FOR start IN @@collection FILTER start.uuid == @uuid FOR neighbor IN 1..1 ANY start @@edges1, @@edges2 RETURN neighbor",
-    "bindVars": {n": "Assignment",
-      "@collection": "Assignment",
-      "@edges1": "HAS_ASSIGNMENT",
-      "@edges2": "SUBMISSION_FOR",ad01-9337bcaa2732"
-      "uuid": "4b83cee7-02df-48c9-ad01-9337bcaa2732"
-    }
-  }
+### Direct vertex lookup
 
+```bash
+curl -s -u root:rootpassword \
+  -X POST 'http://localhost:8529/_db/university/_api/cursor' \
+  -H 'Content-Type: application/json' \
+  --data-raw '{
+    "query": "RETURN DOCUMENT(@collection, @key)",
+    "bindVars": {
+      "collection": "Person",
+      "key": "4611686018427388027"
+    }
+  }' | jq
+```
+
+### Batched frontier lookup pattern
+
+```aql
+FOR item IN @frontier
+  LET start = DOCUMENT(item.collection, item.key)
+  FILTER start != null
+  FOR neighbor, edge IN 1..1 ANY start GRAPH @graphName
+    RETURN { start: start.uuid, neighbor: neighbor.uuid, edge: edge.uuid }
 ```

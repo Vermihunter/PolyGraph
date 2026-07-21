@@ -5,7 +5,8 @@
 
 #include "serialization/RecordJsonSerializer.hpp"
 
-#include <boost/uuid/string_generator.hpp>
+#include "utilities/uuid.hpp"
+
 #include <cstdint>
 #include <string>
 #include <type_traits>
@@ -16,8 +17,17 @@
 namespace cpgdb {
     namespace {
 
-        [[nodiscard]] GlobalId json_to_uuid(const json &value) {
-            return boost::uuids::string_generator{}(value.get<std::string>());
+        [[nodiscard]] GlobalId json_to_global_id(const json &value) {
+            if (value.is_number_unsigned()) {
+                return value.get<GlobalId>();
+            }
+            if (value.is_number_integer()) {
+                return global_id_from_signed_storage(value.get<std::int64_t>());
+            }
+            if (value.is_string()) {
+                return global_id_from_string(value.get<std::string>());
+            }
+            throw std::invalid_argument("Expected a numeric global ID, got: " + value.dump());
         }
 
     } // namespace
@@ -28,7 +38,7 @@ namespace cpgdb {
     }
 
     void from_json(const json &value, Node &node) {
-        node.global_id = json_to_uuid(value.at("id"));
+        node.global_id = json_to_global_id(value.at("id"));
         node.type = value.value("type", TypeId{});
         node.labels = value.at("labels").get<std::vector<std::string>>();
         node.properties = value.at("properties").get<std::unordered_map<std::string, std::unique_ptr<Value>>>();
@@ -43,10 +53,10 @@ namespace cpgdb {
     }
 
     void from_json(const json &value, Edge &edge) {
-        edge.global_id = json_to_uuid(value.at("global_id"));
+        edge.global_id = json_to_global_id(value.at("global_id"));
         edge.type = value.at("type").get<TypeId>();
-        edge.src = json_to_uuid(value.at("src"));
-        edge.dst = json_to_uuid(value.at("dst"));
+        edge.src = json_to_global_id(value.at("src"));
+        edge.dst = json_to_global_id(value.at("dst"));
         edge.properties = value.at("properties").get<Map>();
     }
 

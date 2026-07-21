@@ -98,13 +98,14 @@ namespace cpgdb {
 
         const CURLcode result = curl_easy_perform(curl_);
         if (result != CURLE_OK) {
-            throw std::runtime_error("HTTP " + method + " failed: " + curl_easy_strerror(result));
+            throw std::runtime_error("HTTP " + method + " " + url + " failed: " + curl_easy_strerror(result));
         }
 
         long status = 0;
         curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &status);
         if (status < 200 || status >= 300) {
-            throw std::runtime_error("HTTP " + method + " returned status " + std::to_string(status) + ": " + response);
+            throw std::runtime_error("HTTP " + method + " " + url + " returned status " + std::to_string(status) +
+                                     ": " + response);
         }
 
         return response;

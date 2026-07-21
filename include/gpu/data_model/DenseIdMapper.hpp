@@ -8,8 +8,6 @@
 
 #include "utilities/uuid.hpp"
 
-#include <boost/container_hash/hash.hpp>
-#include <boost/uuid/uuid_io.hpp>
 #include <cstddef>
 #include <stdexcept>
 #include <unordered_map>
@@ -17,7 +15,7 @@
 
 namespace cpgdb {
 /*
- * Maps your external graph ids, GlobalId/boost::uuid, to dense cuGraph ids:
+ * Maps external uint64 GlobalId values to dense cuGraph IDs:
  *
  *   GlobalId <-> 0, 1, 2, ..., n - 1
  *
@@ -50,7 +48,7 @@ template <typename vertex_t> class DenseIdMapper {
 
         if (it == to_dense_.end()) {
             throw std::runtime_error("GlobalId not present in DenseIdMapper: " +
-                                     boost::uuids::to_string(id));
+                                     global_id_to_string(id));
         }
 
         return it->second;
@@ -69,7 +67,7 @@ template <typename vertex_t> class DenseIdMapper {
     }
 
   private:
-    std::unordered_map<GlobalId, vertex_t, boost::hash<GlobalId>> to_dense_;
+    std::unordered_map<GlobalId, vertex_t, std::hash<GlobalId>> to_dense_;
     std::vector<GlobalId> to_global_;
 };
 

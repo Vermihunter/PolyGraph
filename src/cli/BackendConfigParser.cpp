@@ -126,7 +126,7 @@ namespace cpgdb::config {
                                      const std::unordered_map<BackendId, std::unordered_set<TypeId>> &edges_by_backend,
                                      std::uint64_t graph_version) {
             const json coverage_json = backend_json.value("coverage", json::object());
-            const std::string mode = coverage_json.value("mode", "uuid-routing");
+            const std::string mode = coverage_json.value("mode", "id-routing");
 
             GraphCoverage coverage{.fresh = coverage_json.value("fresh", true),
                                    .covers_all_node_types = false,
@@ -144,7 +144,7 @@ namespace cpgdb::config {
                 if (auto it = edges_by_backend.find(id); it != edges_by_backend.end()) {
                     coverage.edge_types = it->second;
                 }
-            } else if (mode == "all" || mode == "uuid-routing") {
+            } else if (mode == "all" || mode == "id-routing") {
                 coverage.covers_all_node_types = true;
                 coverage.covers_all_edge_types = true;
             } else if (mode == "explicit") {
@@ -243,58 +243,55 @@ namespace cpgdb::config {
 #endif
 
         json default_backend_config_json() {
-            json uuid_routing = json::array({"Neo4J", "ArangoDB"});
+            json id_routing = json::array({"Neo4J", "ArangoDB"});
             if (gpu_backend_enabled) {
-                uuid_routing.push_back("GPU");
+                id_routing.push_back("GPU");
             }
             return {{"version", 1},
-                    {"uuidRouting", std::move(uuid_routing)},
+                    {"idRouting", std::move(id_routing)},
                     {"backends",
-                     json::array({{{"id", "Neo4J"},
-                                   {"kind", "Neo4j"},
-                                   {"enabled", true},
-                                   {"name", "Neo4j Primary"},
-                                   {"priority", 50},
-                                   {"connection",
-                                    {{"endpoint", "http://localhost:7474/db/neo4j/tx/commit"},
-                                     {"database", "neo4j"},
-                                     {"credentials", {{"username", "neo4j"}, {"password", "password"}}}}},
-                                   {"capabilities",
-                                    {{"batch_neighbors", true}, {"native_bfs", false}, {"property_filters", true}}},
-                                   {"coverage",
-                                    {{"mode", "uuid-routing"},
-                                     {"fresh", true},
-                                     {"complete_for_requested_subgraph", false}}}},
-                                  {{"id", "ArangoDB"},
-                                   {"kind", "ArangoDB"},
-                                   {"enabled", true},
-                                   {"name", "ArangoDB Primary"},
-                                   {"priority", 0},
-                                   {"connection",
-                                    {{"endpoint", "http://localhost:8529/_db/university/_api/cursor"},
-                                     {"database", "university"},
-                                     {"credentials", {{"username", "root"}, {"password", "rootpassword"}}}}},
-                                   {"capabilities",
-                                    {{"batch_neighbors", true}, {"native_bfs", false}, {"gpu_execution", false}}},
-                                   {"coverage",
-                                    {{"mode", "uuid-routing"},
-                                     {"fresh", true},
-                                     {"complete_for_requested_subgraph", false}}}},
-                                  {{"id", "GPU"},
-                                   {"kind", "CuGraph"},
-                                   {"enabled", gpu_backend_enabled},
-                                   {"name", "GPU acceleration"},
-                                   {"priority", 1},
-                                   {"connection", {{"endpoint", ""}, {"database", ""}}},
-                                   {"capabilities",
-                                    {{"batch_neighbors", true},
-                                     {"native_bfs", false},
-                                     {"property_filters", false},
-                                     {"gpu_execution", true}}},
-                                   {"coverage",
-                                    {{"mode", "uuid-routing"},
-                                     {"fresh", true},
-                                     {"complete_for_requested_subgraph", false}}}}})}};
+                     json::array(
+                             {{{"id", "Neo4J"},
+                               {"kind", "Neo4j"},
+                               {"enabled", true},
+                               {"name", "Neo4j Primary"},
+                               {"priority", 50},
+                               {"connection",
+                                {{"endpoint", "http://localhost:7474/db/neo4j/tx/commit"},
+                                 {"database", "neo4j"},
+                                 {"credentials", {{"username", "neo4j"}, {"password", "password"}}}}},
+                               {"capabilities",
+                                {{"batch_neighbors", true}, {"native_bfs", false}, {"property_filters", true}}},
+                               {"coverage",
+                                {{"mode", "id-routing"}, {"fresh", true}, {"complete_for_requested_subgraph", false}}}},
+                              {{"id", "ArangoDB"},
+                               {"kind", "ArangoDB"},
+                               {"enabled", true},
+                               {"name", "ArangoDB Primary"},
+                               {"priority", 0},
+                               {"connection",
+                                {{"endpoint", "http://localhost:8529/_db/university/_api/cursor"},
+                                 {"database", "university"},
+                                 {"credentials", {{"username", "root"}, {"password", "rootpassword"}}}}},
+                               {"capabilities",
+                                {{"batch_neighbors", true}, {"native_bfs", false}, {"gpu_execution", false}}},
+                               {"coverage",
+                                {{"mode", "id-routing"}, {"fresh", true}, {"complete_for_requested_subgraph", false}}}},
+                              {{"id", "GPU"},
+                               {"kind", "CuGraph"},
+                               {"enabled", gpu_backend_enabled},
+                               {"name", "GPU acceleration"},
+                               {"priority", 1},
+                               {"connection", {{"endpoint", ""}, {"database", ""}}},
+                               {"capabilities",
+                                {{"batch_neighbors", true},
+                                 {"native_bfs", false},
+                                 {"property_filters", false},
+                                 {"gpu_execution", true}}},
+                               {"coverage",
+                                {{"mode", "id-routing"},
+                                 {"fresh", true},
+                                 {"complete_for_requested_subgraph", false}}}}})}};
         }
 
     } // namespace
@@ -316,7 +313,7 @@ namespace cpgdb::config {
     }
 
 
-    std::vector<BackendId> uuid_routing_backends(const json &root) {
+    std::vector<BackendId> id_routing_backends(const json &root) {
         const json &backends = backend_array_or_throw(root);
         std::unordered_set<BackendId> enabled;
         for (const auto &entry: backends) {
@@ -326,17 +323,17 @@ namespace cpgdb::config {
         }
 
         std::vector<BackendId> result;
-        const auto configured = root.find("uuidRouting");
+        const auto configured = root.find("idRouting");
         if (configured == root.end() || !configured->is_array() || configured->empty()) {
-            throw std::runtime_error("backend config field 'uuidRouting' must be a non-empty array");
+            throw std::runtime_error("backend config field 'idRouting' must be a non-empty array");
         }
         for (const auto &value: *configured) {
             const BackendId id = backend_id_from_string(value.get<std::string>());
             if (!enabled.contains(id)) {
-                throw std::runtime_error("UUID routing backend is not enabled: " + backend_id_to_string(id));
+                throw std::runtime_error("ID routing backend is not enabled: " + backend_id_to_string(id));
             }
             if (std::ranges::find(result, id) != result.end()) {
-                throw std::runtime_error("UUID routing layout contains duplicate backend: " + backend_id_to_string(id));
+                throw std::runtime_error("ID routing layout contains duplicate backend: " + backend_id_to_string(id));
             }
             result.push_back(id);
         }
@@ -355,11 +352,11 @@ namespace cpgdb::config {
         }
         out << "\n";
 
-        out << "  UUID routing:";
-        for (std::size_t code = 0; code < context.uuid_routing_backends.size(); ++code) {
-            out << ' ' << code << '=' << backend_id_to_string(context.uuid_routing_backends[code]);
+        out << "  ID routing (MSB):";
+        for (std::size_t code = 0; code < context.id_routing_backends.size(); ++code) {
+            out << ' ' << code << '=' << backend_id_to_string(context.id_routing_backends[code]);
         }
-        out << " (bits=" << insertion::BackendEncodedUuid::bit_count(context.uuid_routing_backends.size()) << ")\n";
+        out << " (bits=" << insertion::BackendEncodedId::bit_count(context.id_routing_backends.size()) << ")\n";
 
         out << "  backends:\n";
         for (const auto &[id, descriptor]: context.backend_registry->descriptors()) {

@@ -23,27 +23,27 @@ def main() -> int:
     node_types: Counter[str] = Counter()
     relationship_types: Counter[str] = Counter()
     sources: Counter[str] = Counter()
-    node_directory: dict[str, tuple[str, str]] = {}
+    node_directory: dict[int, tuple[str, str]] = {}
     errors: list[str] = []
 
     reader = open_graph_reader(args.graph)
     metadata = reader.metadata()
-    configured_layout = metadata.get("uuidRouting")
+    configured_layout = metadata.get("idRouting")
     if not configured_layout:
-        errors.append("graph metadata is missing uuidRouting")
+        errors.append("graph metadata is missing idRouting")
         routing_layout = None
     else:
         routing_layout = BackendLayout(tuple(str(value) for value in configured_layout))
 
-    declared_bits = metadata.get("uuidRoutingBits")
+    declared_bits = metadata.get("idRoutingBits")
     if routing_layout is not None and declared_bits is not None and int(declared_bits) != routing_layout.bit_count:
         errors.append(
-            f"uuidRoutingBits={declared_bits}, expected {routing_layout.bit_count} for {routing_layout.backends}"
+            f"idRoutingBits={declared_bits}, expected {routing_layout.bit_count} for {routing_layout.backends}"
         )
 
     for node in reader.iter_nodes():
         if node.uuid in node_directory:
-            errors.append(f"duplicate node UUID: {node.uuid}")
+            errors.append(f"duplicate node ID: {node.uuid}")
             continue
         node_directory[node.uuid] = (node.type, node.source)
         node_types[node.type] += 1
@@ -59,10 +59,10 @@ def main() -> int:
             except ValueError as exc:
                 errors.append(str(exc))
 
-    relationship_uuids: set[str] = set()
+    relationship_uuids: set[int] = set()
     for relationship in reader.iter_relationships():
         if relationship.uuid in relationship_uuids:
-            errors.append(f"duplicate relationship UUID: {relationship.uuid}")
+            errors.append(f"duplicate relationship ID: {relationship.uuid}")
         relationship_uuids.add(relationship.uuid)
         relationship_types[relationship.type] += 1
         sources[f"relationship:{relationship.source}"] += 1
@@ -86,8 +86,8 @@ def main() -> int:
     report = {
         "graph": str(Path(args.graph).resolve()),
         "valid": not errors,
-        "uuid_routing": list(routing_layout.backends) if routing_layout is not None else [],
-        "uuid_routing_bits": routing_layout.bit_count if routing_layout is not None else None,
+        "id_routing": list(routing_layout.backends) if routing_layout is not None else [],
+        "id_routing_bits": routing_layout.bit_count if routing_layout is not None else None,
         "node_count": len(node_directory),
         "relationship_count": len(relationship_uuids),
         "node_types": dict(sorted(node_types.items())),

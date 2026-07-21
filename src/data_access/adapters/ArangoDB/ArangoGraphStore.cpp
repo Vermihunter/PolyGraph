@@ -12,7 +12,6 @@
 #include "data_model/Value.hpp"
 #include "query/query_types/GetNeighborsBatchQuery.hpp"
 
-#include <boost/container_hash/hash.hpp>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
@@ -50,7 +49,9 @@ namespace cpgdb {
         }
 
         if (auto *visitor = dynamic_cast<ArangoQueryVisitor *>(visitor_.get())) {
-            return visitor->get_minimal_neighbors_batch_fast(frontier, spec, depth, options.neighbor_batch_size);
+            return visitor->get_minimal_neighbors_batch_fast(
+                    frontier, spec, depth, options.neighbor_batch_size, options.arango_max_concurrent_requests,
+                    options.backend_request_retries, options.backend_retry_delay_ms);
         }
 
         return IGraphStore::get_minimal_neighbors_batch(frontier, spec, depth, options);
@@ -66,7 +67,7 @@ namespace cpgdb {
 
     std::vector<AdjacencyRow> ArangoGraphStore::parse_adjacency_rows(const QueryResult &raw) {
         std::vector<AdjacencyRow> rows;
-        std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> source_to_row;
+        std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> source_to_row;
 
         for (const auto &record: raw.data) {
             if (!record) {

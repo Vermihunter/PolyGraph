@@ -14,6 +14,9 @@ from .id_codec import (
     BackendLayout,
     deterministic_entity_uuid,
     deterministic_routed_entity_uuid,
+    parse_global_id,
+    read_native_node_id_map,
+    resolve_native_node_id,
 )
 from .model import NodeRecord, RelationshipRecord
 from .reader import open_graph_reader
@@ -26,6 +29,8 @@ class DomainPaths:
     schema: Path
     data: Path
     backends: Path
+    source_data: Path | None = None
+    native_id_map: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -66,7 +71,7 @@ def materialize_graph_jsonl(
 ) -> tuple[int, int]:
     """Convert a supported graph input into canonical CPGDB JSONL.
 
-    Legacy inputs without ``uuidRouting`` metadata can be migrated by supplying a
+    Legacy inputs without ``idRouting`` metadata can be migrated by supplying a
     graph-shape schema and setting ``migrate_missing_routing``. ``reroute`` forces
     the same migration for an already routed graph.
     """
@@ -78,12 +83,12 @@ def materialize_graph_jsonl(
     output.parent.mkdir(parents=True, exist_ok=True)
     reader = open_graph_reader(source)
     input_metadata = reader.metadata()
-    has_routing_metadata = bool(input_metadata.get("uuidRouting"))
+    has_routing_metadata = bool(input_metadata.get("idRouting"))
     should_reroute = reroute or (migrate_missing_routing and not has_routing_metadata)
 
     if should_reroute:
         if schema_path is None:
-            raise ValueError("UUID migration requires a graph-shape schema")
+            raise ValueError("ID migration requires a graph-shape schema")
         return _reroute_graph_jsonl(
             reader,
             source,
@@ -97,10 +102,10 @@ def materialize_graph_jsonl(
         )
 
     merged_metadata = {**input_metadata, "source": str(source), **(metadata or {})}
-    if "uuidRouting" not in merged_metadata:
+    if "idRouting" not in merged_metadata:
         raise ValueError(
-            "Input graph has no uuidRouting metadata. Supply a schema to migrate UUIDs "
-            "or regenerate the graph in suffix-bit format."
+            "Input graph has no idRouting metadata. Supply a schema to migrate legacy IDs "
+            "or regenerate the graph in MSB-routed uint64 format."
         )
 
     temporary = output.with_name(f".{output.name}.tmp")
@@ -131,7 +136,7 @@ def write_domain_manifest(
     schema: str | Path,
     data: str | Path,
     backends: str | Path,
-    start_uuid: str,
+    start_uuid: int | str,
     max_depth: int = 7,
     direction: str = "undirected",
 ) -> Path:
@@ -151,7 +156,7 @@ def write_domain_manifest(
         },
         "defaults": {
             "bfs": {
-                "startUuid": start_uuid,
+                "startUuid": str(start_uuid),
                 "maxDepth": int(max_depth),
                 "direction": direction,
             }
@@ -178,12 +183,54 @@ def load_domain_manifest(path: str | Path) -> DomainConfig:
             schema=_resolve_relative(base, str(paths["schema"])),
             data=_resolve_relative(base, str(paths["data"])),
             backends=_resolve_relative(base, str(paths["backendConfig"])),
+            source_data=(
+                _resolve_relative(base, str(paths["sourceData"]))
+                if paths.get("sourceData")
+                else None
+            ),
+            native_id_map=(
+                _resolve_relative(base, str(paths["nativeIdMap"]))
+                if paths.get("nativeIdMap")
+                else None
+            ),
         ),
         start_uuid=str(bfs["startUuid"]),
         max_depth=int(bfs.get("maxDepth", 7)),
         direction=str(bfs.get("direction", "undirected")),
     )
 
+
+
+def resolve_domain_node_id(domain: DomainConfig, value: int | str) -> int:
+    """Resolve an original generated node ID to the currently loaded Neo4j-native global ID."""
+    mapping = read_native_node_id_map(domain.paths.native_id_map)
+    return resolve_native_node_id(value, mapping)
+
+
+def record_native_id_resolution(
+    domain: DomainConfig,
+    *,
+    resolved_graph: str | Path,
+    native_id_map: str | Path,
+) -> DomainConfig:
+    """Make the domain manifest point at the graph matching the current Neo4j store."""
+    manifest = domain.paths.manifest
+    raw = json.loads(manifest.read_text(encoding="utf-8"))
+    paths = raw.setdefault("paths", {})
+    base = manifest.parent
+    source_data = domain.paths.source_data or domain.paths.data
+    resolved = Path(resolved_graph).expanduser().resolve()
+    mapping_path = Path(native_id_map).expanduser().resolve()
+    mapping = read_native_node_id_map(mapping_path)
+
+    paths["sourceData"] = _portable_path(source_data, base)
+    paths["data"] = _portable_path(resolved, base)
+    paths["nativeIdMap"] = _portable_path(mapping_path, base)
+    bfs = raw.setdefault("defaults", {}).setdefault("bfs", {})
+    source_start = bfs.setdefault("sourceStartUuid", bfs["startUuid"])
+    bfs["startUuid"] = str(resolve_native_node_id(source_start, mapping))
+    manifest.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+    return load_domain_manifest(manifest)
 
 def discover_domain_manifests(data_root: str | Path) -> list[Path]:
     root = Path(data_root).expanduser().resolve()
@@ -236,7 +283,7 @@ def _backend_entry(source: str, enabled: bool, arango_database: str) -> dict[str
                 "credentials": {"username": "neo4j", "password": "password"},
             },
             "capabilities": {"batch_neighbors": True, "native_bfs": False, "property_filters": True},
-            "coverage": {"mode": "uuid-routing", "fresh": True, "complete_for_requested_subgraph": False},
+            "coverage": {"mode": "id-routing", "fresh": True, "complete_for_requested_subgraph": False},
         }
     if source == "ArangoDB":
         return {
@@ -251,7 +298,7 @@ def _backend_entry(source: str, enabled: bool, arango_database: str) -> dict[str
                 "credentials": {"username": "root", "password": "rootpassword"},
             },
             "capabilities": {"batch_neighbors": True, "native_bfs": False, "gpu_execution": False},
-            "coverage": {"mode": "uuid-routing", "fresh": True, "complete_for_requested_subgraph": False},
+            "coverage": {"mode": "id-routing", "fresh": True, "complete_for_requested_subgraph": False},
         }
     if source == "GPU":
         return {
@@ -267,7 +314,7 @@ def _backend_entry(source: str, enabled: bool, arango_database: str) -> dict[str
                 "property_filters": False,
                 "gpu_execution": True,
             },
-            "coverage": {"mode": "uuid-routing", "fresh": True, "complete_for_requested_subgraph": False},
+            "coverage": {"mode": "id-routing", "fresh": True, "complete_for_requested_subgraph": False},
         }
     raise ValueError(f"Unsupported backend source: {source}")
 
@@ -288,7 +335,7 @@ def write_backend_config_for_sources(
     output.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": 1,
-        "uuidRouting": list(routing_layout.backends),
+        "idRouting": list(routing_layout.backends),
         "backends": [
             _backend_entry(source, source in used, arango_database)
             for source in ("Neo4J", "ArangoDB", "GPU")
@@ -354,7 +401,7 @@ def _schema_routing_layout(
 ) -> BackendLayout:
     configured = routing_backends
     if configured is None:
-        configured = schema.get("uuidRouting") or schema.get("storageBackends")
+        configured = schema.get("idRouting") or schema.get("storageBackends")
 
     entries = [
         entry
@@ -402,7 +449,7 @@ def _placement_source(
     *,
     entity_kind: str,
     entity_type: str,
-    legacy_uuid: str,
+    legacy_uuid: str | int,
     placement_strategy: str,
     routing_layout: BackendLayout,
     schema_sources: dict[str, str],
@@ -422,21 +469,21 @@ def _placement_source(
 
 def _lookup_migrated_uuid(
     connection: sqlite3.Connection,
-    legacy_uuid: str,
+    legacy_uuid: str | int,
     *,
     relationship_uuid: str,
     endpoint_name: str,
 ) -> str:
     row = connection.execute(
         "SELECT migrated_uuid FROM node_uuid_map WHERE legacy_uuid = ?",
-        (legacy_uuid,),
+        (str(legacy_uuid),),
     ).fetchone()
     if row is None:
         raise ValueError(
             f"Relationship {relationship_uuid} references unknown {endpoint_name} "
             f"node UUID {legacy_uuid}"
         )
-    return str(row[0])
+    return int(row[0])
 
 
 def _reroute_graph_jsonl(
@@ -469,7 +516,7 @@ def _reroute_graph_jsonl(
         **input_metadata,
         "source": str(source),
         **(metadata or {}),
-        "uuidRoutingStrategy": (
+        "idRoutingStrategy": (
             "schema-type-placement-v1" if use_schema_placement else "identity-hash-v1"
         ),
         **routing_layout.metadata(),
@@ -513,7 +560,7 @@ def _reroute_graph_jsonl(
                 try:
                     connection.execute(
                         "INSERT INTO node_uuid_map(legacy_uuid, migrated_uuid) VALUES (?, ?)",
-                        (node.uuid, migrated_uuid),
+                        (str(node.uuid), str(migrated_uuid)),
                     )
                 except sqlite3.IntegrityError as exc:
                     raise ValueError(
@@ -684,7 +731,7 @@ def generate_sample_graph(
         output,
         {
             "domain": schema.get("domain", schema.get("name", "University")),
-            "uuidRoutingStrategy": (
+            "idRoutingStrategy": (
                 "schema-type-placement-v1" if use_schema_placement else "identity-hash-v1"
             ),
             **routing_layout.metadata(),
@@ -711,7 +758,7 @@ def find_first_node(graph_path: str | Path, node_type: str | None = None) -> Nod
 
 def validate_graph(graph_path: str | Path) -> dict[str, Any]:
     reader = open_graph_reader(graph_path)
-    node_ids: set[str] = set()
+    node_ids: set[int] = set()
     node_types: dict[str, int] = {}
     relationship_types: dict[str, int] = {}
     sources: dict[str, int] = {}
@@ -719,16 +766,16 @@ def validate_graph(graph_path: str | Path) -> dict[str, Any]:
 
     metadata = reader.metadata()
     routing_layout: BackendLayout | None = None
-    configured_layout = metadata.get("uuidRouting")
+    configured_layout = metadata.get("idRouting")
     if not configured_layout:
-        errors.append("graph metadata is missing uuidRouting")
+        errors.append("graph metadata is missing idRouting")
     else:
         try:
             routing_layout = BackendLayout(tuple(str(value) for value in configured_layout))
-            declared_bits = metadata.get("uuidRoutingBits")
+            declared_bits = metadata.get("idRoutingBits")
             if declared_bits is not None and int(declared_bits) != routing_layout.bit_count:
                 errors.append(
-                    f"uuidRoutingBits={declared_bits}, expected {routing_layout.bit_count}"
+                    f"idRoutingBits={declared_bits}, expected {routing_layout.bit_count}"
                 )
         except (TypeError, ValueError) as exc:
             errors.append(str(exc))
@@ -750,7 +797,7 @@ def validate_graph(graph_path: str | Path) -> dict[str, Any]:
             except ValueError as exc:
                 errors.append(f"node {node.uuid}: {exc}")
 
-    relationship_ids: set[str] = set()
+    relationship_ids: set[int] = set()
     for relationship in reader.iter_relationships():
         if relationship.uuid in relationship_ids:
             errors.append(f"duplicate relationship UUID: {relationship.uuid}")
@@ -775,8 +822,8 @@ def validate_graph(graph_path: str | Path) -> dict[str, Any]:
     return {
         "graph": str(Path(graph_path).resolve()),
         "valid": not errors,
-        "uuid_routing": list(routing_layout.backends) if routing_layout is not None else [],
-        "uuid_routing_bits": routing_layout.bit_count if routing_layout is not None else None,
+        "id_routing": list(routing_layout.backends) if routing_layout is not None else [],
+        "id_routing_bits": routing_layout.bit_count if routing_layout is not None else None,
         "node_count": len(node_ids),
         "relationship_count": len(relationship_ids),
         "node_types": dict(sorted(node_types.items())),

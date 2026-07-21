@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.graphio.domain import DomainConfig, load_domain_manifest
+from tools.graphio.domain import DomainConfig, load_domain_manifest, resolve_domain_node_id
 from tools.measurement.graph_bench.config import (
     ArangoConfig,
     BenchmarkConfig,
@@ -62,6 +62,7 @@ class ScenarioSpec:
     distributed: bool = True
     implementation_full: tuple[str, ...] = ("Neo4J", "ArangoDB", "GPU")
     native: tuple[str, ...] = ("Neo4J", "ArangoDB")
+    load_distributed: bool = True
     reload_each_repetition: bool = False
 
 
@@ -171,8 +172,36 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
     direction = str(bfs_raw.get("direction", "undirected"))
     if direction not in {"directed", "undirected", "both"}:
         raise ValueError("bfs.direction must be directed, undirected, or both")
+
+    neighbor_batch_size_raw = bfs_raw.get("neighborBatchSize")
+    neighbor_batch_size = (
+        None if neighbor_batch_size_raw in (None, "") else int(neighbor_batch_size_raw)
+    )
+    if neighbor_batch_size is not None and neighbor_batch_size <= 0:
+        raise ValueError("bfs.neighborBatchSize must be greater than zero")
+
+    neo4j_max_concurrent_requests = int(bfs_raw.get("maxConcurrentNeo4jRequests", 4))
+    arango_max_concurrent_requests = int(bfs_raw.get("maxConcurrentArangoRequests", 4))
+    backend_request_retries = int(bfs_raw.get("backendRequestRetries", 2))
+    backend_retry_delay_ms = int(bfs_raw.get("backendRetryDelayMs", 100))
+    if neo4j_max_concurrent_requests <= 0:
+        raise ValueError("bfs.maxConcurrentNeo4jRequests must be greater than zero")
+    if arango_max_concurrent_requests <= 0:
+        raise ValueError("bfs.maxConcurrentArangoRequests must be greater than zero")
+    if backend_request_retries < 0:
+        raise ValueError("bfs.backendRequestRetries must be zero or greater")
+    if backend_retry_delay_ms < 0:
+        raise ValueError("bfs.backendRetryDelayMs must be zero or greater")
     if direction != "undirected" and scenarios_raw.get("native", ["Neo4J", "ArangoDB"]):
         raise ValueError("Native comparison currently supports only bfs.direction='undirected'")
+
+    load_distributed = bool(scenarios_raw.get("loadDistributed", True))
+    reload_each_repetition = bool(scenarios_raw.get("reloadEachRepetition", False))
+    if not load_distributed and reload_each_repetition:
+        raise ValueError(
+            "scenarios.reloadEachRepetition cannot be true when "
+            "scenarios.loadDistributed is false"
+        )
 
     output_dir = _repo_path(str(raw.get("outputDir", f"measurements/{raw.get('name', 'bfs-suite')}")))
     binary_raw = raw.get("graphDbBinary")
@@ -200,6 +229,11 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
         bfs=BfsConfig(
             max_depth=int(bfs_raw.get("maxDepth", 7)),
             direction=direction,
+            neighbor_batch_size=neighbor_batch_size,
+            neo4j_max_concurrent_requests=neo4j_max_concurrent_requests,
+            arango_max_concurrent_requests=arango_max_concurrent_requests,
+            backend_request_retries=backend_request_retries,
+            backend_retry_delay_ms=backend_retry_delay_ms,
             allowed_edge_types=str(bfs_raw.get("allowedEdgeTypes", "")),
             allowed_target_node_types=str(bfs_raw.get("allowedTargetNodeTypes", "")),
             allow_native_pushdown=bool(bfs_raw.get("allowNativePushdown", False)),
@@ -224,7 +258,8 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
                     )
                 )
             ),
-            reload_each_repetition=bool(scenarios_raw.get("reloadEachRepetition", False)),
+            load_distributed=load_distributed,
+            reload_each_repetition=reload_each_repetition,
         ),
         datasets=tuple(datasets),
     )
@@ -305,10 +340,10 @@ def _dataset_starts(dataset: DatasetSpec, domain: DomainConfig, count: int) -> l
         starts = [domain.start_uuid]
     if len(starts) < count:
         raise ValueError(
-            f"Dataset '{dataset.name}' provides only {len(starts)} start UUID(s), "
+            f"Dataset '{dataset.name}' provides only {len(starts)} start ID(s), "
             f"but startUuidCount={count}"
         )
-    return starts[:count]
+    return [str(resolve_domain_node_id(domain, value)) for value in starts[:count]]
 
 
 
@@ -341,6 +376,52 @@ def _write_aggregate_csv(output: Path, dataset_csvs: list[tuple[str, Path]]) -> 
     return output
 
 
+
+def _jsonable_suite(config: SuiteConfig) -> dict[str, Any]:
+    return json.loads(json.dumps(asdict(config), default=str))
+
+
+def _resume_config_mismatches(previous: Any, current: Any, path: str = "suite") -> list[str]:
+    """Compare fields present in both configs; old runs may lack newer tuning fields."""
+    if isinstance(previous, dict) and isinstance(current, dict):
+        mismatches: list[str] = []
+        for key in sorted(previous.keys() & current.keys()):
+            mismatches.extend(
+                _resume_config_mismatches(previous[key], current[key], f"{path}.{key}")
+            )
+        return mismatches
+    if isinstance(previous, list) and isinstance(current, list):
+        return [] if previous == current else [
+            f"{path}: previous={previous!r}, current={current!r}"
+        ]
+    return [] if previous == current else [
+        f"{path}: previous={previous!r}, current={current!r}"
+    ]
+
+
+def _validate_resume_config(suite_output: Path, run_id: str, config: SuiteConfig) -> None:
+    effective_path = suite_output / "effective-config.json"
+    if not effective_path.is_file():
+        raise ValueError(
+            f"Cannot resume benchmark without {effective_path}; use a new --run-id instead"
+        )
+    previous = json.loads(effective_path.read_text(encoding="utf-8"))
+    previous_run_id = str(previous.get("runId", ""))
+    if previous_run_id and previous_run_id != run_id:
+        raise ValueError(
+            f"Resume run ID mismatch: existing={previous_run_id!r}, requested={run_id!r}"
+        )
+    mismatches = _resume_config_mismatches(
+        previous.get("suite", {}), _jsonable_suite(config)
+    )
+    if mismatches:
+        rendered = "\n  ".join(mismatches[:10])
+        suffix = "" if len(mismatches) <= 10 else f"\n  ... and {len(mismatches) - 10} more"
+        raise ValueError(
+            "Resume configuration differs from the existing run:\n  " + rendered + suffix
+        )
+
+
 def run_suite(
     config: SuiteConfig,
     *,
@@ -349,12 +430,34 @@ def run_suite(
     dry_run: bool = False,
     skip_build: bool = False,
     skip_services: bool = False,
+    resume: bool = False,
 ) -> Path:
     effective_run_id = _safe_name(run_id or config.name)
     suite_output = Path(output_dir).expanduser().resolve() if output_dir else config.output_dir / effective_run_id
-    if suite_output.exists() and any(suite_output.iterdir()):
-        raise ValueError(f"Benchmark output directory is not empty: {suite_output}")
+    output_nonempty = suite_output.exists() and any(suite_output.iterdir())
+    if output_nonempty and not resume:
+        raise ValueError(
+            f"Benchmark output directory is not empty: {suite_output}; pass --resume to continue it"
+        )
+    if resume and not output_nonempty:
+        raise ValueError(f"Cannot resume missing or empty benchmark output: {suite_output}")
     suite_output.mkdir(parents=True, exist_ok=True)
+    if resume:
+        _validate_resume_config(suite_output, effective_run_id, config)
+        if config.scenarios.load_distributed:
+            raise ValueError(
+                "--resume requires scenarios.loadDistributed=false so the existing resolved graph and "
+                "database-native IDs are reused safely"
+            )
+        if config.scenarios.implementation_full or config.scenarios.native:
+            raise ValueError(
+                "--resume currently supports the distributed scenario only; set "
+                "scenarios.implementationFull and scenarios.native to []"
+            )
+        print(
+            f"[resume] Continuing {suite_output}; completed work will be skipped",
+            file=sys.stderr,
+        )
 
     runner = CommandRunner(
         ROOT,
@@ -366,13 +469,15 @@ def run_suite(
         "runId": effective_run_id,
         "suite": asdict(config),
     }
-    # Convert Path objects recursively without making the dataclasses mutable.
-    (suite_output / "effective-config.json").write_text(
-        json.dumps(effective, indent=2, default=str) + "\n", encoding="utf-8"
-    )
+    # Keep the original checkpoint config during continuation.
+    if not resume:
+        (suite_output / "effective-config.json").write_text(
+            json.dumps(effective, indent=2, default=str) + "\n", encoding="utf-8"
+        )
+
 
     for dataset in config.datasets:
-        should_prepare = dataset.prepare and (
+        should_prepare = not resume and dataset.prepare and (
             not dataset.prepare.when_missing or not _dataset_files_ready(dataset)
         )
         if should_prepare:
@@ -396,10 +501,10 @@ def run_suite(
                         f"Dataset '{dataset.name}' manifest references a missing file: {required}"
                     )
 
-    if config.build.enabled and not skip_build:
+    if config.build.enabled and not skip_build and not resume:
         runner.run([sys.executable, ROOT / "tools" / "cpgdb.py", "build", "--preset", config.build.preset])
 
-    if config.services.start and not skip_services:
+    if config.services.start and not skip_services and not resume:
         compose = ["docker", "compose", "-f", config.docker_compose]
         if config.services.reset_volumes:
             runner.run([*compose, "down", "--volumes", "--remove-orphans"])
@@ -424,6 +529,7 @@ def run_suite(
     dataset_summaries: list[dict[str, Any]] = []
     comparison_failures = 0
     failed_records = 0
+    skipped_completed = 0
 
     for dataset in config.datasets:
         if dry_run and not dataset.domain.is_file():
@@ -435,7 +541,10 @@ def run_suite(
         starts = _dataset_starts(dataset, domain, config.start_uuid_count)
         dataset_output = suite_output / "datasets" / _safe_name(dataset.name)
         orchestrator = BfsBenchmarkOrchestrator(
-            _benchmark_config(config, domain), dataset_output, dry_run=dry_run
+            _benchmark_config(config, domain),
+            dataset_output,
+            dry_run=dry_run,
+            resume=resume,
         )
         try:
             for start_uuid in starts:
@@ -448,6 +557,7 @@ def run_suite(
                     f"{effective_run_id}-{dataset.name}",
                     config.repetitions,
                     compare=config.compare_with_reference,
+                    load_before_run=config.scenarios.load_distributed,
                     reload_each_repetition=config.scenarios.reload_each_repetition,
                 )
 
@@ -477,6 +587,7 @@ def run_suite(
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             comparison_failures += int(summary.get("comparison_failures", 0))
             failed_records += int(summary.get("failed_count", 0))
+            skipped_completed += orchestrator.skipped_completed
             dataset_summaries.append(
                 {
                     "name": dataset.name,
@@ -487,6 +598,7 @@ def run_suite(
                     "summary": str(summary_path),
                     "comparisonFailures": int(summary.get("comparison_failures", 0)),
                     "failedRecords": int(summary.get("failed_count", 0)),
+                    "skippedCompleted": orchestrator.skipped_completed,
                 }
             )
 
@@ -515,6 +627,8 @@ def run_suite(
         "startUuidCount": config.start_uuid_count,
         "comparisonFailures": comparison_failures,
         "failedRecords": failed_records,
+        "resumed": resume,
+        "skippedCompleted": skipped_completed,
         "datasets": dataset_summaries,
         "aggregateMeasurements": str(aggregate_csv),
     }
@@ -544,6 +658,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--skip-services", action="store_true")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Continue the same non-empty output directory and rerun only failed or missing work.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -554,6 +673,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             dry_run=args.dry_run,
             skip_build=args.skip_build,
             skip_services=args.skip_services,
+            resume=args.resume,
         )
         return 0
     except (FileNotFoundError, ValueError, RuntimeError) as exc:

@@ -28,11 +28,28 @@ class ArangoConfig:
 class BfsConfig:
     max_depth: int = 7
     direction: str = "undirected"
+    neighbor_batch_size: Optional[int] = None
+    neo4j_max_concurrent_requests: int = 4
+    arango_max_concurrent_requests: int = 4
+    backend_request_retries: int = 2
+    backend_retry_delay_ms: int = 100
     allowed_edge_types: str = ""
     allowed_target_node_types: str = ""
     allow_native_pushdown: bool = False
     no_partial_acceleration: bool = False
     no_predecessors: bool = False
+
+    def __post_init__(self) -> None:
+        if self.neighbor_batch_size is not None and self.neighbor_batch_size <= 0:
+            raise ValueError("bfs.neighbor_batch_size must be greater than zero")
+        if self.neo4j_max_concurrent_requests <= 0:
+            raise ValueError("bfs.neo4j_max_concurrent_requests must be greater than zero")
+        if self.arango_max_concurrent_requests <= 0:
+            raise ValueError("bfs.arango_max_concurrent_requests must be greater than zero")
+        if self.backend_request_retries < 0:
+            raise ValueError("bfs.backend_request_retries must be zero or greater")
+        if self.backend_retry_delay_ms < 0:
+            raise ValueError("bfs.backend_retry_delay_ms must be zero or greater")
 
 
 @dataclass(frozen=True)
@@ -81,6 +98,15 @@ def _section(root: dict[str, Any], name: str) -> dict[str, Any]:
 
 def _path(value: Any, base: Path) -> Optional[Path]:
     return resolve_path(value, base=base) if value not in (None, "") else None
+
+
+def _optional_positive_int(value: Any, *, field_name: str) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"'{field_name}' must be greater than zero")
+    return parsed
 
 
 def _default_implementation_paths(base: Path) -> dict[str, ImplementationBackendPaths]:
@@ -226,6 +252,22 @@ def load_config(path: str | Path | None = None) -> BenchmarkConfig:
         bfs=BfsConfig(
             max_depth=int(bfs.get("max_depth", BfsConfig.max_depth)),
             direction=bfs.get("direction", BfsConfig.direction),
+            neighbor_batch_size=_optional_positive_int(
+                bfs.get("neighbor_batch_size"),
+                field_name="bfs.neighbor_batch_size",
+            ),
+            neo4j_max_concurrent_requests=int(
+                bfs.get("neo4j_max_concurrent_requests", BfsConfig.neo4j_max_concurrent_requests)
+            ),
+            arango_max_concurrent_requests=int(
+                bfs.get("arango_max_concurrent_requests", BfsConfig.arango_max_concurrent_requests)
+            ),
+            backend_request_retries=int(
+                bfs.get("backend_request_retries", BfsConfig.backend_request_retries)
+            ),
+            backend_retry_delay_ms=int(
+                bfs.get("backend_retry_delay_ms", BfsConfig.backend_retry_delay_ms)
+            ),
             allowed_edge_types=bfs.get("allowed_edge_types", BfsConfig.allowed_edge_types),
             allowed_target_node_types=bfs.get("allowed_target_node_types", BfsConfig.allowed_target_node_types),
             allow_native_pushdown=bool(bfs.get("allow_native_pushdown", BfsConfig.allow_native_pushdown)),

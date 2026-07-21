@@ -8,14 +8,12 @@
 //
 
 #include "cli/BfsCli.hpp"
+#include "utilities/uuid.hpp"
 
 #include "logging/LoggingSetup.hpp"
 #include "utilities/logging.hpp"
 
 #include <algorithm>
-#include <boost/lexical_cast.hpp>
-#include <boost/uuid/uuid.hpp>
-#include <boost/uuid/uuid_io.hpp>
 #include <cctype>
 #include <sstream>
 #include <stdexcept>
@@ -98,8 +96,8 @@ namespace cpgdb::cli {
     }
 
     void add_bfs_arguments(CommandLine &program) {
-        program.add_value_option("start-uuid", {"--start-uuid"}, "UUID of the BFS source vertex",
-                                 std::string{"11a96cb7-c043-4aa7-aa35-2297e9be7f06"});
+        program.add_value_option("start-uuid", {"--start-uuid"}, "Unsigned 64-bit global ID of the BFS source vertex",
+                                 std::nullopt, true);
 
 
         program.add_value_option("max-depth", {"--max-depth"}, "BFS max depth; use -1 for unlimited", std::string{"7"});
@@ -124,6 +122,18 @@ namespace cpgdb::cli {
         program.add_value_option("neighbor-batch-size", {"--neighbor-batch-size"},
                                  "Maximum frontier vertices per Neo4j/ArangoDB neighbor request", std::string{"10000"});
 
+        program.add_value_option("neo4j-max-concurrent-requests", {"--neo4j-max-concurrent-requests"},
+                                 "Maximum number of concurrent Neo4j neighbor requests", std::string{"4"});
+
+        program.add_value_option("arango-max-concurrent-requests", {"--arango-max-concurrent-requests"},
+                                 "Maximum number of concurrent ArangoDB neighbor requests", std::string{"4"});
+
+        program.add_value_option("backend-request-retries", {"--backend-request-retries"},
+                                 "Retries after a failed backend neighbor request", std::string{"2"});
+
+        program.add_value_option("backend-retry-delay-ms", {"--backend-retry-delay-ms"},
+                                 "Initial backend retry delay in milliseconds", std::string{"100"});
+
         program.add_value_option("thread-count", {"--thread-count"}, "Worker count reserved for the BFS thread pool",
                                  default_thread_count());
     }
@@ -143,7 +153,7 @@ namespace cpgdb::cli {
     }
 
     NodeRef parse_source(const CommandLine &args, const DatabaseContext &context) {
-        const auto id = boost::lexical_cast<boost::uuids::uuid>(args.string_value("start-uuid"));
+        const auto id = global_id_from_string(args.string_value("start-uuid"));
         return context.node_ref(id);
     }
 
@@ -157,10 +167,26 @@ namespace cpgdb::cli {
     BfsOptions parse_bfs_options(const CommandLine &args) {
         const int max_depth = args.int_value("max-depth");
         const int neighbor_batch_size = args.int_value("neighbor-batch-size");
+        const int neo4j_max_concurrent_requests = args.int_value("neo4j-max-concurrent-requests");
+        const int arango_max_concurrent_requests = args.int_value("arango-max-concurrent-requests");
+        const int backend_request_retries = args.int_value("backend-request-retries");
+        const int backend_retry_delay_ms = args.int_value("backend-retry-delay-ms");
         const int thread_count = args.int_value("thread-count");
 
         if (neighbor_batch_size <= 0) {
             throw std::runtime_error("--neighbor-batch-size must be greater than zero");
+        }
+        if (neo4j_max_concurrent_requests <= 0) {
+            throw std::runtime_error("--neo4j-max-concurrent-requests must be greater than zero");
+        }
+        if (arango_max_concurrent_requests <= 0) {
+            throw std::runtime_error("--arango-max-concurrent-requests must be greater than zero");
+        }
+        if (backend_request_retries < 0) {
+            throw std::runtime_error("--backend-request-retries must be zero or greater");
+        }
+        if (backend_retry_delay_ms < 0) {
+            throw std::runtime_error("--backend-retry-delay-ms must be zero or greater");
         }
         if (thread_count <= 0) {
             throw std::runtime_error("--thread-count must be greater than zero");
@@ -171,6 +197,10 @@ namespace cpgdb::cli {
                            .allow_native_pushdown = args.bool_value("allow-native-pushdown"),
                            .allow_partial_acceleration = !args.bool_value("no-partial-acceleration"),
                            .neighbor_batch_size = static_cast<std::size_t>(neighbor_batch_size),
+                           .neo4j_max_concurrent_requests = static_cast<std::size_t>(neo4j_max_concurrent_requests),
+                           .arango_max_concurrent_requests = static_cast<std::size_t>(arango_max_concurrent_requests),
+                           .backend_request_retries = static_cast<std::size_t>(backend_request_retries),
+                           .backend_retry_delay_ms = static_cast<std::size_t>(backend_retry_delay_ms),
                            .thread_count = static_cast<std::size_t>(thread_count)};
 
         if (max_depth >= 0) {
@@ -185,9 +215,8 @@ namespace cpgdb::cli {
 
         std::vector<std::pair<GlobalId, std::uint32_t>> ordered(result.distance.begin(), result.distance.end());
         std::ranges::sort(ordered, [](const auto &left, const auto &right) {
-            return left.second != right.second
-                           ? left.second < right.second
-                           : boost::uuids::to_string(left.first) < boost::uuids::to_string(right.first);
+            return left.second != right.second ? left.second < right.second
+                                               : global_id_to_string(left.first) < global_id_to_string(right.first);
         });
 
         for (const auto &[vertex_id, distance]: ordered) {

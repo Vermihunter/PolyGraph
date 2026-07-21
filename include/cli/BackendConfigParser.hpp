@@ -42,7 +42,7 @@ parse_descriptor(const json& backend_json,
 [[nodiscard]] bool backend_json_enabled(const json& backend_json);
 [[nodiscard]] json load_backend_config_file_or_default(const std::optional<std::string>& path);
 [[nodiscard]] const json& backend_array_or_throw(const json& root);
-[[nodiscard]] std::vector<BackendId> uuid_routing_backends(const json& root);
+[[nodiscard]] std::vector<BackendId> id_routing_backends(const json& root);
 [[nodiscard]] bool backend_enabled(const DatabaseContext& context, BackendId id);
 void print_backend_summary(const DatabaseContext& context, std::ostream& output);
 

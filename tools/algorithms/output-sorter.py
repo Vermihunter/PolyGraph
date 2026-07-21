@@ -7,10 +7,10 @@ input_file = sys.argv[1]
 output_file = sys.argv[1]
 
 # Read CSV
-df = pd.read_csv(input_file)
+df = pd.read_csv(input_file, sep=";")
 
 # Sort by depth first, then Node
-df_sorted = df.sort_values(by=["depth", "uuid"], ascending=[True, True])
+df_sorted = df.sort_values(by=["distance", "vertex_id"], ascending=[True, True])
 
 # Save to new CSV (without index column)
 df_sorted.to_csv(output_file, index=False)

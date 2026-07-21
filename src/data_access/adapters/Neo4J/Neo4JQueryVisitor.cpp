@@ -9,6 +9,7 @@
 #include "data_model/AdjacencyRow.hpp"
 #include "infrastructure/BackendConnectionConfig.hpp"
 #include "infrastructure/DatabaseContext.hpp"
+#include "insertion/BackendEncodedUuid.hpp"
 #include "logging/level/Debug.hpp"
 #include "logging/level/Info.hpp"
 #include "utilities/BackendIds.hpp"
@@ -16,10 +17,8 @@
 #include "utilities/logging.hpp"
 
 #include <algorithm>
-#include <boost/container_hash/hash.hpp>
-#include <boost/lexical_cast.hpp>
-#include <boost/uuid/uuid.hpp>
-#include <boost/uuid/uuid_io.hpp>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <data_access/adapters/Neo4J/Neo4JBoltClient.hpp>
 #include <future>
@@ -42,6 +41,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utilities/curl.hpp>
@@ -62,22 +62,27 @@ namespace cpgdb {
 
         const std::string getAllEdgesStrQuery = "MATCH ()-[r]->()\n"
                                                 "RETURN {\n"
-                                                "    id: elementId(r),\n"
-                                                "    type: type(r),\n"
+                                                "    native_id: id(r),\n"
                                                 "    uuid: r.uuid,\n"
-                                                "    start: startNode(r).uuid,\n"
-                                                "    end: endNode(r).uuid,\n"
+                                                "    type: type(r),\n"
+                                                "    start_native_id: id(startNode(r)),\n"
+                                                "    start_uuid: startNode(r).uuid,\n"
+                                                "    start_is_proxy: coalesce(startNode(r).is_proxy, false),\n"
+                                                "    end_native_id: id(endNode(r)),\n"
+                                                "    end_uuid: endNode(r).uuid,\n"
+                                                "    end_is_proxy: coalesce(endNode(r).is_proxy, false),\n"
                                                 "    properties: properties(r)\n"
                                                 "} AS relationship;";
 
         const std::string getAllVerticesStrQuery =
                 "MATCH (n)\n"
                 "RETURN {\n"
-                "   id: elementId(n),\n"
+                "   native_id: id(n),\n"
                 "   uuid: n.uuid,\n"
+                "   is_proxy: coalesce(n.is_proxy, false),\n"
                 "   type: coalesce(\n"
                 "       CASE WHEN coalesce(n.is_proxy, false) THEN n.`remote-type` ELSE null END,\n"
-                "       head([label IN labels(n) WHERE label <> 'Proxy' AND label <> 'CPGDBVertex']),\n"
+                "       head([label IN labels(n) WHERE NOT label IN ['Proxy','CPGDBVertex','__GraphNode']]),\n"
                 "       n.type\n"
                 "   ),\n"
                 "   labels: labels(n),\n"
@@ -85,37 +90,26 @@ namespace cpgdb {
                 "} AS node;";
 
         const std::string getVertexByIdStrQuery =
-                "MATCH (n)\n"
-                "WHERE n.uuid = $globalNodeId\n"
+                "MATCH (n) WHERE id(n) = $nativeNodeId\n"
                 "RETURN {\n"
-                "   id: elementId(n),\n"
-                "   uuid: coalesce(n.`remote-uuid`, n.uuid),\n"
-                "   type: coalesce(\n"
-                "       CASE WHEN coalesce(n.is_proxy, false) THEN n.`remote-type` ELSE null END,\n"
-                "       head([label IN labels(n) WHERE label <> 'Proxy' AND label <> 'CPGDBVertex']),\n"
-                "       n.type\n"
-                "   ),\n"
-                "   labels: labels(n),\n"
-                "   properties: properties(n)\n"
+                "   native_id: id(n), uuid: n.uuid, is_proxy: coalesce(n.is_proxy, false),\n"
+                "   type: coalesce(head([label IN labels(n) WHERE NOT label IN "
+                "['Proxy','CPGDBVertex','__GraphNode']]), n.type),\n"
+                "   labels: labels(n), properties: properties(n)\n"
                 "} AS node;";
 
         const std::string getNeighborsForVertexStrQuery =
-                "MATCH (n)\n"
-                "WHERE n.uuid = $globalNodeId\n"
+                "MATCH (n) WHERE id(n) = $nativeNodeId\n"
                 "MATCH (n)-[]-(neighbor)\n"
                 "RETURN {\n"
-                "   id: elementId(neighbor),\n"
-                "   uuid: coalesce(neighbor.`remote-uuid`, neighbor.uuid),\n"
-                "   type: coalesce(\n"
-                "       CASE WHEN coalesce(neighbor.is_proxy, false) THEN neighbor.`remote-type` ELSE null "
+                "   native_id: id(neighbor), uuid: neighbor.uuid, is_proxy: coalesce(neighbor.is_proxy, false),\n"
+                "   type: coalesce(CASE WHEN coalesce(neighbor.is_proxy, false) THEN neighbor.`remote-type` ELSE null "
                 "END,\n"
-                "       head([label IN labels(neighbor) WHERE label <> 'Proxy' AND label <> "
-                "'CPGDBVertex']),\n"
-                "       neighbor.type\n"
-                "   ),\n"
-                "   labels: labels(neighbor),\n"
-                "   properties: properties(neighbor)\n"
+                "       head([label IN labels(neighbor) WHERE NOT label IN ['Proxy','CPGDBVertex','__GraphNode']]), "
+                "neighbor.type),\n"
+                "   labels: labels(neighbor), properties: properties(neighbor)\n"
                 "} AS node;";
+
 
     public:
         Impl(DatabaseContext &db_context, const BackendConnectionConfig &config) :
@@ -132,12 +126,12 @@ namespace cpgdb {
 
         query_result_t visit(const GetNeighborsForVertexQuery &q) override {
             return evaluate(getNeighborsForVertexStrQuery, ResultParseType::Node,
-                            {{"globalNodeId", boost::uuids::to_string(q.node().global_id)}});
+                            {{"nativeNodeId", neo4j_local_id(q.node().global_id)}});
         }
 
         query_result_t visit(const GetVertexByIdQuery &q) override {
             return evaluate(getVertexByIdStrQuery, ResultParseType::Node,
-                            {{"globalNodeId", boost::uuids::to_string(q.node().global_id)}});
+                            {{"nativeNodeId", neo4j_local_id(q.node().global_id)}});
         }
 
         query_result_t visit(const GetNeighborsBatchQuery &q) override {
@@ -146,59 +140,32 @@ namespace cpgdb {
 
             json frontier = json::array();
             for (const auto &v: q.frontier()) {
-                frontier.push_back(boost::uuids::to_string(v.global_id));
+                frontier.push_back(neo4j_local_id(v.global_id));
             }
 
             const auto edge_type_names = edge_type_names_for_spec(q.spec());
             const std::string edge_match =
                     build_edge_match(q.spec().direction, relationship_type_pattern(edge_type_names));
 
-            const std::string source_type_expr = "coalesce("
-                                                 "CASE WHEN coalesce(source.is_proxy, false) "
-                                                 "THEN source.`remote-type` ELSE null END, "
-                                                 "head([label IN labels(source) "
-                                                 "WHERE label <> 'Proxy' AND label <> 'CPGDBVertex']), "
-                                                 "source.type"
-                                                 ")";
-
-            const std::string neighbor_type_expr = "coalesce("
-                                                   "CASE WHEN coalesce(neighbor.is_proxy, false) "
-                                                   "THEN neighbor.`remote-type` ELSE null END, "
-                                                   "head([label IN labels(neighbor) "
-                                                   "WHERE label <> 'Proxy' AND label <> 'CPGDBVertex']), "
-                                                   "neighbor.type"
-                                                   ")";
-
-            const std::string query = "UNWIND $frontier AS source_uuid "
-                                      "MATCH (source {uuid: source_uuid}) " +
-                                      edge_match +
-                                      "RETURN "
-                                      "{ "
-                                      "   id: elementId(source), "
-                                      "   uuid: coalesce(source.`remote-uuid`, source.uuid), "
-                                      "   type: " +
-                                      source_type_expr +
-                                      ", "
-                                      "   labels: labels(source), "
-                                      "   properties: properties(source) "
-                                      "} AS source, "
-                                      "{ "
-                                      "   id: elementId(neighbor), "
-                                      "   uuid: coalesce(neighbor.`remote-uuid`, neighbor.uuid), "
-                                      "   type: " +
-                                      neighbor_type_expr +
-                                      ", "
-                                      "   labels: labels(neighbor), "
-                                      "   properties: properties(neighbor) "
-                                      "} AS neighbor, "
-                                      "{ "
-                                      "   start: startNode(r).uuid, "
-                                      "   end: endNode(r).uuid, "
-                                      "   id: elementId(r), "
-                                      "   type: type(r), "
-                                      "   uuid: r.uuid, "
-                                      "   properties: properties(r) "
-                                      "} AS edge";
+            const std::string query =
+                    "UNWIND $frontier AS source_native_id "
+                    "MATCH (source) WHERE id(source) = source_native_id " +
+                    edge_match +
+                    "RETURN "
+                    "{native_id: id(source), uuid: source.uuid, is_proxy: coalesce(source.is_proxy,false), "
+                    " type: coalesce(head([label IN labels(source) WHERE NOT label IN "
+                    " ['Proxy','CPGDBVertex','__GraphNode']]), source.type), "
+                    " labels: labels(source), properties: properties(source)} AS source, "
+                    "{native_id: id(neighbor), uuid: neighbor.uuid, is_proxy: coalesce(neighbor.is_proxy,false), "
+                    " type: coalesce(CASE WHEN coalesce(neighbor.is_proxy,false) THEN neighbor.`remote-type` END, "
+                    " head([label IN labels(neighbor) WHERE NOT label IN "
+                    " ['Proxy','CPGDBVertex','__GraphNode']]), neighbor.type), "
+                    " labels: labels(neighbor), properties: properties(neighbor)} AS neighbor, "
+                    "{native_id: id(r), uuid: r.uuid, type: type(r), "
+                    " start_native_id: id(startNode(r)), start_uuid: startNode(r).uuid, "
+                    " start_is_proxy: coalesce(startNode(r).is_proxy,false), "
+                    " end_native_id: id(endNode(r)), end_uuid: endNode(r).uuid, "
+                    " end_is_proxy: coalesce(endNode(r).is_proxy,false), properties: properties(r)} AS edge";
 
             return evaluate(query, ResultParseType::AdjacencyRow, {{"frontier", frontier}});
         }
@@ -214,44 +181,55 @@ namespace cpgdb {
                 return std::make_unique<QueryResult>();
             }
 
-            std::unordered_map<std::string, json> node_groups;
-            std::unordered_map<TypeId, json> edge_groups;
+            json proxy_rows = json::array();
+            std::unordered_map<TypeId, json> replica_edge_groups;
 
             for (const insertion::InsertionItem &item: query.items()) {
                 if (item.is_node()) {
                     const Node &node = item.node();
-                    const std::string labels = node_label_clause(node);
-                    json &rows = node_groups[labels];
-                    if (!rows.is_array()) {
-                        rows = json::array();
+                    if (home_backend(node.global_id) == NEO4J) {
+                        throw std::runtime_error(
+                                "Dynamic insertion of Neo4j-owned nodes is disabled in native-ID mode: "
+                                "Neo4j must allocate id(n), after which the resolved graph IDs must be "
+                                "propagated. Use tools/load_graph.py --reset for a fresh native-ID load.");
                     }
-                    rows.push_back(node_to_write_row(node));
-                } else {
-                    const Edge &edge = item.edge();
-                    json &rows = edge_groups[edge.type];
-                    if (!rows.is_array()) {
-                        rows = json::array();
-                    }
-                    rows.push_back(edge_to_write_row(edge));
+                    proxy_rows.push_back(proxy_node_to_write_row(node));
+                    continue;
                 }
+
+                const Edge &edge = item.edge();
+                if (home_backend(edge.global_id) == NEO4J) {
+                    throw std::runtime_error(
+                            "Dynamic insertion of Neo4j-owned relationships is disabled in native-ID "
+                            "mode because Neo4j must allocate id(r). Use the bulk loader to regenerate "
+                            "the resolved graph.");
+                }
+                json &rows = replica_edge_groups[edge.type];
+                if (!rows.is_array()) {
+                    rows = json::array();
+                }
+                rows.push_back(replica_edge_to_write_row(edge));
             }
 
-            for (const auto &[labels, rows]: node_groups) {
+            if (!proxy_rows.empty()) {
                 const std::string cypher = "UNWIND $rows AS row "
-                                           "CREATE (n" +
-                                           labels +
-                                           ") "
+                                           "MERGE (n:Proxy:CPGDBVertex:__GraphNode {uuid: row.uuid}) "
                                            "SET n = row.properties "
-                                           "SET n.uuid = row.uuid, n.type = row.type";
-                execute_write(cypher, {{"rows", rows}});
+                                           "SET n.uuid = row.uuid, n.type = 'Proxy', n.is_proxy = true, "
+                                           "    n.`remote-type` = row.remote_type";
+                execute_write(cypher, {{"rows", proxy_rows}});
             }
 
-            for (const auto &[edge_type, rows]: edge_groups) {
+            for (const auto &[edge_type, rows]: replica_edge_groups) {
                 const std::string relationship =
                         escape_cypher_identifier(db_context_.schema->edge_type(edge_type).name);
                 const std::string cypher = "UNWIND $rows AS row "
-                                           "MATCH (source {uuid: row.src}) "
-                                           "MATCH (target {uuid: row.dst}) "
+                                           "MATCH (source) WHERE "
+                                           "  (row.src_proxy AND source:Proxy AND source.uuid = row.src) OR "
+                                           "  (NOT row.src_proxy AND id(source) = row.src) "
+                                           "MATCH (target) WHERE "
+                                           "  (row.dst_proxy AND target:Proxy AND target.uuid = row.dst) OR "
+                                           "  (NOT row.dst_proxy AND id(target) = row.dst) "
                                            "CREATE (source)-[r:" +
                                            relationship +
                                            "]->(target) "
@@ -270,20 +248,62 @@ namespace cpgdb {
             // return get_neighbors_batch_fast_sequential(frontier, spec, depth);
         }
 
-        std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier,
-                                                                          const ExpandSpec &spec, int depth,
-                                                                          std::size_t batch_size) const {
+        std::vector<MinimalAdjacencyRow>
+        get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth,
+                                         std::size_t batch_size, std::size_t max_concurrent_requests,
+                                         std::size_t request_retries, std::size_t retry_delay_ms) const {
             /*
              * Keep all three calls together so benchmarking/switching requires
-             * changing only these lines. The original APOC implementation is
-             * intentionally preserved as the third option.
+             * changing only these lines. The rich-row implementation is retained
+             * as the third option.
              */
             // return get_minimal_neighbors_batch_direct_union(frontier, spec, depth);
-            return get_minimal_neighbors_batch_direct_grouped_async(frontier, spec, depth, batch_size);
+            return get_minimal_neighbors_batch_direct_grouped_async(
+                    frontier, spec, depth, batch_size, max_concurrent_requests, request_retries, retry_delay_ms);
             // return adjacency_rows_to_minimal(get_neighbors_batch_fast(frontier, spec, depth));
         }
 
     private:
+        [[nodiscard]] GlobalId neo4j_local_id(const GlobalId id) const {
+            return insertion::BackendEncodedId::local_id(id, db_context_.id_routing_backends);
+        }
+
+        [[nodiscard]] GlobalId neo4j_native_global_id(const json &value) const {
+            if (!value.is_number_integer() && !value.is_number_unsigned()) {
+                throw std::runtime_error("Neo4j native ID must be an integer: " + value.dump());
+            }
+            return insertion::BackendEncodedId::from_local_id(value.get<std::uint64_t>(), NEO4J,
+                                                              db_context_.id_routing_backends);
+        }
+
+        static GlobalId stored_global_id(const json &value) {
+            if (value.is_number_unsigned()) {
+                return value.get<GlobalId>();
+            }
+            if (value.is_number_integer()) {
+                return global_id_from_signed_storage(value.get<std::int64_t>());
+            }
+            if (value.is_string()) {
+                return global_id_from_string(value.get<std::string>());
+            }
+            throw std::runtime_error("Stored global ID must be an integer or string: " + value.dump());
+        }
+
+        [[nodiscard]] GlobalId resolve_node_global_id(const json &native_id, const json &stored_id,
+                                                      const bool is_proxy) const {
+            if (is_proxy) {
+                if (stored_id.is_null()) {
+                    throw std::runtime_error("Neo4j proxy node is missing its numeric uuid property");
+                }
+                return stored_global_id(stored_id);
+            }
+            return neo4j_native_global_id(native_id);
+        }
+
+        [[nodiscard]] GlobalId resolve_edge_global_id(const json &native_id, const json &stored_id) const {
+            return stored_id.is_null() ? neo4j_native_global_id(native_id) : stored_global_id(stored_id);
+        }
+
         std::vector<AdjacencyRow> get_neighbors_batch_fast_sequential(std::span<const NodeRef> frontier,
                                                                       const ExpandSpec &spec, int depth) const {
             if (frontier.empty()) {
@@ -296,7 +316,7 @@ namespace cpgdb {
             std::vector<AdjacencyRow> rows;
             rows.reserve(frontier.size());
 
-            std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> row_by_source;
+            std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> row_by_source;
             row_by_source.reserve(frontier.size());
 
             for (const auto &source: frontier) {
@@ -312,49 +332,29 @@ namespace cpgdb {
             EVENT_SCOPE_INFO(total_span, "label_group_count", grouped_frontier.size());
 
             const auto edge_type_names = edge_type_names_for_spec(spec);
-            const std::string relationship_filter = apoc_relationship_filter_for_spec(edge_type_names, spec.direction);
-
             for (const auto &[source_label, group]: grouped_frontier) {
                 if (group.empty()) {
                     continue;
                 }
 
                 EVENT_SCOPE_INFO(group_span, "neo4j.label_group_neighbor_query", {"depth", depth},
-                                 {"source_label", source_label}, {"group_size", group.size()},
-                                 {"relationship_filter", relationship_filter});
+                                 {"source_label", source_label}, {"group_size", group.size()});
 
                 json frontier_json = json::array();
 
                 for (const auto &source: group) {
-                    frontier_json.push_back(boost::uuids::to_string(source.global_id));
+                    frontier_json.push_back(neo4j_local_id(source.global_id));
                 }
 
-                const std::string query = "UNWIND $frontier AS source_uuid "
+                const std::string query = "UNWIND $frontier AS source_native_id "
                                           "MATCH (source:" +
                                           escape_cypher_identifier(source_label) +
-                                          " {uuid: source_uuid}) "
-                                          "CALL apoc.path.expandConfig(source, { "
-                                          "  minLevel: 1, "
-                                          "  maxLevel: 1, "
-                                          "  relationshipFilter: $relationshipFilter, "
-                                          "  bfs: true, "
-                                          "  uniqueness: 'NODE_GLOBAL' "
-                                          "}) YIELD path "
-                                          "WITH source, last(nodes(path)) AS neighbor, relationships(path)[0] AS r "
-                                          "RETURN "
-                                          "source.uuid AS source_uuid, "
-                                          "neighbor.uuid AS neighbor_uuid, "
-                                          "neighbor.`remote-uuid` AS neighbor_remote_uuid, "
-                                          "coalesce(neighbor.is_proxy, false) AS neighbor_is_proxy, "
-                                          "neighbor.`remote-type` AS neighbor_remote_type, "
-                                          "neighbor.type AS neighbor_type_property, "
-                                          "labels(neighbor) AS neighbor_labels, "
-                                          "r.uuid AS edge_uuid, "
-                                          "type(r) AS edge_type, "
-                                          "startNode(r).uuid AS edge_from_uuid, "
-                                          "endNode(r).uuid AS edge_to_uuid";
+                                          ") "
+                                          "WHERE id(source) = source_native_id " +
+                                          build_edge_match(spec.direction, relationship_type_pattern(edge_type_names)) +
+                                          rich_neighbor_projection();
 
-                const json parameters{{"frontier", frontier_json}, {"relationshipFilter", relationship_filter}};
+                const json parameters{{"frontier", frontier_json}};
 
                 json response;
 
@@ -398,7 +398,7 @@ namespace cpgdb {
             std::vector<AdjacencyRow> rows;
             rows.reserve(frontier.size());
 
-            std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> row_by_source;
+            std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> row_by_source;
             row_by_source.reserve(frontier.size());
 
             for (const auto &source: frontier) {
@@ -412,8 +412,6 @@ namespace cpgdb {
             const auto grouped_frontier = group_frontier_by_physical_source_label(frontier);
             const auto edge_type_names = edge_type_names_for_spec(spec);
 
-            const std::string relationship_filter = apoc_relationship_filter_for_spec(edge_type_names, spec.direction);
-
             total_span.add_end_field("label_group_count", grouped_frontier.size());
 
             std::vector<std::future<Neo4jGroupResponse>> futures;
@@ -426,35 +424,18 @@ namespace cpgdb {
                 json frontier_json = json::array();
 
                 for (const auto &source: group) {
-                    frontier_json.push_back(boost::uuids::to_string(source.global_id));
+                    frontier_json.push_back(neo4j_local_id(source.global_id));
                 }
 
-                const std::string query = "UNWIND $frontier AS source_uuid "
+                const std::string query = "UNWIND $frontier AS source_native_id "
                                           "MATCH (source:" +
                                           escape_cypher_identifier(source_label) +
-                                          " {uuid: source_uuid}) "
-                                          "CALL apoc.path.expandConfig(source, { "
-                                          "  minLevel: 1, "
-                                          "  maxLevel: 1, "
-                                          "  relationshipFilter: $relationshipFilter, "
-                                          "  bfs: true, "
-                                          "  uniqueness: 'NODE_GLOBAL' "
-                                          "}) YIELD path "
-                                          "WITH source, last(nodes(path)) AS neighbor, relationships(path)[0] AS r "
-                                          "RETURN "
-                                          "source.uuid AS source_uuid, "
-                                          "neighbor.uuid AS neighbor_uuid, "
-                                          "neighbor.`remote-uuid` AS neighbor_remote_uuid, "
-                                          "coalesce(neighbor.is_proxy, false) AS neighbor_is_proxy, "
-                                          "neighbor.`remote-type` AS neighbor_remote_type, "
-                                          "neighbor.type AS neighbor_type_property, "
-                                          "labels(neighbor) AS neighbor_labels, "
-                                          "r.uuid AS edge_uuid, "
-                                          "type(r) AS edge_type, "
-                                          "startNode(r).uuid AS edge_from_uuid, "
-                                          "endNode(r).uuid AS edge_to_uuid";
+                                          ") "
+                                          "WHERE id(source) = source_native_id " +
+                                          build_edge_match(spec.direction, relationship_type_pattern(edge_type_names)) +
+                                          rich_neighbor_projection();
 
-                const json parameters{{"frontier", frontier_json}, {"relationshipFilter", relationship_filter}};
+                const json parameters{{"frontier", frontier_json}};
 
                 futures.push_back(std::async(
                         std::launch::async,
@@ -526,16 +507,19 @@ namespace cpgdb {
                 group_frontier.get_ref<json::array_t &>().reserve(group.size());
 
                 for (const auto &source: group) {
-                    group_frontier.push_back(boost::uuids::to_string(source.global_id));
+                    group_frontier.push_back(neo4j_local_id(source.global_id));
                 }
 
                 parameters[parameter_name] = std::move(group_frontier);
 
                 // NOLINTBEGIN(performance-inefficient-string-concatenation)
                 query += "UNWIND $" + parameter_name +
-                         " AS source_uuid "
+                         " AS source_native_id "
                          "MATCH (source:" +
-                         escape_cypher_identifier(source_label) + " {uuid: source_uuid}) " + edge_match;
+                         escape_cypher_identifier(source_label) +
+                         ") "
+                         "WHERE id(source) = source_native_id " +
+                         edge_match;
                 // NOLINTEND(performance-inefficient-string-concatenation)
 
                 if (!target_type_names.empty()) {
@@ -559,9 +543,9 @@ namespace cpgdb {
             return rows;
         }
 
-        std::vector<MinimalAdjacencyRow>
-        get_minimal_neighbors_batch_direct_grouped_async(std::span<const NodeRef> frontier, const ExpandSpec &spec,
-                                                         int depth, std::size_t batch_size) const {
+        std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_direct_grouped_async(
+                std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth, std::size_t batch_size,
+                std::size_t max_concurrent_requests, std::size_t request_retries, std::size_t retry_delay_ms) const {
             (void) depth;
 
             if (frontier.empty()) {
@@ -570,9 +554,14 @@ namespace cpgdb {
             if (batch_size == 0) {
                 throw std::invalid_argument("Neo4j neighbor batch size must be greater than zero");
             }
+            if (max_concurrent_requests == 0) {
+                throw std::invalid_argument("Neo4j max concurrent requests must be greater than zero");
+            }
 
-            EVENT_SCOPE_INFO(total_span, "neo4j.minimal_neighbors.direct_grouped_async",
-                             {"frontier_size", frontier.size()}, {"batch_size", batch_size});
+            EVENT_SCOPE_INFO(total_span, "neo4j.minimal_neighbors.direct_grouped_bounded",
+                             {"frontier_size", frontier.size()}, {"batch_size", batch_size},
+                             {"max_concurrent_requests", max_concurrent_requests},
+                             {"request_retries", request_retries});
 
             auto [rows, row_by_source] = initialize_minimal_rows(frontier);
             const auto grouped_frontier = group_frontier_by_physical_source_label(frontier);
@@ -589,13 +578,9 @@ namespace cpgdb {
                 json parameters;
             };
 
-            struct Neo4jMinimalBatchResponse {
-                std::string source_label;
-                std::size_t batch_index{};
-                std::size_t batch_count{};
-                std::size_t batch_size{};
+            struct Neo4jWorkerStats {
+                std::size_t completed_requests{};
                 std::size_t response_row_count{};
-                std::vector<MinimalAdjacencyRow> rows;
             };
 
             std::vector<Neo4jPreparedBatch> prepared_batches;
@@ -605,9 +590,12 @@ namespace cpgdb {
                     continue;
                 }
 
-                std::string query = "UNWIND $frontier AS source_uuid "
+                std::string query = "UNWIND $frontier AS source_native_id "
                                     "MATCH (source:" +
-                                    escape_cypher_identifier(source_label) + " {uuid: source_uuid}) " + edge_match;
+                                    escape_cypher_identifier(source_label) +
+                                    ") "
+                                    "WHERE id(source) = source_native_id " +
+                                    edge_match;
 
                 if (!target_type_names.empty()) {
                     query += "WITH source, neighbor "
@@ -632,7 +620,7 @@ namespace cpgdb {
                     auto &frontier_array = batch_frontier.get_ref<json::array_t &>();
                     frontier_array.reserve(current_batch_size);
                     for (const NodeRef &source: batch_nodes) {
-                        frontier_array.emplace_back(boost::uuids::to_string(source.global_id));
+                        frontier_array.emplace_back(neo4j_local_id(source.global_id));
                     }
 
                     prepared_batches.push_back(
@@ -646,63 +634,127 @@ namespace cpgdb {
                 }
             }
 
-            std::vector<std::future<Neo4jMinimalBatchResponse>> futures;
-            futures.reserve(prepared_batches.size());
+            const std::size_t worker_count = std::min(max_concurrent_requests, prepared_batches.size());
+            std::atomic_size_t next_batch{0};
+            std::mutex rows_mutex;
+            std::vector<std::future<Neo4jWorkerStats>> workers;
+            workers.reserve(worker_count);
 
-            // All request payloads are prepared first. The current implementation
-            // intentionally launches every batch through std::async; ThreadPool is
-            // available for a later bounded-execution change.
-            for (auto &prepared: prepared_batches) {
-                futures.push_back(std::async(
+            for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
+                workers.push_back(std::async(
                         std::launch::async,
-                        [this, prepared = std::move(prepared), spec]() mutable -> Neo4jMinimalBatchResponse {
-                            const std::size_t current_batch_size = prepared.nodes.size();
-                            EVENT_SCOPE_INFO(span, "neo4j.minimal_neighbors.direct_group_query",
-                                             {"source_label", prepared.source_label},
-                                             {"group_size", current_batch_size}, {"batch_index", prepared.batch_index},
-                                             {"batch_count", prepared.batch_count});
-
-                            auto [batch_rows, batch_row_by_source] = initialize_minimal_rows(prepared.nodes);
+                        [this, &prepared_batches, &next_batch, &rows, &row_by_source, &rows_mutex, spec,
+                         request_retries, retry_delay_ms, worker_index]() mutable -> Neo4jWorkerStats {
+                            Neo4jWorkerStats stats;
                             std::unique_ptr<Neo4JBoltClient> bolt_client;
-                            if (use_bolt_) {
-                                bolt_client = make_bolt_client();
-                            }
-                            const std::size_t response_row_count = send_minimal_req_into_rows(
-                                    prepared.query, prepared.parameters, batch_rows, batch_row_by_source, spec,
-                                    prepared.source_label, current_batch_size, bolt_client.get());
 
-                            return Neo4jMinimalBatchResponse{.source_label = std::move(prepared.source_label),
-                                                             .batch_index = prepared.batch_index,
-                                                             .batch_count = prepared.batch_count,
-                                                             .batch_size = current_batch_size,
-                                                             .response_row_count = response_row_count,
-                                                             .rows = std::move(batch_rows)};
+                            while (true) {
+                                const std::size_t prepared_index = next_batch.fetch_add(1, std::memory_order_relaxed);
+                                if (prepared_index >= prepared_batches.size()) {
+                                    break;
+                                }
+
+                                auto prepared = std::move(prepared_batches[prepared_index]);
+                                const std::size_t current_batch_size = prepared.nodes.size();
+                                EVENT_SCOPE_INFO(request_span, "neo4j.minimal_neighbors.direct_group_query",
+                                                 {"source_label", prepared.source_label},
+                                                 {"group_size", current_batch_size},
+                                                 {"batch_index", prepared.batch_index},
+                                                 {"batch_count", prepared.batch_count}, {"worker_index", worker_index});
+
+                                for (std::size_t attempt = 0;; ++attempt) {
+                                    try {
+                                        if (use_bolt_ && !bolt_client) {
+                                            bolt_client = make_bolt_client();
+                                        }
+                                        auto [batch_rows, batch_row_by_source] =
+                                                initialize_minimal_rows(prepared.nodes);
+                                        const std::size_t response_row_count = send_minimal_req_into_rows(
+                                                prepared.query, prepared.parameters, batch_rows, batch_row_by_source,
+                                                spec, prepared.source_label, current_batch_size, bolt_client.get());
+
+                                        {
+                                            EVENT_SCOPE_INFO(response_to_rows,
+                                                             "neo4j.minimal_neighbors.response-into-rows",
+                                                             {"label", prepared.source_label},
+                                                             {"group_size", current_batch_size},
+                                                             {"batch_index", prepared.batch_index},
+                                                             {"batch_count", prepared.batch_count},
+                                                             {"response_row_count", response_row_count});
+                                            std::scoped_lock lock(rows_mutex);
+                                            merge_minimal_rows(std::move(batch_rows), rows, row_by_source);
+                                            response_to_rows.add_end_field("result_source_rows", rows.size());
+                                        }
+
+                                        request_span.add_end_field("attempts", attempt + 1);
+                                        request_span.add_end_field("response_row_count", response_row_count);
+                                        request_span.add_end_field("status", "ok");
+                                        ++stats.completed_requests;
+                                        stats.response_row_count += response_row_count;
+                                        break;
+                                    } catch (const std::exception &error) {
+                                        if (attempt >= request_retries) {
+                                            request_span.add_end_field("attempts", attempt + 1);
+                                            request_span.add_end_field("status", "failed");
+                                            request_span.add_end_field("error", error.what());
+                                            throw std::runtime_error(
+                                                    "Neo4j neighbor batch " + std::to_string(prepared.batch_index + 1) +
+                                                    "/" + std::to_string(prepared.batch_count) + " for label '" +
+                                                    prepared.source_label + "' failed after " +
+                                                    std::to_string(attempt + 1) + " attempt(s): " + error.what());
+                                        }
+
+                                        const std::size_t delay =
+                                                retry_delay_ms * (std::size_t{1} << std::min(attempt, std::size_t{10}));
+                                        EVENT_SCOPE_INFO(retry_span, "neo4j.minimal_neighbors.request_retry",
+                                                         {"source_label", prepared.source_label},
+                                                         {"batch_index", prepared.batch_index},
+                                                         {"attempt", attempt + 1}, {"delay_ms", delay},
+                                                         {"error", error.what()});
+                                        if (use_bolt_) {
+                                            bolt_client.reset();
+                                        }
+                                        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+                                    }
+                                }
+                            }
+
+                            return stats;
                         }));
             }
 
-            total_span.add_end_field("request_count", futures.size());
+            total_span.add_end_field("request_count", prepared_batches.size());
+            total_span.add_end_field("worker_count", worker_count);
 
+            std::size_t completed_requests = 0;
             std::size_t total_response_rows = 0;
-            for (auto &future: futures) {
-                auto result = future.get();
-                EVENT_SCOPE_INFO(response_to_rows, "neo4j.minimal_neighbors.response-into-rows",
-                                 {"label", result.source_label}, {"group_size", result.batch_size},
-                                 {"batch_index", result.batch_index}, {"batch_count", result.batch_count},
-                                 {"response_row_count", result.response_row_count});
-                merge_minimal_rows(std::move(result.rows), rows, row_by_source);
-                total_response_rows += result.response_row_count;
+            for (auto &worker: workers) {
+                const Neo4jWorkerStats stats = worker.get();
+                completed_requests += stats.completed_requests;
+                total_response_rows += stats.response_row_count;
             }
+            total_span.add_end_field("completed_request_count", completed_requests);
 
             total_span.add_end_field("response_row_count", total_response_rows);
             total_span.add_end_field("result_source_rows", rows.size());
             return rows;
         }
 
+        static std::string rich_neighbor_projection() {
+            return "RETURN "
+                   "id(source), id(neighbor), neighbor.uuid, "
+                   "coalesce(neighbor.is_proxy, false), neighbor.`remote-type`, "
+                   "neighbor.type, labels(neighbor), "
+                   "id(r), r.uuid, type(r), "
+                   "id(startNode(r)), startNode(r).uuid, coalesce(startNode(r).is_proxy, false), "
+                   "id(endNode(r)), endNode(r).uuid, coalesce(endNode(r).is_proxy, false)";
+        }
+
         static std::string minimal_neighbor_projection() {
             return "RETURN "
-                   "source.uuid AS source_uuid, "
-                   "neighbor.uuid AS neighbor_uuid, "
-                   "neighbor.`remote-uuid` AS neighbor_remote_uuid, "
+                   "id(source) AS source_native_id, "
+                   "id(neighbor) AS neighbor_native_id, "
+                   "neighbor.uuid AS neighbor_global_id, "
                    "coalesce(neighbor.is_proxy, false) AS neighbor_is_proxy, "
                    "neighbor.`remote-type` AS neighbor_remote_type, "
                    "neighbor.type AS neighbor_type_property, "
@@ -710,12 +762,12 @@ namespace cpgdb {
         }
 
         static std::pair<std::vector<MinimalAdjacencyRow>,
-                         std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>>>
+                         std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>>>
         initialize_minimal_rows(std::span<const NodeRef> frontier) {
             std::vector<MinimalAdjacencyRow> rows;
             rows.reserve(frontier.size());
 
-            std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> row_by_source;
+            std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> row_by_source;
             row_by_source.reserve(frontier.size());
 
             for (const auto &source: frontier) {
@@ -730,9 +782,9 @@ namespace cpgdb {
             return {std::move(rows), std::move(row_by_source)};
         }
 
-        static void merge_minimal_rows(
-                std::vector<MinimalAdjacencyRow> source_rows, std::vector<MinimalAdjacencyRow> &target_rows,
-                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &target_row_by_source) {
+        static void
+        merge_minimal_rows(std::vector<MinimalAdjacencyRow> source_rows, std::vector<MinimalAdjacencyRow> &target_rows,
+                           const std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> &target_row_by_source) {
             for (auto &source_row: source_rows) {
                 const auto target_iterator = target_row_by_source.find(source_row.source.global_id);
 
@@ -748,26 +800,21 @@ namespace cpgdb {
 
         void append_minimal_response_row(
                 const json &row, std::vector<MinimalAdjacencyRow> &rows,
-                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
-                std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+                const std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> &row_by_source,
+                std::unordered_map<GlobalId, std::unordered_set<GlobalId, std::hash<GlobalId>>, std::hash<GlobalId>>
                         &seen_by_source,
                 const ExpandSpec &spec) const {
             if (!row.is_array() || row.size() < 7 || row[0].is_null() || row[1].is_null()) {
                 return;
             }
 
-            const std::string source_uuid = row[0].get<std::string>();
-            const std::string physical_neighbor_uuid = row[1].get<std::string>();
             const bool looks_like_proxy = bool_or_false(row[3]) ||
                                           non_empty_string_opt(row[5]).value_or("") == "Proxy" ||
                                           labels_contain(row[6], "Proxy");
-            const std::string neighbor_uuid =
-                    resolve_logical_neighbor_uuid(physical_neighbor_uuid, row[2], looks_like_proxy);
+            const auto source_id = neo4j_native_global_id(row[0]);
+            const auto neighbor_id = resolve_node_global_id(row[1], row[2], looks_like_proxy);
             const std::string neighbor_type_name =
-                    resolve_logical_neighbor_type(row[3], row[4], row[5], row[6], physical_neighbor_uuid);
-
-            const auto source_id = boost::lexical_cast<GlobalId>(source_uuid);
-            const auto neighbor_id = boost::lexical_cast<GlobalId>(neighbor_uuid);
+                    resolve_logical_neighbor_type(row[3], row[4], row[5], row[6], global_id_to_string(neighbor_id));
             const auto source_iterator = row_by_source.find(source_id);
 
             if (source_iterator == row_by_source.end()) {
@@ -785,7 +832,7 @@ namespace cpgdb {
 
         void parse_minimal_response_into_rows(
                 const json &response, std::vector<MinimalAdjacencyRow> &rows,
-                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
+                const std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> &row_by_source,
                 const ExpandSpec &spec) const {
             if (response.contains("errors") && !response["errors"].empty()) {
                 throw std::runtime_error("Neo4J minimal neighbor query failed: " + response["errors"].dump());
@@ -796,7 +843,7 @@ namespace cpgdb {
                 return;
             }
 
-            std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+            std::unordered_map<GlobalId, std::unordered_set<GlobalId, std::hash<GlobalId>>, std::hash<GlobalId>>
                     seen_by_source;
 
             for (const auto &item: response["results"][0]["data"]) {
@@ -899,39 +946,6 @@ namespace cpgdb {
             return result;
         }
 
-        static std::string apoc_relationship_filter_for_spec(const std::vector<std::string> &edge_type_names,
-                                                             Direction direction) {
-            std::string result;
-
-            for (const auto &edge_type_name: edge_type_names) {
-                if (edge_type_name.empty()) {
-                    continue;
-                }
-
-                if (edge_type_name.contains('|') || edge_type_name.contains('<') || edge_type_name.contains('>')) {
-                    throw std::runtime_error("Neo4J APOC relationshipFilter cannot safely encode edge type name: " +
-                                             edge_type_name);
-                }
-
-                if (!result.empty()) {
-                    result += '|';
-                }
-
-                switch (direction) {
-                    case Direction::Directed:
-                        result += edge_type_name;
-                        result += '>';
-                        break;
-
-                    case Direction::Undirected:
-                    case Direction::Both:
-                        result += edge_type_name;
-                        break;
-                }
-            }
-
-            return result;
-        }
 
         static std::string build_edge_match(Direction direction, const std::string &relationship_type_pattern) {
             switch (direction) {
@@ -967,9 +981,9 @@ namespace cpgdb {
             }
 
             if (!unresolved.empty()) {
-                // A caller-provided UUID contains the owning backend but not the
+                // A caller-provided ID contains the owning backend but not the
                 // logical node type. Resolve the first expansion through the
-                // backend's label indexes instead of a process-wide UUID map.
+                // backend's label indexes instead of a process-wide ID map.
                 // Once neighbors are returned, their logical types are carried
                 // by the backend response and subsequent layers use one label.
                 for (const auto &[type_id, node_type]: db_context_.schema->node_types()) {
@@ -1106,7 +1120,7 @@ namespace cpgdb {
 
         void parse_fast_response_into_rows(
                 const json &response, std::vector<AdjacencyRow> &rows,
-                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
+                const std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> &row_by_source,
                 const ExpandSpec &spec) const {
             if (response.contains("errors") && !response["errors"].empty()) {
                 throw std::runtime_error("Neo4J fast neighbor query failed: " + response["errors"].dump());
@@ -1119,7 +1133,7 @@ namespace cpgdb {
 
             const auto &data = response["results"][0]["data"];
 
-            std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+            std::unordered_map<GlobalId, std::unordered_set<GlobalId, std::hash<GlobalId>>, std::hash<GlobalId>>
                     seen_by_source;
 
             for (const auto &item: data) {
@@ -1129,109 +1143,75 @@ namespace cpgdb {
 
                 const auto &r = item["row"];
 
-                if (r.size() < 11 || r[0].is_null() || r[1].is_null()) {
+                if (r.size() < 16 || r[0].is_null() || r[1].is_null()) {
                     continue;
                 }
-
-                const std::string source_uuid_str = r[0].get<std::string>();
-                const std::string physical_neighbor_uuid_str = r[1].get<std::string>();
 
                 const bool looks_like_proxy = bool_or_false(r[3]) ||
                                               non_empty_string_opt(r[5]).value_or("") == "Proxy" ||
                                               labels_contain(r[6], "Proxy");
-
-                const std::string neighbor_uuid_str =
-                        resolve_logical_neighbor_uuid(physical_neighbor_uuid_str, r[2], looks_like_proxy);
-
+                const auto source_id = neo4j_native_global_id(r[0]);
+                const auto neighbor_id = resolve_node_global_id(r[1], r[2], looks_like_proxy);
                 const std::string neighbor_type_name =
-                        resolve_logical_neighbor_type(r[3], r[4], r[5], r[6], physical_neighbor_uuid_str);
-
-                if (contains_nul_byte(neighbor_type_name)) {
-                    throw std::runtime_error("Neo4J fast path resolved invalid logical type containing NUL bytes "
-                                             "for neighbor uuid=" +
-                                             physical_neighbor_uuid_str + ": '" + printable_string(neighbor_type_name) +
-                                             "'");
-                }
-
-                const std::string edge_uuid_str = r[7].is_null() ? "" : r[7].get<std::string>();
-
-                const std::string edge_type_name = r[8].get<std::string>();
-
-                const std::string edge_from_uuid_str = r[9].get<std::string>();
-
-                const std::string edge_to_uuid_str = r[10].get<std::string>();
-
-                const auto source_id = boost::lexical_cast<boost::uuids::uuid>(source_uuid_str);
-                const auto neighbor_id = boost::lexical_cast<boost::uuids::uuid>(neighbor_uuid_str);
+                        resolve_logical_neighbor_type(r[3], r[4], r[5], r[6], global_id_to_string(neighbor_id));
 
                 auto row_it = row_by_source.find(source_id);
-
-                if (row_it == row_by_source.end()) {
-                    continue;
-                }
-
-                auto &seen = seen_by_source[source_id];
-
-                if (!seen.insert(neighbor_id).second) {
+                if (row_it == row_by_source.end() || !seen_by_source[source_id].insert(neighbor_id).second) {
                     continue;
                 }
 
                 const TypeId neighbor_type = db_context_.schema->node_type_id(neighbor_type_name);
-
                 if (!spec.allows_target_type(neighbor_type)) {
                     continue;
                 }
 
+                const std::string edge_type_name = r[9].get<std::string>();
                 const TypeId edge_type = db_context_.schema->edge_type_id(edge_type_name);
-
                 if (!spec.allows_edge_type(edge_type)) {
                     continue;
                 }
 
-                NodeRef neighbor_ref{.global_id = neighbor_id, .type = neighbor_type};
-                NeighborRef neighbor{.vertex = neighbor_ref, .via_edge = std::nullopt};
+                const bool start_proxy = bool_or_false(r[12]);
+                const bool end_proxy = bool_or_false(r[15]);
+                EdgeRef edge_ref{.global_id = resolve_edge_global_id(r[7], r[8]),
+                                 .type = edge_type,
+                                 .from = resolve_node_global_id(r[10], r[11], start_proxy),
+                                 .to = resolve_node_global_id(r[13], r[14], end_proxy)};
 
-                if (!edge_uuid_str.empty()) {
-                    EdgeRef edge_ref{.global_id = boost::lexical_cast<boost::uuids::uuid>(edge_uuid_str),
-                                     .type = edge_type,
-                                     .from = boost::lexical_cast<boost::uuids::uuid>(edge_from_uuid_str),
-                                     .to = boost::lexical_cast<boost::uuids::uuid>(edge_to_uuid_str)};
-
-                    neighbor.via_edge = edge_ref;
-                }
-
-                rows[row_it->second].neighbors.push_back(neighbor);
+                rows[row_it->second].neighbors.push_back(NeighborRef{
+                        .vertex = NodeRef{.global_id = neighbor_id, .type = neighbor_type}, .via_edge = edge_ref});
             }
         }
 
-        [[nodiscard]] std::string node_label_clause(const Node &node) const {
-            std::vector<std::string> labels = node.labels;
-            labels.emplace_back("CPGDBVertex");
-            labels.push_back(db_context_.schema->node_type(node.type).name);
-            std::ranges::sort(labels);
-            labels.erase(std::unique(labels.begin(), labels.end()), labels.end());
+        [[nodiscard]] BackendId home_backend(const GlobalId id) const {
+            return insertion::BackendEncodedId::decode(id, db_context_.id_routing_backends);
+        }
 
-            std::string result;
-            for (const std::string &label: labels) {
-                if (!label.empty()) {
-                    result += ":" + escape_cypher_identifier(label);
-                }
+        [[nodiscard]] json endpoint_storage_id(const GlobalId id) const {
+            if (home_backend(id) == NEO4J) {
+                return neo4j_local_id(id);
             }
-            return result;
+            return global_id_to_signed_storage(id);
         }
 
-        static json node_to_write_row(const Node &node) {
-            return json{{"uuid", boost::uuids::to_string(node.global_id)},
-                        {"type", node.type},
-                        {"properties", node.properties}};
+        [[nodiscard]] json proxy_node_to_write_row(const Node &node) const {
+            json properties = node.properties;
+            properties.erase("uuid");
+            return json{{"uuid", global_id_to_signed_storage(node.global_id)},
+                        {"remote_type", db_context_.schema->node_type(node.type).name},
+                        {"properties", std::move(properties)}};
         }
 
-        static json edge_to_write_row(const Edge &edge) {
-            return json{{"uuid", boost::uuids::to_string(edge.global_id)},
+        [[nodiscard]] json replica_edge_to_write_row(const Edge &edge) const {
+            json properties = edge.properties;
+            properties.erase("uuid");
+            return json{{"uuid", global_id_to_signed_storage(edge.global_id)},
                         {"type", edge.type},
-                        {"src", boost::uuids::to_string(edge.src)},
-                        {"dst", boost::uuids::to_string(edge.dst)},
-                        {"properties", edge.properties}};
+                        {"src", endpoint_storage_id(edge.src)},
+                        {"dst", endpoint_storage_id(edge.dst)},
+                        {"src_proxy", home_backend(edge.src) != NEO4J},
+                        {"dst_proxy", home_backend(edge.dst) != NEO4J},
+                        {"properties", std::move(properties)}};
         }
 
         void execute_write(const std::string &query, const json &parameters) const {
@@ -1244,12 +1224,13 @@ namespace cpgdb {
             }
         }
 
-        [[nodiscard]] std::size_t send_minimal_req_into_rows(
-                const std::string &query, const json &parameters, std::vector<MinimalAdjacencyRow> &rows,
-                const std::unordered_map<GlobalId, std::size_t, boost::hash<GlobalId>> &row_by_source,
-                const ExpandSpec &spec, const std::string &source_label, const std::size_t group_size,
-                Neo4JBoltClient *bolt_client) const {
-            std::unordered_map<GlobalId, std::unordered_set<GlobalId, boost::hash<GlobalId>>, boost::hash<GlobalId>>
+        [[nodiscard]] std::size_t
+        send_minimal_req_into_rows(const std::string &query, const json &parameters,
+                                   std::vector<MinimalAdjacencyRow> &rows,
+                                   const std::unordered_map<GlobalId, std::size_t, std::hash<GlobalId>> &row_by_source,
+                                   const ExpandSpec &spec, const std::string &source_label,
+                                   const std::size_t group_size, Neo4JBoltClient *bolt_client) const {
+            std::unordered_map<GlobalId, std::unordered_set<GlobalId, std::hash<GlobalId>>, std::hash<GlobalId>>
                     seen_by_source;
 
             if (use_bolt_) {
@@ -1325,8 +1306,9 @@ namespace cpgdb {
 
                 if (event == json::parse_event_t::array_end) {
                     const bool looks_like_minimal_row =
-                            parsed.is_array() && parsed.size() >= 7 && parsed[0].is_string() && parsed[1].is_string() &&
-                            (parsed[2].is_null() || parsed[2].is_string()) &&
+                            parsed.is_array() && parsed.size() >= 7 && parsed[0].is_number_integer() &&
+                            parsed[1].is_number_integer() &&
+                            (parsed[2].is_null() || parsed[2].is_number_integer() || parsed[2].is_string()) &&
                             (parsed[3].is_boolean() || parsed[3].is_null()) &&
                             (parsed[4].is_string() || parsed[4].is_null()) &&
                             (parsed[5].is_string() || parsed[5].is_null()) && parsed[6].is_array();
@@ -1520,10 +1502,11 @@ namespace cpgdb {
         return impl_->get_neighbors_batch_fast(frontier, spec, depth);
     }
 
-    std::vector<MinimalAdjacencyRow>
-    Neo4JQueryVisitor::get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier, const ExpandSpec &spec,
-                                                        int depth, std::size_t batch_size) const {
-        return impl_->get_minimal_neighbors_batch_fast(frontier, spec, depth, batch_size);
+    std::vector<MinimalAdjacencyRow> Neo4JQueryVisitor::get_minimal_neighbors_batch_fast(
+            std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth, std::size_t batch_size,
+            std::size_t max_concurrent_requests, std::size_t request_retries, std::size_t retry_delay_ms) const {
+        return impl_->get_minimal_neighbors_batch_fast(frontier, spec, depth, batch_size, max_concurrent_requests,
+                                                       request_retries, retry_delay_ms);
     }
 
 } // namespace cpgdb

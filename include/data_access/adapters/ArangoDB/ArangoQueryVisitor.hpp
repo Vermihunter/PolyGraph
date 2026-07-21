@@ -35,7 +35,10 @@ class ArangoQueryVisitor final : public QueryVisitor {
         std::span<const NodeRef> frontier,
         const ExpandSpec& spec,
         int depth,
-        std::size_t batch_size) const;
+        std::size_t batch_size,
+        std::size_t max_concurrent_requests,
+        std::size_t request_retries,
+        std::size_t retry_delay_ms) const;
 
   private:
     struct Impl;

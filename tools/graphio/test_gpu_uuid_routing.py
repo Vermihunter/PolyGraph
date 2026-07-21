@@ -9,10 +9,20 @@ from pathlib import Path
 
 from tools.graphio.domain import (
     generate_sample_graph,
+    load_domain_manifest,
     materialize_graph_jsonl,
+    record_native_id_resolution,
     write_backend_config_for_sources,
+    write_domain_manifest,
 )
-from tools.graphio.id_codec import BackendLayout, deterministic_routed_entity_uuid
+from tools.graphio.id_codec import (
+    BackendLayout,
+    deterministic_routed_entity_uuid,
+    parse_global_id,
+    read_native_node_id_map,
+    to_signed_storage,
+    write_native_id_map,
+)
 from tools.graphio.reader import open_graph_reader
 
 
@@ -23,12 +33,53 @@ class GpuUuidRoutingTests(unittest.TestCase):
         self.assertEqual(BackendLayout(("Neo4J", "ArangoDB", "GPU")).bit_count, 2)
         self.assertEqual(BackendLayout(("Neo4J", "ArangoDB", "Memgraph", "GPU")).bit_count, 2)
 
+
+    def test_metadata_declares_uint64_msb_layout(self) -> None:
+        layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
+        self.assertEqual(
+            layout.metadata(),
+            {
+                "idRouting": ["Neo4J", "ArangoDB", "GPU"],
+                "idRoutingBits": 2,
+                "idRoutingPosition": "msb",
+                "idType": "uint64",
+            },
+        )
+
+    def test_signed_database_storage_round_trip_preserves_all_bits(self) -> None:
+        value = 0xE123_4567_89AB_CDEF
+        stored = to_signed_storage(value)
+        self.assertLess(stored, 0)
+        self.assertEqual(parse_global_id(stored), value)
+        self.assertEqual(parse_global_id(str(stored)), value)
+
+    def test_native_id_sidecar_streams_node_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "native-id-map.jsonl"
+            write_native_id_map(
+                path,
+                node_mapping={10: 1000, 11: 1001},
+                relationship_mapping={20: 2000},
+            )
+            self.assertEqual(read_native_node_id_map(path), {10: 1000, 11: 1001})
+            records = [json.loads(line) for line in path.read_text().splitlines()]
+        self.assertEqual(records[0]["format"], "cpgdb.native-id-map")
+        self.assertEqual(records[-1]["record"], "relationship")
+
     def test_three_backend_codes_are_00_01_10(self) -> None:
         layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
-        base = "71ee8ed4-5f45-5dbf-b89d-56ce573bf19c"
-        self.assertEqual(layout.decode_code(layout.encode(uuid.UUID(base), "Neo4J")), 0)
-        self.assertEqual(layout.decode_code(layout.encode(uuid.UUID(base), "ArangoDB")), 1)
-        self.assertEqual(layout.decode_code(layout.encode(uuid.UUID(base), "GPU")), 2)
+        base = 0x38_9D_56_CE_57_3B_F1_9C
+        neo = layout.encode(base, "Neo4J")
+        arango = layout.encode(base, "ArangoDB")
+        gpu = layout.encode(base, "GPU")
+        self.assertEqual(layout.decode_code(neo), 0)
+        self.assertEqual(layout.decode_code(arango), 1)
+        self.assertEqual(layout.decode_code(gpu), 2)
+        self.assertEqual(layout.local_id(neo), layout.local_id(arango))
+        self.assertEqual(layout.local_id(arango), layout.local_id(gpu))
+        self.assertEqual(neo >> layout.payload_bits, 0)
+        self.assertEqual(arango >> layout.payload_bits, 1)
+        self.assertEqual(gpu >> layout.payload_bits, 2)
 
     def test_three_backend_generator_never_emits_unused_code(self) -> None:
         layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
@@ -41,6 +92,37 @@ class GpuUuidRoutingTests(unittest.TestCase):
             self.assertLess(layout.decode_code(value), 3)
             counts[source] += 1
         self.assertEqual(set(counts), {"Neo4J", "ArangoDB", "GPU"})
+
+
+    def test_domain_manifest_tracks_source_resolved_graph_and_start_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("schema.json", "graph.jsonl", "backends.json", "resolved.jsonl"):
+                (root / name).write_text("{}\n", encoding="utf-8")
+            manifest = write_domain_manifest(
+                root / "domain.json",
+                domain_id="test",
+                name="test",
+                description="",
+                schema=root / "schema.json",
+                data=root / "graph.jsonl",
+                backends=root / "backends.json",
+                start_uuid="10",
+            )
+            mapping_path = root / "native-id-map.jsonl"
+            write_native_id_map(mapping_path, node_mapping={10: 100}, relationship_mapping={})
+            resolved = record_native_id_resolution(
+                load_domain_manifest(manifest),
+                resolved_graph=root / "resolved.jsonl",
+                native_id_map=mapping_path,
+            )
+            raw = json.loads(manifest.read_text(encoding="utf-8"))
+
+        self.assertEqual(resolved.start_uuid, "100")
+        self.assertEqual(resolved.paths.data.name, "resolved.jsonl")
+        self.assertEqual(resolved.paths.source_data.name, "graph.jsonl")
+        self.assertEqual(resolved.paths.native_id_map.name, "native-id-map.jsonl")
+        self.assertEqual(raw["defaults"]["bfs"]["sourceStartUuid"], "10")
 
     def test_schema_type_placement_is_default(self) -> None:
         schema = {
@@ -71,16 +153,16 @@ class GpuUuidRoutingTests(unittest.TestCase):
 
             reader = open_graph_reader(graph_path)
             metadata = reader.metadata()
-            self.assertEqual(metadata["uuidRoutingStrategy"], "schema-type-placement-v1")
-            self.assertEqual(metadata["uuidRouting"], ["Neo4J", "ArangoDB", "GPU"])
-            self.assertEqual(metadata["uuidRoutingBits"], 2)
+            self.assertEqual(metadata["idRoutingStrategy"], "schema-type-placement-v1")
+            self.assertEqual(metadata["idRouting"], ["Neo4J", "ArangoDB", "GPU"])
+            self.assertEqual(metadata["idRoutingBits"], 2)
 
             expected_node_sources = {
                 "University": "Neo4J",
                 "Student": "ArangoDB",
                 "Course": "GPU",
             }
-            layout = BackendLayout(tuple(metadata["uuidRouting"]))
+            layout = BackendLayout(tuple(metadata["idRouting"]))
             for node in reader.iter_nodes():
                 self.assertEqual(node.source, expected_node_sources[node.type])
                 self.assertEqual(layout.decode_source(node.uuid), node.source)
@@ -128,16 +210,16 @@ class GpuUuidRoutingTests(unittest.TestCase):
 
             reader = open_graph_reader(graph_path)
             metadata = reader.metadata()
-            self.assertEqual(metadata["uuidRoutingBits"], 2)
-            self.assertEqual(metadata["uuidRouting"], ["Neo4J", "ArangoDB", "GPU"])
-            self.assertEqual(metadata["uuidRoutingStrategy"], "identity-hash-v1")
+            self.assertEqual(metadata["idRoutingBits"], 2)
+            self.assertEqual(metadata["idRouting"], ["Neo4J", "ArangoDB", "GPU"])
+            self.assertEqual(metadata["idRoutingStrategy"], "identity-hash-v1")
 
-            layout = BackendLayout(tuple(metadata["uuidRouting"]))
+            layout = BackendLayout(tuple(metadata["idRouting"]))
             node_sources = {layout.decode_source(node.uuid) for node in reader.iter_nodes()}
             self.assertEqual(node_sources, {"Neo4J", "ArangoDB", "GPU"})
 
             backend_config = json.loads(backend_path.read_text(encoding="utf-8"))
-            self.assertEqual(backend_config["uuidRouting"], metadata["uuidRouting"])
+            self.assertEqual(backend_config["idRouting"], metadata["idRouting"])
             enabled = {
                 entry["id"]
                 for entry in backend_config["backends"]
@@ -148,7 +230,7 @@ class GpuUuidRoutingTests(unittest.TestCase):
     def test_legacy_input_is_migrated_with_schema_placement(self) -> None:
         schema = {
             "domain": "legacy-migration-test",
-            "uuidRouting": ["Neo4J", "ArangoDB", "GPU"],
+            "idRouting": ["Neo4J", "ArangoDB", "GPU"],
             "nodeTypes": [
                 {"name": "University", "source": "Neo4J", "properties": []},
                 {"name": "Student", "source": "ArangoDB", "properties": []},
@@ -207,8 +289,8 @@ class GpuUuidRoutingTests(unittest.TestCase):
 
             reader = open_graph_reader(output_path)
             metadata = reader.metadata()
-            self.assertEqual(metadata["uuidRoutingStrategy"], "schema-type-placement-v1")
-            layout = BackendLayout(tuple(metadata["uuidRouting"]))
+            self.assertEqual(metadata["idRoutingStrategy"], "schema-type-placement-v1")
+            layout = BackendLayout(tuple(metadata["idRouting"]))
             nodes = list(reader.iter_nodes())
             self.assertEqual(
                 {node.type: node.source for node in nodes},
@@ -226,7 +308,7 @@ class GpuUuidRoutingTests(unittest.TestCase):
     def test_legacy_input_can_be_migrated_with_identity_hash(self) -> None:
         schema = {
             "domain": "legacy-hash-test",
-            "uuidRouting": ["Neo4J", "ArangoDB", "GPU"],
+            "idRouting": ["Neo4J", "ArangoDB", "GPU"],
             "nodeTypes": [
                 {"name": "University", "source": "Neo4J", "properties": []}
             ],
@@ -262,8 +344,8 @@ class GpuUuidRoutingTests(unittest.TestCase):
 
             reader = open_graph_reader(output_path)
             metadata = reader.metadata()
-            self.assertEqual(metadata["uuidRoutingStrategy"], "identity-hash-v1")
-            layout = BackendLayout(tuple(metadata["uuidRouting"]))
+            self.assertEqual(metadata["idRoutingStrategy"], "identity-hash-v1")
+            layout = BackendLayout(tuple(metadata["idRouting"]))
             nodes = list(reader.iter_nodes())
             self.assertEqual({node.source for node in nodes}, {"Neo4J", "ArangoDB", "GPU"})
             self.assertTrue(all(layout.decode_source(node.uuid) == node.source for node in nodes))

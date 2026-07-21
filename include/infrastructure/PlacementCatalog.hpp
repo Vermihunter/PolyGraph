@@ -20,12 +20,12 @@
 namespace cpgdb {
 
 /**
- * @brief Runtime store selection for native and UUID-routed distributed traversal.
+ * @brief Runtime store selection for native and ID-routed distributed traversal.
  *
  * Complete native BFS pushdown still uses backend capabilities/coverage. Normal
- * layer expansion decodes each frontier UUID using the configured routing layout.
- * The catalog deliberately does not keep a UUID-to-type/backend directory: the
- * backend is encoded in the UUID, while logical type resolution is delegated to
+ * layer expansion decodes each frontier global ID using the configured routing layout.
+ * The catalog deliberately does not keep an ID-to-type/backend directory: the
+ * backend is encoded in the ID MSBs, while logical type resolution is delegated to
  * the owning store when a type is actually needed.
  */
 class PlacementCatalog {
@@ -39,12 +39,12 @@ class PlacementCatalog {
     /** @brief Creates a catalog backed by @p backend_registry. */
     explicit PlacementCatalog(std::shared_ptr<BackendRegistry> backend_registry);
 
-    /** @brief Sets the ordered backend layout encoded in UUID suffix bits. */
-    void set_uuid_routing_backends(std::vector<BackendId> routing_backends);
+    /** @brief Sets the ordered backend layout encoded in ID routing MSBs. */
+    void set_id_routing_backends(std::vector<BackendId> routing_backends);
     /**
-     * @brief Creates a routing reference for @p id without a global UUID directory.
+     * @brief Creates a routing reference for @p id without a global ID directory.
      *
-     * The returned logical type is unresolved. The UUID suffix is decoded and
+     * The returned logical type is unresolved. The ID routing MSBs are decoded and
      * validated immediately, so an invalid/disabled backend still fails fast.
      */
     [[nodiscard]] NodeRef node_ref(const GlobalId& id) const;
@@ -61,7 +61,7 @@ class PlacementCatalog {
         const NodeRef& source, const ExpandSpec& spec, const BfsOptions& options) const;
 
     /**
-     * @brief Assigns every frontier vertex to the home store encoded in its UUID.
+     * @brief Assigns every frontier vertex to the home store encoded in its global ID.
      */
     [[nodiscard]] LayerExpansionPlan plan_frontier_expansion(std::span<const NodeRef> frontier,
                                                              const ExpandSpec& spec,
@@ -73,7 +73,7 @@ class PlacementCatalog {
         const NodeRef& vertex, const ExpandSpec& spec, const BfsOptions& options) const;
 
     std::shared_ptr<BackendRegistry> backend_registry_;
-    std::vector<BackendId> uuid_routing_backends_;
+    std::vector<BackendId> id_routing_backends_;
     std::vector<Placement> placements_;
 };
 

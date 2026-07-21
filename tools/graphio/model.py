@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .id_codec import parse_global_id
+
 
 @dataclass(frozen=True)
 class NodeRecord:
-    uuid: str
+    uuid: int
     type: str
     source: str
     properties: dict[str, Any]
@@ -14,7 +16,7 @@ class NodeRecord:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "NodeRecord":
         return cls(
-            uuid=str(value["uuid"]),
+            uuid=parse_global_id(value["uuid"]),
             type=str(value["type"]),
             source=str(value.get("source", "")),
             properties=dict(value.get("properties", {})),
@@ -31,21 +33,21 @@ class NodeRecord:
 
 @dataclass(frozen=True)
 class RelationshipRecord:
-    uuid: str
+    uuid: int
     type: str
     source: str
-    from_uuid: str
-    to_uuid: str
+    from_uuid: int
+    to_uuid: int
     properties: dict[str, Any]
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "RelationshipRecord":
         return cls(
-            uuid=str(value["uuid"]),
+            uuid=parse_global_id(value["uuid"]),
             type=str(value["type"]),
             source=str(value.get("source", "")),
-            from_uuid=str(value["from"]),
-            to_uuid=str(value["to"]),
+            from_uuid=parse_global_id(value["from"]),
+            to_uuid=parse_global_id(value["to"]),
             properties=dict(value.get("properties", {})),
         )
 
@@ -66,5 +68,5 @@ class GraphRecords:
     relationships: list[RelationshipRecord]
 
     @property
-    def node_index(self) -> dict[str, NodeRecord]:
+    def node_index(self) -> dict[int, NodeRecord]:
         return {node.uuid: node for node in self.nodes}

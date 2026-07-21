@@ -33,7 +33,7 @@ namespace cpgdb::insertion {
         }
 
         if (decision.encode_home_backend_in_uuid && !decision.home_backend.has_value()) {
-            throw std::runtime_error("UUID ownership encoding requires a home backend");
+            throw std::runtime_error("ID ownership encoding requires a home backend");
         }
     }
 

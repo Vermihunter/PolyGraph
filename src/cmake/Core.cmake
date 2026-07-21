@@ -38,7 +38,7 @@ set(CPGDB_CORE_SOURCES
 add_library(cpgdb_core STATIC ${CPGDB_CORE_SOURCES})
 add_library(cpgdb::core ALIAS cpgdb_core)
 
-target_link_libraries(cpgdb_core PUBLIC cpgdb::model cpgdb::boost spdlog::spdlog)
+target_link_libraries(cpgdb_core PUBLIC cpgdb::model spdlog::spdlog)
 if(CPGDB_ENABLE_GPU)
     target_link_libraries(cpgdb_core PUBLIC cpgdb::gpu_dependencies)
 endif()

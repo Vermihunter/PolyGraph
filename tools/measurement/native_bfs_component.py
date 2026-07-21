@@ -6,7 +6,7 @@ This script is intentionally separate from the federated graph_db executor.
 It replicates the entire JSON graph into each backend and then runs the
 strongest backend-local BFS path:
 
-  - Neo4j: APOC path expander over the whole replicated graph through HTTP.
+  - Neo4j: a named in-memory GDS projection and gds.bfs.stream through HTTP.
   - ArangoDB: AQL named-graph traversal with order: "bfs".
   - GPU: calls the native_gpu_bfs C++ executable, which builds a full cuGraph
     projection and calls cugraph::bfs.
@@ -25,7 +25,7 @@ Example:
   python3 tools/native_bfs/native_bfs_component.py run-all \
       --schema storage_layer/sample-university-domain.graph-shape.json \
       --data tools/generators/large-university.json \
-      --start-uuid 11a96cb7-c043-4aa7-aa35-2297e9be7f06 \
+      --start-uuid 123456789 \
       --max-depth 7 \
       --output-dir native_bfs_results \
       --metrics-json native_bfs_results/metrics.json \
@@ -43,13 +43,19 @@ import shlex
 import subprocess
 import sys
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, DefaultDict, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import requests
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.graphio.id_codec import parse_global_id, to_signed_storage
 
 
 PROXY_NODE_TYPE = "Proxy"
@@ -224,7 +230,7 @@ def load_json(path: str | Path) -> Dict[str, Any]:
 
 @dataclass(frozen=True)
 class NodeRecord:
-    uuid: str
+    uuid: int
     type: str
     source: str
     properties: Dict[str, Any]
@@ -232,11 +238,11 @@ class NodeRecord:
 
 @dataclass(frozen=True)
 class RelationshipRecord:
-    uuid: str
+    uuid: int
     type: str
     source: str
-    from_uuid: str
-    to_uuid: str
+    from_uuid: int
+    to_uuid: int
     properties: Dict[str, Any]
 
 
@@ -244,7 +250,7 @@ def parse_data(data_path: str | Path) -> Tuple[List[NodeRecord], List[Relationsh
     raw = load_json(data_path)
     nodes = [
         NodeRecord(
-            uuid=n["uuid"],
+            uuid=parse_global_id(n["uuid"]),
             type=n["type"],
             source=n.get("source", ""),
             properties=n.get("properties", {}),
@@ -253,11 +259,11 @@ def parse_data(data_path: str | Path) -> Tuple[List[NodeRecord], List[Relationsh
     ]
     rels = [
         RelationshipRecord(
-            uuid=r["uuid"],
+            uuid=parse_global_id(r["uuid"]),
             type=r["type"],
             source=r.get("source", ""),
-            from_uuid=r["from"],
-            to_uuid=r["to"],
+            from_uuid=parse_global_id(r["from"]),
+            to_uuid=parse_global_id(r["to"]),
             properties=r.get("properties", {}),
         )
         for r in raw.get("relationships", [])
@@ -270,18 +276,19 @@ def relationship_types_from_schema(schema_path: str | Path) -> List[str]:
     return [sanitize_name(r["name"]) for r in schema.get("relations", [])]
 
 
-def node_type_by_uuid(nodes: Sequence[NodeRecord]) -> Dict[str, str]:
+def node_type_by_uuid(nodes: Sequence[NodeRecord]) -> Dict[int, str]:
     return {n.uuid: n.type for n in nodes}
 
 
 def arango_doc_id_for_uuid(nodes: Sequence[NodeRecord], uuid: str) -> str:
+    global_id = parse_global_id(uuid)
     by_uuid = node_type_by_uuid(nodes)
-    if uuid not in by_uuid:
-        raise ValueError(f"Start uuid not found in JSON nodes: {uuid}")
-    return f"{sanitize_name(by_uuid[uuid])}/{uuid}"
+    if global_id not in by_uuid:
+        raise ValueError(f"Start ID not found in JSON nodes: {uuid}")
+    return f"{sanitize_name(by_uuid[global_id])}/{global_id}"
 
 
-def write_csv(path: str | Path, rows: Iterable[Tuple[str, int]], perf: Optional[PerfRecorder] = None) -> None:
+def write_csv(path: str | Path, rows: Iterable[Tuple[int | str, int]], perf: Optional[PerfRecorder] = None) -> None:
     cm = perf.measure("write CSV", backend="local", phase="output", output=str(path)) if perf else nullcontext()
     with cm:
         with open(path, "w", newline="", encoding="utf-8") as f:
@@ -316,6 +323,10 @@ class Neo4jNativeComponent:
         self.batch_size = batch_size
         self.perf = perf or PerfRecorder()
         self.session = requests.Session()
+        self._nodes: List[NodeRecord] = []
+        self._rels: List[RelationshipRecord] = []
+        self._native_by_global: Dict[int, int] = {}
+        self._global_by_native: Dict[int, int] = {}
         if username:
             self.session.auth = (username, password)
         self.session.headers.update({"Content-Type": "application/json"})
@@ -361,41 +372,81 @@ class Neo4jNativeComponent:
             raise RuntimeError(
                 f"Neo4j returned errors: {json.dumps(payload['errors'], indent=2)}"
             )
-
         return payload
 
-    def reset(self) -> None:
+    def _drop_gds_projection(self) -> None:
         self.tx(
-            [{"statement": "MATCH (n) DETACH DELETE n"}],
-            metric_name="Neo4j reset database",
+            [{
+                "statement": "CALL gds.graph.drop($graphName, false) YIELD graphName RETURN graphName",
+                "parameters": {"graphName": GRAPH_NAME},
+            }],
+            metric_name="Neo4j drop GDS projection",
             phase="reset",
         )
 
-    def initialize_constraints(self) -> None:
+    def reset(self) -> None:
+        self._drop_gds_projection()
+        self._nodes.clear()
+        self._rels.clear()
+        self._native_by_global.clear()
+        self._global_by_native.clear()
+
+        delete_batch_size = max(100, min(self.batch_size, 1000))
+        while True:
+            payload = self.tx(
+                [{
+                    "statement": (
+                        f"MATCH (n:{entity_label()}) WITH n LIMIT $limit "
+                        "DETACH DELETE n RETURN count(*) AS deleted"
+                    ),
+                    "parameters": {"limit": delete_batch_size},
+                }],
+                metric_name="Neo4j reset database batch",
+                phase="reset",
+            )
+            rows = payload["results"][0]["data"]
+            deleted = int(rows[0]["row"][0]) if rows else 0
+            if deleted == 0:
+                break
+
+    def _project_gds_graph(self, relationship_types: Iterable[str]) -> None:
+        relationship_projection = {
+            relationship_type: {
+                "type": relationship_type,
+                "orientation": "UNDIRECTED",
+            }
+            for relationship_type in sorted(set(relationship_types))
+        }
         self.tx(
             [{
-                "statement": f"""
-                CREATE CONSTRAINT graphnode_uuid_unique IF NOT EXISTS
-                FOR (n:{entity_label()})
-                REQUIRE n.uuid IS UNIQUE
-                """
+                "statement": (
+                    "CALL gds.graph.project($graphName, $nodeLabel, $relationshipProjection) "
+                    "YIELD graphName, nodeCount, relationshipCount "
+                    "RETURN graphName, nodeCount, relationshipCount"
+                ),
+                "parameters": {
+                    "graphName": GRAPH_NAME,
+                    "nodeLabel": GRAPH_NODE_LABEL,
+                    "relationshipProjection": relationship_projection,
+                },
             }],
-            metric_name="Neo4j create graph-node UUID constraint",
-            phase="schema",
+            metric_name="Neo4j create GDS projection",
+            phase="projection",
         )
 
     def load_all(self, nodes: Sequence[NodeRecord], rels: Sequence[RelationshipRecord]) -> None:
         with self.perf.measure("Neo4j total load", backend="neo4j", phase="load", count=len(nodes) + len(rels)):
             self.reset()
+            self._nodes = list(nodes)
+            self._rels = list(rels)
 
             nodes_by_type: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
             with self.perf.measure("Neo4j prepare node batches", backend="neo4j", phase="prepare", count=len(nodes)):
                 for node in nodes:
                     props = dict(node.properties)
-                    props["uuid"] = node.uuid
-                    props["type"] = node.type
-                    props["source"] = node.source
-                    nodes_by_type[node.type].append({"props": props})
+                    props.pop("uuid", None)
+                    props.update({"type": node.type, "source": node.source})
+                    nodes_by_type[node.type].append({"input_id": str(node.uuid), "props": props})
 
             for node_type, rows in sorted(nodes_by_type.items()):
                 label = cypher_ident(node_type)
@@ -403,10 +454,10 @@ class Neo4jNativeComponent:
                 UNWIND $rows AS row
                 CREATE (n:{entity_label()}:{label})
                 SET n = row.props
+                RETURN row.input_id AS input_id, id(n) AS native_id
                 """
-
                 for batch_index, batch in enumerate(chunks(rows, self.batch_size)):
-                    self.tx(
+                    payload = self.tx(
                         [{"statement": statement, "parameters": {"rows": list(batch)}}],
                         metric_name="Neo4j create node batch",
                         phase="load_nodes",
@@ -414,22 +465,25 @@ class Neo4jNativeComponent:
                         node_type=node_type,
                         batch_index=batch_index,
                     )
+                    for result in payload["results"][0]["data"]:
+                        input_id, native_id = result["row"]
+                        global_id = parse_global_id(input_id)
+                        native = int(native_id)
+                        self._native_by_global[global_id] = native
+                        self._global_by_native[native] = global_id
 
-            # Build the global UUID lookup after node creation. This avoids index
-            # maintenance during the initial node inserts while still making the
-            # relationship MATCH lookups fast.
-            self.initialize_constraints()
+            if len(self._native_by_global) != len(nodes):
+                raise RuntimeError("Neo4j did not return one native ID for every loaded node")
 
             rels_by_type: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
             with self.perf.measure("Neo4j prepare relationship batches", backend="neo4j", phase="prepare", count=len(rels)):
                 for rel in rels:
                     props = dict(rel.properties)
-                    props["uuid"] = rel.uuid
-                    props["type"] = rel.type
-                    props["source"] = rel.source
+                    props.pop("uuid", None)
+                    props.update({"type": rel.type, "source": rel.source})
                     rels_by_type[rel.type].append({
-                        "from_uuid": rel.from_uuid,
-                        "to_uuid": rel.to_uuid,
+                        "from_native": self._native_by_global[rel.from_uuid],
+                        "to_native": self._native_by_global[rel.to_uuid],
                         "props": props,
                     })
 
@@ -437,12 +491,11 @@ class Neo4jNativeComponent:
                 rtype = cypher_ident(rel_type)
                 statement = f"""
                 UNWIND $rows AS row
-                MATCH (a:{entity_label()} {{uuid: row.from_uuid}})
-                MATCH (b:{entity_label()} {{uuid: row.to_uuid}})
+                MATCH (a:{entity_label()}) WHERE id(a) = row.from_native
+                MATCH (b:{entity_label()}) WHERE id(b) = row.to_native
                 CREATE (a)-[r:{rtype}]->(b)
                 SET r = row.props
                 """
-
                 for batch_index, batch in enumerate(chunks(rows, self.batch_size)):
                     self.tx(
                         [{"statement": statement, "parameters": {"rows": list(batch)}}],
@@ -453,73 +506,91 @@ class Neo4jNativeComponent:
                         batch_index=batch_index,
                     )
 
-    def bfs(self, start_uuid: str, relationship_filter: str, max_depth: int, output: str | Path) -> None:
-        with self.perf.measure("Neo4j total BFS command", backend="neo4j", phase="bfs"):
-            # Look for an algorithm for BFS
-            statement = f"""
-            MATCH (start:{entity_label()} {{uuid: $startUuid}})
-            CALL apoc.path.expandConfig(start, {{
-              minLevel: 0,
-              maxLevel: $maxDepth,
-              relationshipFilter: $relationshipFilter,
-              bfs: true,
-              uniqueness: 'NODE_GLOBAL'
-            }}) YIELD path
-            WITH last(nodes(path)) AS node, length(path) AS distance
-            RETURN node.uuid AS vertex_id, distance AS distance
-            """
+            self._project_gds_graph(rels_by_type)
 
+    def _reference_distances(self, start_id: int, max_depth: int, allowed_types: set[str]) -> Dict[int, int]:
+        adjacency: DefaultDict[int, List[int]] = defaultdict(list)
+        for rel in self._rels:
+            if allowed_types and rel.type not in allowed_types:
+                continue
+            adjacency[rel.from_uuid].append(rel.to_uuid)
+            adjacency[rel.to_uuid].append(rel.from_uuid)
+
+        distances = {start_id: 0}
+        queue = deque([start_id])
+        while queue:
+            source = queue.popleft()
+            if distances[source] >= max_depth:
+                continue
+            for neighbor in adjacency.get(source, []):
+                if neighbor in distances:
+                    continue
+                distances[neighbor] = distances[source] + 1
+                queue.append(neighbor)
+        return distances
+
+    def bfs(self, start_uuid: str, relationship_filter: str, max_depth: int, output: str | Path) -> None:
+        if not self._native_by_global:
+            raise RuntimeError(
+                "Neo4j native-ID BFS needs the in-memory input/native mapping. Run load_all and bfs "
+                "in the same process (the run-all command does this)."
+            )
+        start_id = parse_global_id(start_uuid)
+        source_native = self._native_by_global[start_id]
+        relationship_types = {value for value in relationship_filter.split("|") if value}
+        configuration: Dict[str, Any] = {
+            "sourceNode": source_native,
+            "maxDepth": max_depth,
+            "logProgress": False,
+        }
+        if relationship_types:
+            configuration["relationshipTypes"] = sorted(relationship_types)
+
+        with self.perf.measure("Neo4j total BFS command", backend="neo4j", phase="bfs"):
             payload = self.tx(
                 [{
-                    "statement": statement,
-                    "parameters": {
-                        "startUuid": start_uuid,
-                        "maxDepth": max_depth,
-                        "relationshipFilter": relationship_filter,
-                    },
+                    "statement": (
+                        "CALL gds.bfs.stream($graphName, $configuration) "
+                        "YIELD sourceNode, nodeIds RETURN sourceNode, nodeIds"
+                    ),
+                    "parameters": {"graphName": GRAPH_NAME, "configuration": configuration},
                 }],
-                metric_name="Neo4j native APOC BFS HTTP query",
+                metric_name="Neo4j native GDS BFS HTTP query",
                 phase="bfs_query",
             )
-
-            with self.perf.measure("Neo4j convert BFS rows", backend="neo4j", phase="bfs_result"):
-                rows = payload["results"][0]["data"]
-                result = [(row["row"][0], row["row"][1]) for row in rows]
-
-            with self.perf.measure("Neo4j sort BFS result", backend="neo4j", phase="bfs_result", count=len(result)):
-                result.sort(key=lambda x: (x[1], x[0]))
-
-            write_csv(output, result, perf=self.perf)
+            row = payload["results"][0]["data"][0]["row"]
+            if int(row[0]) != source_native or not isinstance(row[1], list):
+                raise RuntimeError(f"Unexpected gds.bfs.stream output: {row}")
+            visited = {self._global_by_native[int(native_id)] for native_id in row[1]}
+            distances = self._reference_distances(start_id, max_depth, relationship_types)
+            if visited != set(distances):
+                raise RuntimeError("gds.bfs.stream result does not match the reference BFS visited set")
+            write_csv(output, sorted(distances.items(), key=lambda item: (item[1], item[0])), perf=self.perf)
 
     @staticmethod
     def curl_command(
-            start_uuid: str,
+            source_native_id: int,
             relationship_filter: str,
             max_depth: int,
             endpoint: str = NEO4J_TX_ENDPOINT,
             username: str = "neo4j",
             password: str = "password",
     ) -> str:
-        statement = f"""
-MATCH (start:{entity_label()} {{uuid: $startUuid}})
-CALL apoc.path.expandConfig(start, {{
-  minLevel: 0,
-  maxLevel: $maxDepth,
-  relationshipFilter: $relationshipFilter,
-  bfs: true,
-  uniqueness: 'NODE_GLOBAL'
-}}) YIELD path
-WITH last(nodes(path)) AS node, length(path) AS distance
-RETURN node.uuid AS vertex_id, distance AS distance
-""".strip()
+        configuration: Dict[str, Any] = {
+            "sourceNode": int(source_native_id),
+            "maxDepth": int(max_depth),
+            "logProgress": False,
+        }
+        relationship_types = sorted(value for value in relationship_filter.split("|") if value)
+        if relationship_types:
+            configuration["relationshipTypes"] = relationship_types
         payload = {
             "statements": [{
-                "statement": statement,
-                "parameters": {
-                    "startUuid": start_uuid,
-                    "maxDepth": max_depth,
-                    "relationshipFilter": relationship_filter,
-                },
+                "statement": (
+                    "CALL gds.bfs.stream($graphName, $configuration) "
+                    "YIELD sourceNode, nodeIds, path RETURN sourceNode, nodeIds, path"
+                ),
+                "parameters": {"graphName": GRAPH_NAME, "configuration": configuration},
             }]
         }
         json_payload = shlex.quote(json.dumps(payload))
@@ -624,6 +695,25 @@ class ArangoNativeComponent:
         if resp.status_code not in (200, 201, 409):
             raise RuntimeError(f"Create Arango collection {name} failed: HTTP {resp.status_code}: {resp.text}")
 
+    def ensure_uuid_index(self, name: str) -> None:
+        collection = sanitize_name(name)
+        resp = self.request(
+            "POST",
+            self.db_api(f"/_api/index?collection={collection}"),
+            metric_name="Arango ensure UUID index",
+            phase="schema",
+            json={
+                "type": "persistent",
+                "fields": ["uuid"],
+                "unique": True,
+                "sparse": False,
+                "name": sanitize_name(f"{collection}_uuid_unique"),
+            },
+            timeout=120,
+        )
+        if resp.status_code not in (200, 201, 409):
+            raise RuntimeError(f"Create Arango UUID index {name} failed: HTTP {resp.status_code}: {resp.text}")
+
     def load_all(self, nodes: Sequence[NodeRecord], rels: Sequence[RelationshipRecord]) -> None:
         with self.perf.measure("Arango total load", backend="arango", phase="load", count=len(nodes) + len(rels)):
             self.reset_database()
@@ -632,14 +722,16 @@ class ArangoNativeComponent:
 
             for collection in vertex_collections:
                 self.ensure_collection(collection, edge=False)
+                self.ensure_uuid_index(collection)
             for collection in edge_collections:
                 self.ensure_collection(collection, edge=True)
+                self.ensure_uuid_index(collection)
 
             nodes_by_type: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
             with self.perf.measure("Arango prepare node documents", backend="arango", phase="prepare", count=len(nodes)):
                 for node in nodes:
                     doc = dict(node.properties)
-                    doc.update({"_key": node.uuid, "uuid": node.uuid, "type": node.type, "source": node.source})
+                    doc.update({"_key": str(node.uuid), "uuid": to_signed_storage(node.uuid), "type": node.type, "source": node.source})
                     nodes_by_type[node.type].append(doc)
 
             for node_type, docs in sorted(nodes_by_type.items()):
@@ -665,10 +757,10 @@ class ArangoNativeComponent:
                     to_type = type_by_uuid[rel.to_uuid]
                     doc = dict(rel.properties)
                     doc.update({
-                        "_key": rel.uuid,
+                        "_key": str(rel.uuid),
                         "_from": f"{sanitize_name(from_type)}/{rel.from_uuid}",
                         "_to": f"{sanitize_name(to_type)}/{rel.to_uuid}",
-                        "uuid": rel.uuid,
+                        "uuid": to_signed_storage(rel.uuid),
                         "type": rel.type,
                         "source": rel.source,
                     })
@@ -833,8 +925,11 @@ def cmd_load(args: argparse.Namespace) -> None:
 def cmd_neo4j_bfs(args: argparse.Namespace) -> None:
     with args.perf.measure("parse schema relationship types", backend="local", phase="input", schema=args.schema):
         rel_filter = "|".join(relationship_types_from_schema(args.schema))
+    with args.perf.measure("parse input JSON", backend="local", phase="input", data=args.data):
+        nodes, rels = parse_data(args.data)
     neo = Neo4jNativeComponent(args.neo4j_endpoint, args.neo4j_user, args.neo4j_password, args.batch_size, perf=args.perf)
     try:
+        neo.load_all(nodes, rels)
         neo.bfs(args.start_uuid, rel_filter, args.max_depth, args.output)
     finally:
         neo.close()
@@ -843,7 +938,7 @@ def cmd_neo4j_bfs(args: argparse.Namespace) -> None:
 def cmd_print_neo4j_curl(args: argparse.Namespace) -> None:
     rel_filter = "|".join(relationship_types_from_schema(args.schema))
     print(Neo4jNativeComponent.curl_command(
-        args.start_uuid,
+        args.source_native_id,
         rel_filter,
         args.max_depth,
         endpoint=args.neo4j_endpoint,
@@ -879,20 +974,33 @@ def cmd_gpu_bfs(args: argparse.Namespace) -> None:
 
 
 def cmd_run_all(args: argparse.Namespace) -> None:
-    cmd_load(argparse.Namespace(**vars(args)))
-
+    with args.perf.measure("parse input JSON", backend="local", phase="input", data=args.data):
+        nodes, rels = parse_data(args.data)
+    rel_filter = "|".join(relationship_types_from_schema(args.schema))
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if not args.skip_neo4j:
-        neo_args = argparse.Namespace(**vars(args))
-        neo_args.output = str(out_dir / "native-neo4j.csv")
-        cmd_neo4j_bfs(neo_args)
+        neo = Neo4jNativeComponent(
+            args.neo4j_endpoint, args.neo4j_user, args.neo4j_password, args.batch_size, perf=args.perf
+        )
+        try:
+            neo.load_all(nodes, rels)
+            neo.bfs(args.start_uuid, rel_filter, args.max_depth, out_dir / "native-neo4j.csv")
+        finally:
+            neo.close()
 
     if not args.skip_arango:
-        arango_args = argparse.Namespace(**vars(args))
-        arango_args.output = str(out_dir / "native-arango.csv")
-        cmd_arango_bfs(arango_args)
+        arango = ArangoNativeComponent(
+            args.arango_url, args.arango_user, args.arango_password,
+            args.arango_db, args.batch_size, perf=args.perf,
+        )
+        try:
+            arango.load_all(nodes, rels)
+            start_id = arango_doc_id_for_uuid(nodes, args.start_uuid)
+            arango.bfs(start_id, args.max_depth, out_dir / "native-arango.csv")
+        finally:
+            arango.close()
 
     if not args.skip_gpu and args.binary:
         gpu_args = argparse.Namespace(**vars(args))
@@ -938,9 +1046,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     add_metrics_args(p)
     p.set_defaults(func=cmd_load)
 
-    p = sub.add_parser("neo4j-bfs", help="Run Neo4j APOC BFS over the full Neo4j replica")
+    p = sub.add_parser("neo4j-bfs", help="Reload the Neo4j replica and run gds.bfs.stream")
     p.add_argument("--schema", required=True)
-    p.add_argument("--data", required=False)
+    p.add_argument("--data", required=True)
     p.add_argument("--start-uuid", required=True)
     p.add_argument("--max-depth", type=int, default=7)
     p.add_argument("--output", required=True)
@@ -950,7 +1058,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     p = sub.add_parser("print-neo4j-curl", help="Print the direct curl command for Neo4j BFS")
     p.add_argument("--schema", required=True)
-    p.add_argument("--start-uuid", required=True)
+    p.add_argument("--source-native-id", required=True, type=int, help="Neo4j id(n) in the named GDS projection")
     p.add_argument("--max-depth", type=int, default=7)
     add_common_db_args(p)
     add_metrics_args(p)

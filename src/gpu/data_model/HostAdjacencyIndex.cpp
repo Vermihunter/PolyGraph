@@ -15,8 +15,8 @@ namespace cpgdb {
         stored_edge.from = source.global_id;
         stored_edge.to = destination.global_id;
 
-        outgoing_[source.global_id].push_back({.vertex = destination, .via_edge = stored_edge});
-        incoming_[destination.global_id].push_back({.vertex = source, .via_edge = stored_edge});
+        outgoing_[source.global_id][destination.global_id].push_back({.vertex = destination, .via_edge = stored_edge});
+        incoming_[destination.global_id][source.global_id].push_back({.vertex = source, .via_edge = stored_edge});
     }
 
     std::optional<NeighborRef> HostAdjacencyIndex::find_neighbor(const GlobalId &source_id,
@@ -38,7 +38,7 @@ namespace cpgdb {
 
         for (const auto &source: frontier) {
             AdjacencyRow row{.source = source, .neighbors = {}};
-            std::unordered_set<GlobalId, boost::hash<GlobalId>> seen;
+            std::unordered_set<GlobalId, std::hash<GlobalId>> seen;
             append_matching_neighbors(row, seen, outgoing_, source.global_id, spec);
             if (spec.direction != Direction::Directed) {
                 append_matching_neighbors(row, seen, incoming_, source.global_id, spec);
@@ -48,12 +48,10 @@ namespace cpgdb {
         return rows;
     }
 
-    bool HostAdjacencyIndex::neighbor_matches(const NeighborRef &neighbor, const GlobalId &destination_id,
-                                              const ExpandSpec &spec) {
-        if (neighbor.vertex.global_id != destination_id)
+    bool HostAdjacencyIndex::neighbor_matches(const NeighborRef &neighbor, const ExpandSpec &spec) {
+        if (neighbor.via_edge && !spec.allows_edge_type(neighbor.via_edge->type)) {
             return false;
-        if (neighbor.via_edge && !spec.allows_edge_type(neighbor.via_edge->type))
-            return false;
+        }
         return spec.allows_target_type(neighbor.vertex.type);
     }
 
@@ -61,32 +59,47 @@ namespace cpgdb {
                                                                           const GlobalId &source_id,
                                                                           const GlobalId &destination_id,
                                                                           const ExpandSpec &spec) {
-        const auto iterator = index.find(source_id);
-        if (iterator == index.end())
+        const auto source_it = index.find(source_id);
+        if (source_it == index.end()) {
             return std::nullopt;
-        for (const auto &neighbor: iterator->second) {
-            if (neighbor_matches(neighbor, destination_id, spec))
+        }
+
+        const auto destination_it = source_it->second.find(destination_id);
+        if (destination_it == source_it->second.end()) {
+            return std::nullopt;
+        }
+
+        for (const auto &neighbor: destination_it->second) {
+            if (neighbor_matches(neighbor, spec)) {
                 return neighbor;
+            }
         }
         return std::nullopt;
     }
 
     void HostAdjacencyIndex::append_matching_neighbors(AdjacencyRow &row,
-                                                       std::unordered_set<GlobalId, boost::hash<GlobalId>> &seen,
+                                                       std::unordered_set<GlobalId, std::hash<GlobalId>> &seen,
                                                        const NeighborIndex &index, const GlobalId &source_id,
                                                        const ExpandSpec &spec) {
-        const auto iterator = index.find(source_id);
-        if (iterator == index.end())
+        const auto source_it = index.find(source_id);
+        if (source_it == index.end()) {
             return;
+        }
 
-        for (const auto &neighbor: iterator->second) {
-            if (neighbor.via_edge && !spec.allows_edge_type(neighbor.via_edge->type))
+        // A destination is emitted at most once. Walk parallel edges only until one
+        // satisfies the requested relationship/target filters.
+        for (const auto &[destination_id, candidates]: source_it->second) {
+            if (seen.contains(destination_id)) {
                 continue;
-            if (!spec.allows_target_type(neighbor.vertex.type))
-                continue;
-            if (!seen.insert(neighbor.vertex.global_id).second)
-                continue;
-            row.neighbors.push_back(neighbor);
+            }
+            for (const auto &neighbor: candidates) {
+                if (!neighbor_matches(neighbor, spec)) {
+                    continue;
+                }
+                seen.insert(destination_id);
+                row.neighbors.push_back(neighbor);
+                break;
+            }
         }
     }
 

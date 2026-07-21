@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.graphio import BackendLayout, NodeRecord, RelationshipRecord, load_graph_records
+from tools.graphio.id_codec import parse_global_id
 from tools.graphio.writer import GraphJsonLinesWriter, write_graph_json
 
 
@@ -33,17 +34,18 @@ class GraphData:
             "relationships": [relationship.to_dict() for relationship in self.relationships],
         }
 
-    def start_type(self, uuid: str) -> str:
+    def start_type(self, global_id: int | str) -> str:
+        normalized = parse_global_id(global_id)
         try:
-            return self.node_type_by_uuid[uuid]
+            return self.node_type_by_uuid[normalized]
         except KeyError as exc:
-            raise ValueError(f"Start UUID is not present in data file: {uuid}") from exc
+            raise ValueError(f"Start ID is not present in data file: {global_id}") from exc
 
-    def uuids(self) -> list[str]:
+    def uuids(self) -> list[int]:
         return [node.uuid for node in self.nodes]
 
     def write_data_with_source(self, output: str | Path, source: str) -> Path:
-        """Create a single-backend graph; zero routing bits keep logical UUIDs stable."""
+        """Create a single-backend graph; zero routing bits keep logical IDs stable."""
         routing_layout = BackendLayout((source,))
         nodes = [NodeRecord(node.uuid, node.type, source, dict(node.properties)) for node in self.nodes]
         relationships = [
@@ -80,11 +82,11 @@ def write_schema_with_source(input_schema: str | Path, output: str | Path, sourc
         node_type["source"] = source
     for relationship in schema.get("relations", []):
         relationship["source"] = source
-    # Full-backend benchmark variants use a one-entry UUID layout. With one backend
-    # the suffix width is zero, so the original logical UUIDs remain valid.
-    schema["uuidRouting"] = [source]
+    # Full-backend benchmark variants use a one-entry ID layout. With one backend
+    # the MSB routing width is zero, so the original logical IDs remain valid.
+    schema["idRouting"] = [source]
     schema["storageBackends"] = [source]
-    schema["uuidRoutingBits"] = 0
+    schema["idRoutingBits"] = 0
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as handle:
@@ -104,8 +106,8 @@ def read_start_uuids(values: Iterable[str] | None, file: Optional[str | Path]) -
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
-                # Accept the CSV produced by select_bfs_roots.py as well as plain UUID files.
-                if first and line.lower().startswith("uuid,"):
+                # Accept the CSV produced by select_bfs_roots.py as well as plain ID files.
+                if first and line.lower().startswith(("uuid,", "id,")):
                     first = False
                     continue
                 first = False

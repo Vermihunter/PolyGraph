@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import hashlib
+import json
 import sys
 from pathlib import Path
 from typing import Iterable
+
+from tools.graphio.id_codec import read_native_node_id_map, resolve_native_node_id
 
 from .backend_configs import write_backend_config
 from .backends.native import ArangoNativeClient, Neo4jNativeClient, relationship_filter_from_schema
@@ -26,6 +31,15 @@ BACKEND_ALIASES = {
 }
 
 
+@dataclass(frozen=True)
+class LoadedGraph:
+    data: Path
+    node_id_map: dict[int, int]
+
+    def resolve_node(self, value: int | str) -> str:
+        return str(resolve_native_node_id(value, self.node_id_map))
+
+
 def normalize_backends(values: Iterable[str]) -> list[str]:
     result: list[str] = []
     for value in values:
@@ -42,11 +56,21 @@ def normalize_backends(values: Iterable[str]) -> list[str]:
 
 
 class BfsBenchmarkOrchestrator:
-    def __init__(self, config: BenchmarkConfig, output_dir: str | Path, *, dry_run: bool = False, verbose: bool = True):
+    def __init__(
+        self,
+        config: BenchmarkConfig,
+        output_dir: str | Path,
+        *,
+        dry_run: bool = False,
+        verbose: bool = True,
+        resume: bool = False,
+    ):
         self.config = config
         self.output_dir = ensure_dir(output_dir)
         self.graph = GraphData.load(config.paths.data)
-        self.sink = MeasurementSink(self.output_dir)
+        self.resume = resume
+        self.skipped_completed = 0
+        self.sink = MeasurementSink(self.output_dir, resume=resume)
         self.generated_dir = ensure_dir(self.output_dir / "generated")
         self.outputs_dir = ensure_dir(self.output_dir / "outputs")
         self.logs_dir = ensure_dir(self.output_dir / "logs")
@@ -62,25 +86,54 @@ class BfsBenchmarkOrchestrator:
     def flush(self) -> tuple[Path, Path, Path]:
         return self.sink.flush_all()
 
-    def reference_output(self, start_uuid: str) -> Path:
-        return self.reference_dir / f"reference_{safe_file_part(start_uuid)}.csv"
+    @staticmethod
+    def _valid_bfs_output(path: Path) -> bool:
+        if not path.is_file():
+            return False
+        try:
+            return bool(read_bfs_csv(path))
+        except (IndexError, KeyError, OSError, TypeError, ValueError):
+            return False
 
-    def ensure_reference(self, start_uuid: str) -> Path:
-        out = self.reference_output(start_uuid)
-        if out.exists():
+    def _mark_skipped(self, description: str) -> None:
+        self.skipped_completed += 1
+        print(f"[resume] Skipping completed {description}", file=sys.stderr)
+
+    def reference_output(self, start_uuid: str, data: Path | None = None) -> Path:
+        graph_path = (data or self.config.paths.data).resolve()
+        graph_key = hashlib.sha256(str(graph_path).encode("utf-8")).hexdigest()[:12]
+        return self.reference_dir / f"reference_{graph_key}_{safe_file_part(start_uuid)}.csv"
+
+    def ensure_reference(self, start_uuid: str, data: Path | None = None) -> Path:
+        graph_path = (data or self.config.paths.data).resolve()
+        out = self.reference_output(start_uuid, graph_path)
+        key = {
+            "scenario": "reference",
+            "system": "tools/bfs.py",
+            "phase": "bfs_query",
+            "start_uuid": start_uuid,
+        }
+        if self._valid_bfs_output(out) and (
+            not self.resume or self.sink.successful(**key)
+        ):
+            if self.resume:
+                self._mark_skipped(f"reference BFS start={start_uuid}")
             return out
+        if self.resume:
+            self.sink.remove(**key)
+            out.unlink(missing_ok=True)
         with self.sink.measure(
             scenario="reference",
             system="tools/bfs.py",
             phase="bfs_query",
             start_uuid=start_uuid,
             output_csv=out,
-            details={"data": str(self.config.paths.data)},
+            details={"data": str(graph_path)},
         ) as record:
             command: list[str | Path] = [
                 sys.executable,
                 self.config.paths.reference_bfs_script,
-                "--input-json", self.config.paths.data,
+                "--input-json", graph_path,
                 "--output-csv", out,
                 "--start-uuid", start_uuid,
                 "--max-depth", str(self.config.bfs.max_depth),
@@ -96,6 +149,20 @@ class BfsBenchmarkOrchestrator:
         return out
 
     def _compare_to_reference(self, *, expected: Path, actual: Path, scenario: str, system: str, start_uuid: str, repetition: int) -> None:
+        key = {
+            "scenario": scenario,
+            "system": system,
+            "phase": "compare_reference",
+            "repetition": repetition,
+            "start_uuid": start_uuid,
+        }
+        if self.resume and self.sink.successful(**key):
+            self._mark_skipped(
+                f"reference comparison {scenario}/{system} start={start_uuid} rep={repetition}"
+            )
+            return
+        if self.resume:
+            self.sink.remove(**key)
         diff = self.diffs_dir / f"{scenario}_{system}_{safe_file_part(start_uuid)}_rep{repetition:03d}.csv"
         cmp = compare_bfs_csv(expected, actual, diff)
         self.sink.add(record=RunRecord(
@@ -222,6 +289,14 @@ class BfsBenchmarkOrchestrator:
                 neo.close()
                 arango.close()
 
+    @staticmethod
+    def _backend_config_has_neo4j(backend_config: Path) -> bool:
+        raw = json.loads(backend_config.read_text(encoding="utf-8"))
+        return any(
+            str(entry.get("id")) == "Neo4J" and entry.get("enabled", True)
+            for entry in raw.get("backends", [])
+        )
+
     def _run_loader(
         self,
         data_path: Path,
@@ -229,25 +304,54 @@ class BfsBenchmarkOrchestrator:
         scenario: str,
         system: str,
         repetition: int,
-    ) -> None:
+    ) -> LoadedGraph:
+        has_neo4j = self._backend_config_has_neo4j(backend_config)
+        loaded_dir = ensure_dir(
+            self.generated_dir / "loaded" / safe_file_part(scenario) / safe_file_part(system)
+        )
+        resolved = loaded_dir / f"rep{repetition:03d}.resolved.jsonl"
+        id_map = loaded_dir / f"rep{repetition:03d}.native-id-map.jsonl"
+        command: list[str | Path] = [
+            sys.executable,
+            self.config.paths.loader_script,
+            data_path,
+            "--backend-config", backend_config,
+            "--reset",
+            "--batch-size", str(self.config.batch_size),
+        ]
+        if has_neo4j:
+            command += [
+                "--resolved-output", resolved,
+                "--id-map-output", id_map,
+            ]
+
         with self.sink.measure(
             scenario=scenario,
             system=system,
             phase="load",
             repetition=repetition,
             details={"data": str(data_path), "backend_config": str(backend_config)},
-        ):
+        ) as record:
             self.runner.run(
-                [
-                    sys.executable,
-                    self.config.paths.loader_script,
-                    data_path,
-                    "--backend-config", backend_config,
-                    "--reset",
-                    "--batch-size", str(self.config.batch_size),
-                ],
-                stderr_path=self.logs_dir / "load" / scenario / f"{safe_file_part(system)}.log",
+                command,
+                stderr_path=(
+                    self.logs_dir / "load" / scenario
+                    / f"{safe_file_part(system)}_rep{repetition:03d}.log"
+                ),
             )
+            record.details.update({
+                "resolved_data": str(resolved if has_neo4j else data_path),
+                "native_id_map": str(id_map) if has_neo4j else "",
+            })
+
+        if self.runner.dry_run:
+            return LoadedGraph(resolved if has_neo4j else data_path, {})
+        if has_neo4j and not resolved.is_file():
+            raise RuntimeError(f"Neo4j loader did not create resolved graph: {resolved}")
+        return LoadedGraph(
+            resolved if has_neo4j else data_path,
+            read_native_node_id_map(id_map) if has_neo4j else {},
+        )
 
     def _graph_db_command(
         self,
@@ -282,6 +386,18 @@ class BfsBenchmarkOrchestrator:
             "--max-depth", str(self.config.bfs.max_depth),
             "--direction", self.config.bfs.direction,
         ]
+        if self.config.bfs.neighbor_batch_size is not None:
+            cmd += ["--neighbor-batch-size", str(self.config.bfs.neighbor_batch_size)]
+        cmd += [
+            "--neo4j-max-concurrent-requests",
+            str(self.config.bfs.neo4j_max_concurrent_requests),
+            "--arango-max-concurrent-requests",
+            str(self.config.bfs.arango_max_concurrent_requests),
+            "--backend-request-retries",
+            str(self.config.bfs.backend_request_retries),
+            "--backend-retry-delay-ms",
+            str(self.config.bfs.backend_retry_delay_ms),
+        ]
         if self.config.bfs.allowed_edge_types:
             cmd += ["--allowed-edge-types", self.config.bfs.allowed_edge_types]
         if self.config.bfs.allowed_target_node_types:
@@ -295,45 +411,112 @@ class BfsBenchmarkOrchestrator:
         return cmd
 
     def _run_graph_db_bfs(self, *, scenario: str, run_id: str, system: str, repetition: int, start_uuid: str, schema: Path, data: Path, backend_config: Path, compare: bool) -> None:
-        expected = self.ensure_reference(start_uuid) if compare else None
+        expected = self.ensure_reference(start_uuid, data) if compare else None
         out = self.outputs_dir / f"{scenario}_{system}_{safe_file_part(start_uuid)}_rep{repetition:03d}.csv"
-        with self.sink.measure(
-            scenario=scenario,
-            system=system,
-            phase="bfs_query",
-            repetition=repetition,
-            start_uuid=start_uuid,
-            output_csv=out,
-            expected_csv=expected or "",
-            details={"schema": str(schema), "data": str(data), "backend_config": str(backend_config)},
-        ) as record:
+        bfs_key = {
+            "scenario": scenario,
+            "system": system,
+            "phase": "bfs_query",
+            "repetition": repetition,
+            "start_uuid": start_uuid,
+        }
+        compare_key = {
+            "scenario": scenario,
+            "system": system,
+            "phase": "compare_reference",
+            "repetition": repetition,
+            "start_uuid": start_uuid,
+        }
 
-            self.runner.run(
-                self._graph_db_command(
-                    scenario=scenario,
-                    schema=schema,
-                    run_id=run_id,
-                    repetition=repetition,
-                    data=data,
-                    backend_config=backend_config,
-                    start_uuid=start_uuid,
-                    system=system,
-                ),
-                stdout_path=out,
-                stderr_path=(
+        prior_comparison = self.sink.find(**compare_key) if self.resume and compare else None
+        bfs_completed = (
+            self.resume
+            and self.sink.successful(**bfs_key)
+            and self._valid_bfs_output(out)
+            and (prior_comparison is None or prior_comparison.status == "ok")
+        )
+        if bfs_completed:
+            self._mark_skipped(
+                f"{scenario}/{system} BFS start={start_uuid} rep={repetition}"
+            )
+        else:
+            if self.resume:
+                self.sink.remove(**bfs_key)
+                self.sink.remove(**compare_key)
+                out.unlink(missing_ok=True)
+                event_log = (
+                    self.logs_dir
+                    / "events"
+                    / safe_file_part(run_id)
+                    / safe_file_part(scenario)
+                    / safe_file_part(system)
+                    / safe_file_part(start_uuid)
+                    / f"rep{repetition:03d}.events.jsonl"
+                )
+                stderr_log = (
                     self.logs_dir
                     / "stderr"
                     / safe_file_part(scenario)
                     / safe_file_part(system)
                     / safe_file_part(start_uuid)
                     / f"rep{repetition:03d}.log"
-                ),
-                env={"CPGDB_PROFILE": "1", "CPGDB_PROFILE_LAYERS": "1"},
-            )
-            if not self.runner.dry_run:
-                record.vertex_count = len(read_bfs_csv(out))
+                )
+                event_log.unlink(missing_ok=True)
+                stderr_log.unlink(missing_ok=True)
+
+            with self.sink.measure(
+                scenario=scenario,
+                system=system,
+                phase="bfs_query",
+                repetition=repetition,
+                start_uuid=start_uuid,
+                output_csv=out,
+                expected_csv=expected or "",
+                details={
+                    "schema": str(schema),
+                    "data": str(data),
+                    "backend_config": str(backend_config),
+                    "neighbor_batch_size": self.config.bfs.neighbor_batch_size,
+                    "neo4j_max_concurrent_requests": self.config.bfs.neo4j_max_concurrent_requests,
+                    "arango_max_concurrent_requests": self.config.bfs.arango_max_concurrent_requests,
+                    "backend_request_retries": self.config.bfs.backend_request_retries,
+                    "backend_retry_delay_ms": self.config.bfs.backend_retry_delay_ms,
+                },
+            ) as record:
+                self.runner.run(
+                    self._graph_db_command(
+                        scenario=scenario,
+                        schema=schema,
+                        run_id=run_id,
+                        repetition=repetition,
+                        data=data,
+                        backend_config=backend_config,
+                        start_uuid=start_uuid,
+                        system=system,
+                    ),
+                    stdout_path=out,
+                    stderr_path=(
+                        self.logs_dir
+                        / "stderr"
+                        / safe_file_part(scenario)
+                        / safe_file_part(system)
+                        / safe_file_part(start_uuid)
+                        / f"rep{repetition:03d}.log"
+                    ),
+                    env={"CPGDB_PROFILE": "1", "CPGDB_PROFILE_LAYERS": "1"},
+                )
+                if not self.runner.dry_run:
+                    record.vertex_count = len(read_bfs_csv(out))
+
         if compare and expected and not self.runner.dry_run:
-            self._compare_to_reference(expected=expected, actual=out, scenario=scenario, system=system, start_uuid=start_uuid, repetition=repetition)
+            self._compare_to_reference(
+                expected=expected,
+                actual=out,
+                scenario=scenario,
+                system=system,
+                start_uuid=start_uuid,
+                repetition=repetition,
+            )
 
     def _implementation_paths_for(self, backend: str) -> tuple[Path, Path, Path]:
         configured = self.config.paths.implementation_full.get(backend, ImplementationBackendPaths())
@@ -367,43 +550,65 @@ class BfsBenchmarkOrchestrator:
             schema_path, data_path, backend_config = self._implementation_paths_for(backend)
 
             loaded = False
+            loaded_graph = LoadedGraph(data_path, {})
             for rep in range(1, repetitions + 1):
                 if backend in {"Neo4J", "ArangoDB"} and (reload_each_repetition or not loaded):
-                    self._run_loader(data_path, backend_config, "implementation_full", f"graph_db_{backend}", rep)
+                    loaded_graph = self._run_loader(
+                        data_path, backend_config, "implementation_full", f"graph_db_{backend}", rep
+                    )
                     loaded = True
-                for start_uuid in start_uuids:
+                for original_start_id in start_uuids:
+                    start_id = loaded_graph.resolve_node(original_start_id)
                     self._run_graph_db_bfs(
                         scenario="implementation_full",
                         run_id=run_id,
                         system=f"graph_db_{backend}",
                         repetition=rep,
-                        start_uuid=start_uuid,
+                        start_uuid=start_id,
                         schema=schema_path,
-                        data=data_path,
+                        data=loaded_graph.data,
                         backend_config=backend_config,
                         compare=compare,
                     )
 
-    def run_distributed(self, start_uuids: list[str], run_id: str, repetitions: int, *, compare: bool = True, reload_each_repetition: bool = False) -> None:
+    def run_distributed(
+        self,
+        start_uuids: list[str],
+        run_id: str,
+        repetitions: int,
+        *,
+        compare: bool = True,
+        load_before_run: bool = True,
+        reload_each_repetition: bool = False,
+    ) -> None:
+        if not load_before_run and reload_each_repetition:
+            raise ValueError(
+                "reload_each_repetition cannot be enabled when load_before_run is false"
+            )
+
         backend_config = self.config.paths.backend_config or write_backend_config(
             self.config,
             self.generated_dir / "backend_distributed.json",
             ["Neo4J", "ArangoDB", "GPU"],
         )
-        loaded = False
+        loaded = not load_before_run
+        loaded_graph = LoadedGraph(self.config.paths.data, {})
         for rep in range(1, repetitions + 1):
-            if reload_each_repetition or not loaded:
-                self._run_loader(self.config.paths.data, backend_config, "distributed", "graph_db_distributed", rep)
+            if load_before_run and (reload_each_repetition or not loaded):
+                loaded_graph = self._run_loader(
+                    self.config.paths.data, backend_config, "distributed", "graph_db_distributed", rep
+                )
                 loaded = True
-            for start_uuid in start_uuids:
+            for original_start_id in start_uuids:
+                start_id = loaded_graph.resolve_node(original_start_id)
                 self._run_graph_db_bfs(
                     scenario="distributed",
                     run_id=run_id,
                     system="graph_db_distributed",
                     repetition=rep,
-                    start_uuid=start_uuid,
+                    start_uuid=start_id,
                     schema=self.config.paths.schema,
-                    data=self.config.paths.data,
+                    data=loaded_graph.data,
                     backend_config=backend_config,
                     compare=compare,
                 )

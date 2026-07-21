@@ -8,13 +8,13 @@
 
 #include "data_access/adapters/Neo4J/response_processors/Neo4JResponseProcessor.hpp"
 #include "infrastructure/DatabaseContext.hpp"
+#include "insertion/BackendEncodedUuid.hpp"
 #include "serialization/RecordJsonSerializer.hpp"
+#include "utilities/BackendIds.hpp"
 #include "utilities/Profiling.hpp"
 #include "utilities/uuid.hpp"
 
 #include <algorithm>
-#include <boost/lexical_cast.hpp>
-#include <boost/uuid/uuid.hpp>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -108,18 +108,51 @@ namespace cpgdb {
             }
         }
 
-        static std::string get_uuid_string(const json &row, const std::string &entity_name) {
-            if (row.contains("uuid") && row["uuid"].is_string()) {
-                return row["uuid"].get<std::string>();
+        static std::optional<GlobalId> get_global_id_property_opt(const json &row, const std::string &name) {
+            const json *value = nullptr;
+            if (row.contains(name)) {
+                value = &row[name];
+            } else if (row.contains("properties") && row["properties"].is_object() &&
+                       row["properties"].contains(name)) {
+                value = &row["properties"][name];
             }
-
-            if (row.contains("properties") && row["properties"].is_object() && row["properties"].contains("uuid") &&
-                row["properties"]["uuid"].is_string()) {
-                return row["properties"]["uuid"].get<std::string>();
+            if (value == nullptr || value->is_null()) {
+                return std::nullopt;
             }
-
-            throw std::runtime_error(entity_name + " JSON does not contain uuid: " + row.dump());
+            if (value->is_number_unsigned()) {
+                return value->get<GlobalId>();
+            }
+            if (value->is_number_integer()) {
+                return global_id_from_signed_storage(value->get<std::int64_t>());
+            }
+            if (value->is_string()) {
+                return global_id_from_string(value->get<std::string>());
+            }
+            throw std::runtime_error("Neo4j ID property '" + name + "' has unsupported JSON type: " + value->dump());
         }
+
+        [[nodiscard]] GlobalId native_global_id(const json &native_value) const {
+            if (!native_value.is_number_integer() && !native_value.is_number_unsigned()) {
+                throw std::runtime_error("Neo4j native ID is not an integer: " + native_value.dump());
+            }
+            const auto native_id = native_value.get<std::uint64_t>();
+            return insertion::BackendEncodedId::from_local_id(native_id, NEO4J, db_context_.id_routing_backends);
+        }
+
+        [[nodiscard]] GlobalId logical_node_id(const json &row, const bool is_proxy) const {
+            if (is_proxy) {
+                const auto stored = get_global_id_property_opt(row, "uuid");
+                if (!stored.has_value()) {
+                    throw std::runtime_error("Neo4j proxy node does not contain numeric uuid: " + row.dump());
+                }
+                return *stored;
+            }
+            if (!row.contains("native_id")) {
+                throw std::runtime_error("Neo4j real node does not contain native_id: " + row.dump());
+            }
+            return native_global_id(row["native_id"]);
+        }
+
 
         static bool get_bool_property(const json &row, const std::string &name, bool default_value = false) {
             if (row.contains(name) && row[name].is_boolean()) {
@@ -177,7 +210,7 @@ namespace cpgdb {
 
         static std::optional<std::string> first_logical_label(const std::vector<std::string> &labels) {
             for (const auto &label: labels) {
-                if (label != "Proxy" && label != "CPGDBVertex") {
+                if (label != "Proxy" && label != "CPGDBVertex" && label != "__GraphNode") {
                     return label;
                 }
             }
@@ -217,32 +250,20 @@ namespace cpgdb {
         [[nodiscard]] Node json_to_node(const json &row) const {
             CPGDB_PROFILE_FUNCTION();
 
-            std::string uuid_str = get_required_string_property(row, "uuid", "Neo4j node");
-
             const std::vector<std::string> labels = get_labels(row);
-
             const auto explicit_type = get_string_property_opt(row, "type");
             const auto remote_type = get_string_property_opt(row, "remote-type");
-            const auto remote_uuid = get_string_property_opt(row, "remote-uuid");
-
             const bool is_proxy = get_bool_property(row, "is_proxy", false) || has_label(labels, "Proxy") ||
                                   explicit_type.value_or("") == "Proxy";
 
-            if (is_proxy && remote_uuid.has_value()) {
-                uuid_str = *remote_uuid;
-            }
-
             std::string type_name;
-
             if (is_proxy) {
                 if (!remote_type.has_value()) {
                     throw std::runtime_error("Neo4j proxy node does not contain remote-type: " + row.dump());
                 }
-
                 type_name = *remote_type;
             } else {
                 auto label_type = first_logical_label(labels);
-
                 if (label_type.has_value()) {
                     type_name = *label_type;
                 } else if (explicit_type.has_value() && *explicit_type != "Proxy") {
@@ -257,27 +278,39 @@ namespace cpgdb {
                                          "'. Node JSON: " + row.dump());
             }
 
-            return Node{.global_id = boost::lexical_cast<boost::uuids::uuid>(uuid_str),
+            return Node{.global_id = logical_node_id(row, is_proxy),
                         .type = db_context_.schema->node_type_id(type_name),
                         .labels = labels,
                         .properties = get_properties(row)};
         }
 
+        [[nodiscard]] GlobalId logical_endpoint_id(const json &row, const std::string &prefix) const {
+            const bool is_proxy = row.value(prefix + "_is_proxy", false);
+            if (is_proxy) {
+                const auto stored = get_global_id_property_opt(row, prefix + "_uuid");
+                if (!stored.has_value()) {
+                    throw std::runtime_error("Neo4j edge proxy endpoint is missing " + prefix + "_uuid: " + row.dump());
+                }
+                return *stored;
+            }
+            const auto native = row.find(prefix + "_native_id");
+            if (native == row.end()) {
+                throw std::runtime_error("Neo4j edge is missing " + prefix + "_native_id: " + row.dump());
+            }
+            return native_global_id(*native);
+        }
+
         [[nodiscard]] Edge json_to_edge(const json &row) const {
             CPGDB_PROFILE_FUNCTION();
 
-            const std::string uuid_str = get_uuid_string(row, "Edge");
-
+            const auto stored_id = get_global_id_property_opt(row, "uuid");
+            const GlobalId edge_id = stored_id.has_value() ? *stored_id : native_global_id(row.at("native_id"));
             const std::string edge_type_name = get_required_string_property(row, "type", "Neo4j edge");
 
-            const std::string start_uuid = get_required_string_property(row, "start", "Neo4j edge");
-
-            const std::string end_uuid = get_required_string_property(row, "end", "Neo4j edge");
-
-            return Edge{.global_id = boost::lexical_cast<boost::uuids::uuid>(uuid_str),
+            return Edge{.global_id = edge_id,
                         .type = db_context_.schema->edge_type_id(edge_type_name),
-                        .src = boost::lexical_cast<boost::uuids::uuid>(start_uuid),
-                        .dst = boost::lexical_cast<boost::uuids::uuid>(end_uuid),
+                        .src = logical_endpoint_id(row, "start"),
+                        .dst = logical_endpoint_id(row, "end"),
                         .properties = get_properties(row)};
         }
     };

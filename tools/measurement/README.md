@@ -1,165 +1,146 @@
 # BFS measurement framework
 
-This folder contains a reusable benchmark framework for comparing:
+This folder compares three execution modes against `tools/algorithms/bfs.py`:
 
-1. **Native full-replica database backends**
-   - full data loaded into Neo4j, then Neo4j APOC BFS
-   - full data loaded into ArangoDB, then Arango named-graph BFS
-   - no native full-GPU BFS is assumed or measured
+1. **Native database traversal**
+   - Neo4j uses a named Graph Data Science projection and `gds.bfs.stream`.
+   - ArangoDB uses its native graph traversal query.
+2. **CPGDB with the full graph routed to one backend**
+   - Neo4J-only, ArangoDB-only, or GPU-only.
+3. **Distributed CPGDB**
+   - The prepared graph keeps its schema-based or identity-hash placement.
 
-2. **Your `graph_db` implementation with full data in one backend**
-   - Neo4j-only graph_db run using:
-     - `storage_layer/sample-university-domain.neo.graph-shape.json`
-     - `tools/generators/large-university-neo.json`
-     - `config/backends.neo.json`
-   - Arango-only graph_db run using:
-     - `storage_layer/sample-university-domain.arango.graph-shape.json`
-     - `tools/generators/large-university-arango.json`
-     - `config/backends.arango.json`
-   - GPU-only graph_db run using:
-     - `storage_layer/sample-university-domain.gpu.graph-shape.json`
-     - generated GPU-source JSON copied from `paths.data`, unless you configure a real GPU-only data file
-     - `config/backends.gpu.json`
+All graph identifiers are numeric uint64 values. Their most-significant routing
+bits identify the owning backend. The command-line option names
+`--start-uuid`/`--start-uuids-file` are retained for compatibility, but their
+values are now decimal or `0x`-prefixed 64-bit IDs.
 
-3. **Your full distributed system**
-   - original schema/data placement
-   - `config/backends.full.json`
-   - Neo4j + ArangoDB loaded through `tools/load_graph.py`
-   - GPU placement consumed directly from the JSON by the C++ runtime
+## Native Neo4j ID lifecycle
 
-Every run can compare its output against the reference implementation in `tools/algorithms/bfs.py`.
+Real Neo4j nodes and relationships do not have a `uuid` property. Their CPGDB
+ID is formed from `id(n)`/`id(r)` plus the Neo4j routing code in the ID MSBs.
+Proxy nodes still carry a signed Neo4j INTEGER property named `uuid`, preserving
+the full remote uint64 bit pattern.
 
-## Config
+A resolved graph and its `*.native-id-map.jsonl` sidecar are valid only for the
+Neo4j database instance produced by that load. After deleting data or recreating
+volumes, load again from the unresolved source graph. `cpgdb load --reset`
+performs the remapping and updates the domain manifest automatically.
 
-Copy and edit:
+## Prerequisites
 
 ```bash
-cp tools/measurement/configs/local.example.json tools/measurement/configs/local.json
+python3 -m pip install -r tools/requirements.txt
+python3 tools/cpgdb.py services stop --volumes
+python3 tools/cpgdb.py services start
+python3 tools/cpgdb.py build --preset gpu-bfs
 ```
 
-The project now includes the uploaded benchmark configs under `config/` and the matching graph-shape files under `storage_layer/`.
-
-The important sections are:
-
-```json
-{
-  "paths": {
-    "schema": "storage_layer/sample-university-domain.graph-shape.json",
-    "data": "tools/generators/large-university.json",
-    "backend_config": "config/backends.full.json"
-  },
-  "implementation_full": {
-    "neo4j": {
-      "schema": "storage_layer/sample-university-domain.neo.graph-shape.json",
-      "data": "tools/generators/large-university-neo.json",
-      "backend_config": "config/backends.neo.json"
-    },
-    "arango": {
-      "schema": "storage_layer/sample-university-domain.arango.graph-shape.json",
-      "data": "tools/generators/large-university-arango.json",
-      "backend_config": "config/backends.arango.json"
-    },
-    "gpu": {
-      "schema": "storage_layer/sample-university-domain.gpu.graph-shape.json",
-      "data": null,
-      "backend_config": "config/backends.gpu.json"
-    }
-  }
-}
-```
-
-For GPU-only `graph_db`, `data: null` means: generate a temporary full-GPU data file in the output directory by rewriting `paths.data` sources to `GPU`. If you later create `tools/generators/large-university-gpu.json`, set that path explicitly.
-
-## One-command run
+Verify that GDS is installed:
 
 ```bash
-python3 tools/measurement/run_everything.py \
-  --config tools/measurement/configs/local.json \
-  --output-dir tools/measurement/results/full_benchmark \
-  --repetitions 5 \
-  --start-services \
-  --start-uuid 11a96cb7-c043-4aa7-aa35-2297e9be7f06
+curl -s -u neo4j:password \
+  -H 'Content-Type: application/json' \
+  http://localhost:7474/db/neo4j/tx/commit \
+  --data '{"statements":[{"statement":"CALL gds.version() YIELD version RETURN version"}]}' \
+  | jq
 ```
 
-Outputs:
+## Prepare separate LDBC placements
 
-- `measurements.csv` — main table for analysis
-- `measurements.jsonl` — detailed machine-readable event log
-- `summary.json` — aggregate timing summary
-- `outputs/*.csv` — BFS outputs from each system
-- `reference/*.csv` — reference outputs from `tools/algorithms/bfs.py`
-- `diffs/*.csv` — only written when a result differs from the reference
-- `plots/*.png` — generated charts
+Schema-based placement uses the supplied type-to-backend mapping:
 
-## Run parts separately
+```bash
+python3 tools/cpgdb.py prepare ldbc \
+  --input /path/to/social_network-sf0.1-CsvBasic-LongDateFormatter \
+  --sf 0.1 \
+  --domain-id ldbc-snb-sf0_1-schema-based \
+  --output-dir data/ldbc-snb/sf0_1/schema-based \
+  --placement-config tools/ldbc_snb/placement.balanced.json \
+  --root-count 100
+```
 
-Native full database replicas only:
+Identity-hash placement omits explicit type placement and routes each entity by
+its deterministic identity hash:
+
+```bash
+python3 tools/cpgdb.py prepare ldbc \
+  --input /path/to/social_network-sf0.1-CsvBasic-LongDateFormatter \
+  --sf 0.1 \
+  --domain-id ldbc-snb-sf0_1-hash-based \
+  --output-dir data/ldbc-snb/sf0_1/hash-based \
+  --root-count 100
+```
+
+Load either domain. A fresh Neo4j-native load requires `--reset`:
+
+```bash
+python3 tools/cpgdb.py load data/ldbc-snb/sf0_1/schema-based/domain.json \
+  --reset --batch-size 5000
+
+python3 tools/cpgdb.py load data/ldbc-snb/sf0_1/hash-based/domain.json \
+  --reset --batch-size 5000
+```
+
+## Run CPGDB and store logs/results
+
+```bash
+python3 tools/cpgdb.py run data/ldbc-snb/sf0_1/schema-based/domain.json \
+  --run-id ldbc-sf0_1-schema-depth7 \
+  --start-uuids-file data/ldbc-snb/sf0_1/schema-based/start_uuids.txt \
+  --repetitions 3 \
+  -- --max-depth 7 --direction undirected --no-predecessors
+```
+
+The wrapper resolves original generated IDs through the current native-ID map,
+so the same start-ID file remains usable after a fresh Neo4j load.
+
+## Run benchmark modes separately
+
+Native full replicas:
 
 ```bash
 python3 tools/measurement/measure_bfs.py native \
-  --config tools/measurement/configs/local.json \
-  --output-dir tools/measurement/results/native \
+  --config tools/measurement/configs/ldbc-snb-sf0_1-schema-based.json \
+  --output-dir measurements/native-schema \
   --repetitions 5 \
   --native-backends neo4j,arango \
-  --start-uuid 11a96cb7-c043-4aa7-aa35-2297e9be7f06
+  --start-uuids-file data/ldbc-snb/sf0_1/schema-based/start_uuids.txt
 ```
 
-Your implementation with full data in one backend at a time:
+CPGDB full placement in each backend:
 
 ```bash
 python3 tools/measurement/measure_bfs.py implementation-full \
-  --config tools/measurement/configs/local.json \
-  --output-dir tools/measurement/results/implementation_full \
+  --config tools/measurement/configs/ldbc-snb-sf0_1-schema-based.json \
+  --output-dir measurements/implementation-full-schema \
   --repetitions 5 \
   --implementation-backends neo4j,arango,gpu \
-  --start-uuid 11a96cb7-c043-4aa7-aa35-2297e9be7f06
+  --start-uuids-file data/ldbc-snb/sf0_1/schema-based/start_uuids.txt
 ```
 
-Distributed system only:
+Distributed placement:
 
 ```bash
 python3 tools/measurement/measure_bfs.py distributed \
-  --config tools/measurement/configs/local.json \
-  --output-dir tools/measurement/results/distributed \
+  --config tools/measurement/configs/ldbc-snb-sf0_1-schema-based.json \
+  --output-dir measurements/distributed-schema \
   --repetitions 5 \
-  --start-uuid 11a96cb7-c043-4aa7-aa35-2297e9be7f06
+  --start-uuids-file data/ldbc-snb/sf0_1/schema-based/start_uuids.txt
 ```
 
-## Test many UUIDs
+## Correctness and plots
 
 ```bash
 python3 tools/measurement/test_bfs_outputs.py \
-  --config tools/measurement/configs/local.json \
-  --output-dir tools/measurement/results/correctness \
-  --start-uuid uuid1 \
-  --start-uuid uuid2 \
-  --start-uuid uuid3
-```
+  --config tools/measurement/configs/ldbc-snb-sf0_1-schema-based.json \
+  --output-dir measurements/correctness-schema \
+  --start-uuids-file data/ldbc-snb/sf0_1/schema-based/start_uuids.txt
 
-or:
-
-```bash
-python3 tools/measurement/test_bfs_outputs.py \
-  --config tools/measurement/configs/local.json \
-  --output-dir tools/measurement/results/correctness \
-  --start-uuids-file start_uuids.txt
-```
-
-The script exits with code `1` if any output differs from `tools/algorithms/bfs.py`.
-
-## Draw plots later
-
-```bash
 python3 tools/measurement/plot_measurements.py \
-  --measurements-csv tools/measurement/results/full_benchmark/measurements.csv \
-  --output-dir tools/measurement/results/full_benchmark/plots
+  --measurements-csv measurements/distributed-schema/measurements.csv \
+  --output-dir measurements/distributed-schema/plots
 ```
 
-## Useful switches
-
-- `--reload-each-repetition`: includes load time before every measured repetition.
-- `--no-compare`: skip reference comparison.
-- `--start-services`: run `docker compose up -d` from `paths.docker_compose` before measuring.
-- `--dry-run`: print planned commands/actions without touching Neo4j, ArangoDB, or external binaries.
-- `--native-backends neo4j,arango`: native mode has no GPU option by design.
-- `--implementation-backends neo4j,arango,gpu`: select which graph_db full-placement modes to run.
+Useful switches include `--reload-each-repetition`, `--no-compare`,
+`--start-services`, and `--dry-run`.

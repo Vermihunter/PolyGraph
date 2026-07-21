@@ -37,8 +37,8 @@ struct DatabaseContext {
     std::shared_ptr<BackendRegistry> backend_registry;
     /// Authoritative runtime placement lookup and BFS planner input.
     std::shared_ptr<PlacementCatalog> placement_catalog;
-    /// Ordered backend IDs encoded as compact UUID suffix codes.
-    std::vector<BackendId> uuid_routing_backends;
+    /// Ordered backend IDs represented by compact routing codes in the global ID MSBs.
+    std::vector<BackendId> id_routing_backends;
     /// Current logical graph version used by coverage/projection freshness checks.
     GraphVersion current_graph_version = 0;
     /// Optional GPU runtime and projection state.
@@ -55,9 +55,9 @@ struct DatabaseContext {
     void register_placement(Placement placement);
 
     /**
-     * @brief Creates a type-free node reference and validates its UUID-routed backend.
+     * @brief Creates a type-free node reference and validates its ID-routed backend.
      *
-     * No per-node UUID directory is kept in process memory.
+     * No per-node ID directory is kept in process memory.
      */
     [[nodiscard]] NodeRef node_ref(const GlobalId& id) const;
     /** @brief Returns connection settings for @p id. */

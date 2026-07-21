@@ -34,6 +34,23 @@ class CommandRunner:
             return text
         return text[:limit] + f"\n...[truncated {len(text) - limit} characters]..."
 
+    @staticmethod
+    def _read_file_tail(path: str | Path | None, limit: int = 65_536) -> str:
+        if not path:
+            return ""
+        file_path = Path(path)
+        if not file_path.is_file():
+            return ""
+        with file_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limit), os.SEEK_SET)
+            data = handle.read()
+        text = data.decode("utf-8", errors="replace")
+        if size > limit:
+            return f"...[showing final {limit} bytes]...\n{text}"
+        return text
+
     def _write_log(self, payload: dict[str, object]) -> None:
         if self.log_path is None:
             return
@@ -99,10 +116,17 @@ class CommandRunner:
                 }
             )
             if completed.returncode != 0:
+                redirected_stderr = self._read_file_tail(stderr_path) if stderr_path else ""
+                stderr_text = completed.stderr or redirected_stderr
+                stderr_label = (
+                    f"stderr (redirected to {Path(stderr_path)}):"
+                    if stderr_path
+                    else "stderr:"
+                )
                 raise CommandError(
                     f"Command failed with exit code {completed.returncode}: {' '.join(normalized)}\n"
                     f"stdout:\n{completed.stdout or ''}\n"
-                    f"stderr:\n{completed.stderr or ''}"
+                    f"{stderr_label}\n{stderr_text}"
                 )
             return completed
         finally:

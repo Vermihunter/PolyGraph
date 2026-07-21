@@ -28,7 +28,9 @@ from tools.graphio.domain import (
     generate_sample_graph,
     load_domain_manifest,
     materialize_graph_jsonl,
+    record_native_id_resolution,
     resolve_domain,
+    resolve_domain_node_id,
     select_roots,
     validate_graph,
     write_backend_config_for_sources,
@@ -185,9 +187,9 @@ def prepare_university(args: argparse.Namespace) -> Path:
             f"Converted {node_count} nodes and {relationship_count} relationships "
             f"to {graph}"
         )
-        graph_routing = open_graph_reader(graph).metadata().get("uuidRouting")
+        graph_routing = open_graph_reader(graph).metadata().get("idRouting")
         if not graph_routing:
-            raise ValueError("Imported graph has no uuidRouting metadata")
+            raise ValueError("Imported graph has no idRouting metadata")
         routing_backends = tuple(str(value) for value in graph_routing)
     else:
         step(f"Generating University sample graph from {schema}")
@@ -202,9 +204,9 @@ def prepare_university(args: argparse.Namespace) -> Path:
         print(f"Generated {node_count} nodes and {relationship_count} relationships")
 
     graph_metadata = open_graph_reader(graph).metadata()
-    graph_routing = graph_metadata.get("uuidRouting")
+    graph_routing = graph_metadata.get("idRouting")
     if not graph_routing:
-        raise ValueError("Generated graph has no uuidRouting metadata")
+        raise ValueError("Generated graph has no idRouting metadata")
     routing_backends = tuple(str(value) for value in graph_routing)
 
     backends = output_root / "backends.json"
@@ -531,19 +533,48 @@ def load_domain(args: argparse.Namespace) -> None:
     domain = resolve_domain(args.domain, DATA_ROOT)
     step(f"Loading domain {domain.domain_id}")
     selected = args.only_source or None
+    selected_set = set(selected or ())
+    neo4j_selected = not selected_set or "Neo4J" in selected_set
+    # A reset needs the unresolved source graph only when Neo4j is being
+    # recreated, because its native id(n)/id(r) values must be resolved again.
+    # Arango-only reset/reload must keep using the active resolved graph.
+    input_graph = (
+        domain.paths.source_data
+        if args.reset and neo4j_selected and domain.paths.source_data
+        else domain.paths.data
+    )
+    print(
+        f"[cpgdb] Sources: {', '.join(selected or ['all enabled'])}; "
+        f"input graph: {input_graph}",
+        flush=True,
+    )
     result = load_graph(
-        domain.paths.data,
+        input_graph,
         domain.paths.backends,
         reset=args.reset,
         batch_size=args.batch_size,
         only_sources=selected,
     )
+    neo4j = result.get("Neo4J", {})
+    if neo4j.get("resolved_graph") and neo4j.get("id_map"):
+        domain = record_native_id_resolution(
+            domain,
+            resolved_graph=str(neo4j["resolved_graph"]),
+            native_id_map=str(neo4j["id_map"]),
+        )
+        result["domain"] = {
+            "manifest": str(domain.paths.manifest),
+            "active_graph": str(domain.paths.data),
+            "source_graph": str(domain.paths.source_data),
+            "native_id_map": str(domain.paths.native_id_map),
+            "default_start_id": domain.start_uuid,
+        }
     print(json.dumps(result, indent=2))
 
 
 def backend_config_requires_gpu(config_path: Path) -> bool:
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    routing = {str(value) for value in config.get("uuidRouting", [])}
+    routing = {str(value) for value in config.get("idRouting", [])}
     enabled = {
         str(entry.get("id", ""))
         for entry in config.get("backends", [])
@@ -635,7 +666,7 @@ def safe_path_component(value: str, *, label: str) -> str:
 def read_start_uuids(path: str | Path) -> list[str]:
     source = Path(path).expanduser().resolve()
     if not source.is_file():
-        raise FileNotFoundError(f"Start UUID file does not exist: {source}")
+        raise FileNotFoundError(f"Start-ID file does not exist: {source}")
 
     values = [
         line.strip()
@@ -643,7 +674,7 @@ def read_start_uuids(path: str | Path) -> list[str]:
         if line.strip() and not line.lstrip().startswith("#")
     ]
     if not values:
-        raise ValueError(f"Start UUID file is empty: {source}")
+        raise ValueError(f"Start-ID file is empty: {source}")
     return values
 
 
@@ -679,6 +710,8 @@ def run_domain(args: argparse.Namespace) -> None:
         start_uuids = read_start_uuids(start_uuids_file)
     else:
         start_uuids = [wrapper_start_uuid or forwarded_start_uuid or domain.start_uuid]
+    if domain.paths.native_id_map:
+        start_uuids = [str(resolve_domain_node_id(domain, value)) for value in start_uuids]
 
     repetitions = int(getattr(args, "repetitions", 1))
     if repetitions < 1:
@@ -758,7 +791,7 @@ def run_domain(args: argparse.Namespace) -> None:
         writer.writeheader()
 
         for start_uuid in start_uuids:
-            uuid_directory = safe_path_component(start_uuid, label="start UUID")
+            uuid_directory = safe_path_component(start_uuid, label="start ID")
             for repetition in range(1, repetitions + 1):
                 current_run += 1
                 log_file = measurement_root / "logs" / uuid_directory / f"{repetition}.jsonl"
@@ -787,7 +820,7 @@ def run_domain(args: argparse.Namespace) -> None:
                 ]
 
                 step(
-                    f"Running BFS for {domain.domain_id}: UUID {start_uuid}, "
+                    f"Running BFS for {domain.domain_id}: ID {start_uuid}, "
                     f"repetition {repetition}/{repetitions} ({current_run}/{total_runs})"
                 )
                 rendered_command = [str(item) for item in command]
@@ -1004,6 +1037,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
         dry_run=args.dry_run,
         skip_build=args.skip_build,
         skip_services=args.skip_services,
+        resume=args.resume,
     )
 
 
@@ -1042,7 +1076,7 @@ def add_university_options(parser: argparse.ArgumentParser) -> None:
         help=(
             "Storage placement strategy. 'schema' (default) keeps every logical type on "
             "the backend assigned by its graph-shape source field; 'identity-hash' "
-            "distributes individual objects across the UUID routing layout. The strategy "
+            "distributes individual objects across the ID routing layout. The strategy "
             "is also used when automatically migrating legacy --input graphs."
         ),
     )
@@ -1050,8 +1084,8 @@ def add_university_options(parser: argparse.ArgumentParser) -> None:
         "--reroute-input",
         action="store_true",
         help=(
-            "Regenerate UUID suffix routing and source fields for --input even when the "
-            "input already contains uuidRouting metadata."
+            "Regenerate ID MSB prefix routing and source fields for --input even when the "
+            "input already contains idRouting metadata."
         ),
     )
     parser.add_argument(
@@ -1060,7 +1094,7 @@ def add_university_options(parser: argparse.ArgumentParser) -> None:
         choices=["Neo4J", "ArangoDB", "GPU"],
         default=None,
         help=(
-            "Optional ordered UUID routing layout. By default it is read from uuidRouting/"
+            "Optional ordered ID routing layout. By default it is read from idRouting/"
             "storageBackends in the schema, or derived from the schema type sources."
         ),
     )
@@ -1083,7 +1117,7 @@ def add_ldbc_options(parser: argparse.ArgumentParser, *, require_input: bool) ->
         nargs="+",
         choices=["Neo4J", "ArangoDB", "GPU"],
         default=["Neo4J", "ArangoDB", "GPU"],
-        help="Ordered UUID storage layout used for deterministic per-object routing.",
+        help="Ordered backend layout encoded in the most-significant bits of each uint64 ID.",
     )
     parser.add_argument(
         "--default-source",
@@ -1162,16 +1196,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     roots = run_parser.add_mutually_exclusive_group()
-    roots.add_argument("--start-uuid", help="Run from one UUID instead of the domain default.")
+    roots.add_argument("--start-uuid", help="Run from one uint64 global ID instead of the domain default.")
     roots.add_argument(
         "--start-uuids-file",
-        help="Run every non-empty, non-comment UUID in this text file.",
+        help="Run every non-empty, non-comment uint64 global ID in this text file.",
     )
     run_parser.add_argument(
         "--repetitions",
         type=int,
         default=1,
-        help="Number of BFS executions per start UUID (default: 1).",
+        help="Number of BFS executions per start ID (default: 1).",
     )
     run_parser.add_argument(
         "--overwrite-logs",
@@ -1224,6 +1258,11 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--dry-run", action="store_true", help="Print setup and benchmark commands without executing them.")
     benchmark.add_argument("--skip-build", action="store_true")
     benchmark.add_argument("--skip-services", action="store_true")
+    benchmark.add_argument(
+        "--resume",
+        action="store_true",
+        help="Continue the same non-empty run directory and rerun only failed or missing work.",
+    )
     benchmark.set_defaults(handler=run_benchmark)
 
     benchmark_merge = commands.add_parser(
@@ -1253,7 +1292,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["prefer-ok", "keep-first", "keep-last", "error"],
         default="prefer-ok",
         help=(
-            "Resolve duplicate scenario/system/phase/repetition/start-UUID records. "
+            "Resolve duplicate scenario/system/phase/repetition/start-ID records. "
             "prefer-ok replaces failed attempts with successful retries."
         ),
     )

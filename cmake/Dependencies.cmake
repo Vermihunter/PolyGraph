@@ -1,6 +1,5 @@
 include_guard(GLOBAL)
 
-include(dependencies/Boost)
 include(dependencies/Spdlog)
 
 if(CPGDB_BUILD_BACKENDS)

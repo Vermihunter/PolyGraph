@@ -4,14 +4,12 @@
  */
 
 #include "server/services/TraversalService.hpp"
+#include "utilities/uuid.hpp"
 
 #include "algorithms/ExpandSpec.hpp"
 #include "algorithms/bfs/BfsExecutor.hpp"
 #include "algorithms/bfs/BfsOptions.hpp"
 
-#include <boost/lexical_cast.hpp>
-#include <boost/uuid/uuid.hpp>
-#include <boost/uuid/uuid_io.hpp>
 
 namespace cpgdb::services {
 
@@ -20,7 +18,7 @@ namespace cpgdb::services {
 
     BfsResult TraversalService::runBfs(const std::string &source_vertex_uuid, const dto::BfsRequest &request) {
         BfsExecutor bfs(*context_.placement_catalog);
-        const NodeRef source = context_.node_ref(boost::lexical_cast<boost::uuids::uuid>(source_vertex_uuid));
+        const NodeRef source = context_.node_ref(global_id_from_string(source_vertex_uuid));
         const BfsOptions options{.max_depth = static_cast<std::uint32_t>(request.maxDepth),
                                  .return_predecessors = true,
                                  .allow_native_pushdown = false,
@@ -29,7 +27,7 @@ namespace cpgdb::services {
     }
 
     std::vector<MinimalAdjacencyRow> TraversalService::getNeighbors(const std::string &source_vertex_uuid) {
-        const NodeRef source = context_.node_ref(boost::lexical_cast<boost::uuids::uuid>(source_vertex_uuid));
+        const NodeRef source = context_.node_ref(global_id_from_string(source_vertex_uuid));
         std::vector frontier{source};
 
         const ExpandSpec spec{};
@@ -47,7 +45,7 @@ namespace cpgdb::services {
                                           const std::function<void(const BfsLayerEvent &)> &on_layer) {
         (void) graph_id;
         BfsExecutor bfs(*context_.placement_catalog);
-        const NodeRef source = context_.node_ref(boost::lexical_cast<boost::uuids::uuid>(source_vertex_id));
+        const NodeRef source = context_.node_ref(global_id_from_string(source_vertex_id));
         return bfs.run_streaming(source, ExpandSpec{},
                                  BfsOptions{.max_depth = max_depth,
                                             .return_predecessors = return_predecessors,

@@ -15,6 +15,14 @@ def main() -> int:
     parser.add_argument("--backend-config")
     parser.add_argument("--batch-size", type=int, default=5000)
     parser.add_argument("--reset", action="store_true")
+    parser.add_argument(
+        "--resolved-output",
+        help="Write the graph with Neo4j native node/relationship IDs resolved into global uint64 IDs.",
+    )
+    parser.add_argument(
+        "--id-map-output",
+        help="Write an old-ID to resolved-native-ID JSONL sidecar (defaults next to --resolved-output).",
+    )
     parser.add_argument("--only-source", choices=["Neo4J", "ArangoDB"], action="append", default=[])
     parser.add_argument("--arango-url", default="http://localhost:8529")
     parser.add_argument("--arango-user", default="root")
@@ -36,6 +44,7 @@ def main() -> int:
             json.dumps(
                 {
                     "version": 1,
+                    "idRouting": ["Neo4J", "ArangoDB"],
                     "backends": [
                         {
                             "id": "Neo4J",
@@ -76,6 +85,8 @@ def main() -> int:
             reset=args.reset,
             batch_size=args.batch_size,
             only_sources=args.only_source or None,
+            resolved_output=args.resolved_output,
+            id_map_output=args.id_map_output,
         )
         print(json.dumps(result, indent=2))
     finally:
