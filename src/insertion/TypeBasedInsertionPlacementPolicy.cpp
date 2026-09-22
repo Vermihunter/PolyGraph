@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace cpgdb::insertion {
+namespace polygraph::insertion {
 
     TypeBasedInsertionPlacementPolicy::TypeBasedInsertionPlacementPolicy(RouteMap node_routes, RouteMap edge_routes,
                                                                          std::vector<BackendId> default_node_backends,
@@ -40,4 +40,4 @@ namespace cpgdb::insertion {
                                  .encode_home_backend_in_uuid = encode_home_backend_in_uuid_};
     }
 
-} // namespace cpgdb::insertion
+} // namespace polygraph::insertion

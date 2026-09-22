@@ -14,7 +14,7 @@
 #include <string>
 #include <utility>
 
-namespace cpgdb::insertion {
+namespace polygraph::insertion {
 
     InsertionCoordinator::InsertionCoordinator(DatabaseContext &database_context,
                                                std::shared_ptr<const IInsertionPlacementPolicy> placement_policy,
@@ -39,11 +39,39 @@ namespace cpgdb::insertion {
         return std::move(receipts.front());
     }
 
+    InsertionReceipt InsertionCoordinator::insert(Node node, const GlobalId backend_local_id) {
+        BackendLoadSnapshot load_snapshot(*load_tracker_);
+        PlacementContext context{.backend_registry = *database_context_.backend_registry,
+                                 .load_snapshot = load_snapshot};
+        PlannedEntity planned = plan(std::move(node), context, backend_local_id);
+        if (planned.decision.home_backend.has_value()) {
+            context.load_snapshot.reserve_owned(*planned.decision.home_backend, planned.item.kind());
+        }
+        const std::vector<PlannedEntity> entities{planned};
+        execute(entities);
+        record_committed(entities);
+        return receipt_for(planned);
+    }
+
     InsertionReceipt InsertionCoordinator::insert(Edge edge) {
         std::vector<OwnedInsertionEntity> entities;
         entities.emplace_back(std::move(edge));
         auto receipts = insert_batch(std::move(entities));
         return std::move(receipts.front());
+    }
+
+    InsertionReceipt InsertionCoordinator::insert(Edge edge, const GlobalId backend_local_id) {
+        BackendLoadSnapshot load_snapshot(*load_tracker_);
+        PlacementContext context{.backend_registry = *database_context_.backend_registry,
+                                 .load_snapshot = load_snapshot};
+        PlannedEntity planned = plan(std::move(edge), context, backend_local_id);
+        if (planned.decision.home_backend.has_value()) {
+            context.load_snapshot.reserve_owned(*planned.decision.home_backend, planned.item.kind());
+        }
+        const std::vector<PlannedEntity> entities{planned};
+        execute(entities);
+        record_committed(entities);
+        return receipt_for(planned);
     }
 
     std::vector<InsertionReceipt> InsertionCoordinator::insert_batch(std::vector<OwnedInsertionEntity> entities) {
@@ -77,18 +105,26 @@ namespace cpgdb::insertion {
         return receipts;
     }
 
-    InsertionCoordinator::PlannedEntity InsertionCoordinator::plan(Node node, PlacementContext &context) const {
+    InsertionCoordinator::PlannedEntity
+    InsertionCoordinator::plan(Node node, PlacementContext &context,
+                               const std::optional<GlobalId> backend_local_id) const {
         PlacementDecision decision = placement_policy_->place_node(node, context);
         validate_placement_decision(decision, context.backend_registry);
-        node.global_id = prepare_id(node.global_id, decision, database_context_.id_routing_backends);
+        node.global_id = backend_local_id.has_value()
+                                 ? prepare_local_id(*backend_local_id, decision, database_context_.id_routing_backends)
+                                 : prepare_id(node.global_id, decision, database_context_.id_routing_backends);
         return PlannedEntity{.item = InsertionItem(std::make_shared<const Node>(std::move(node))),
                              .decision = std::move(decision)};
     }
 
-    InsertionCoordinator::PlannedEntity InsertionCoordinator::plan(Edge edge, PlacementContext &context) const {
+    InsertionCoordinator::PlannedEntity
+    InsertionCoordinator::plan(Edge edge, PlacementContext &context,
+                               const std::optional<GlobalId> backend_local_id) const {
         PlacementDecision decision = placement_policy_->place_edge(edge, context);
         validate_placement_decision(decision, context.backend_registry);
-        edge.global_id = prepare_id(edge.global_id, decision, database_context_.id_routing_backends);
+        edge.global_id = backend_local_id.has_value()
+                                 ? prepare_local_id(*backend_local_id, decision, database_context_.id_routing_backends)
+                                 : prepare_id(edge.global_id, decision, database_context_.id_routing_backends);
         return PlannedEntity{.item = InsertionItem(std::make_shared<const Edge>(std::move(edge))),
                              .decision = std::move(decision)};
     }
@@ -102,6 +138,14 @@ namespace cpgdb::insertion {
             return BackendEncodedId::encode(id, *decision.home_backend, routing_backends);
         }
         return id;
+    }
+
+    GlobalId InsertionCoordinator::prepare_local_id(const GlobalId backend_local_id, const PlacementDecision &decision,
+                                                    const std::span<const BackendId> routing_backends) {
+        if (!decision.home_backend.has_value()) {
+            throw std::invalid_argument("Explicit backend-local IDs require a selected home backend");
+        }
+        return BackendEncodedId::from_local_id(backend_local_id, *decision.home_backend, routing_backends);
     }
 
     void InsertionCoordinator::execute(const std::vector<PlannedEntity> &planned) const {
@@ -143,4 +187,4 @@ namespace cpgdb::insertion {
                                 .home_backend = planned.decision.home_backend};
     }
 
-} // namespace cpgdb::insertion
+} // namespace polygraph::insertion

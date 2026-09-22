@@ -7,12 +7,12 @@
 // Created by akos on 30. 4. 2026.
 //
 
-#ifndef CPGDB_DIRECTION_HPP
-#define CPGDB_DIRECTION_HPP
+#ifndef POLYGRAPH_DIRECTION_HPP
+#define POLYGRAPH_DIRECTION_HPP
 
-namespace cpgdb {
+namespace polygraph {
 enum class Direction { Directed, Undirected, Both };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_DIRECTION_HPP
+#endif // POLYGRAPH_DIRECTION_HPP

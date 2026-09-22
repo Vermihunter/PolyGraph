@@ -9,7 +9,7 @@
 #include "query/ResultParseType.hpp"
 #include "utilities/json.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 
 class Neo4JResponseProcessor {
   public:
@@ -23,4 +23,4 @@ class Neo4JResponseProcessor {
                                                  ResultParseType parse_type) const = 0;
 };
 
-} // namespace cpgdb
+} // namespace polygraph

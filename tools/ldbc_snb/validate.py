@@ -15,7 +15,7 @@ from tools.graphio.id_codec import BackendLayout, backend_id
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate a converted CPGDB LDBC SNB graph.")
+    parser = argparse.ArgumentParser(description="Validate a converted PolyGraph LDBC SNB graph.")
     parser.add_argument("--graph", required=True, help="Converted .json/.jsonl graph")
     parser.add_argument("--report", help="Optional JSON validation report")
     args = parser.parse_args()

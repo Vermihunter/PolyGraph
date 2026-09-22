@@ -7,14 +7,14 @@
 // Created by akos on 16. 6. 2026.
 //
 
-#ifndef CPGDB_MINIMALADJACENCYROW_HPP
-#define CPGDB_MINIMALADJACENCYROW_HPP
+#ifndef POLYGRAPH_MINIMALADJACENCYROW_HPP
+#define POLYGRAPH_MINIMALADJACENCYROW_HPP
 
 #include "NodeRef.hpp"
 
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 /*
  * Minimal one-hop expansion result for graph algorithms.
  *
@@ -28,6 +28,6 @@ struct MinimalAdjacencyRow {
     std::vector<NodeRef> neighbors;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_MINIMALADJACENCYROW_HPP
+#endif // POLYGRAPH_MINIMALADJACENCYROW_HPP

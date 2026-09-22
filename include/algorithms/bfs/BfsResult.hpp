@@ -3,15 +3,15 @@
  * @brief External-ID result representation returned by BFS executors.
  */
 
-#ifndef CPGDB_BFSRESULT_HPP
-#define CPGDB_BFSRESULT_HPP
+#ifndef POLYGRAPH_BFSRESULT_HPP
+#define POLYGRAPH_BFSRESULT_HPP
 
 #include "data_model/EntityId.hpp"
 
 #include <cstdint>
 #include <unordered_map>
 
-namespace cpgdb {
+namespace polygraph {
 
 /** @brief Distances and optional predecessor tree keyed by stable graph ID. */
 struct BfsResult {
@@ -21,6 +21,6 @@ struct BfsResult {
     std::unordered_map<GlobalId, GlobalId, std::hash<GlobalId>> predecessor;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_BFSRESULT_HPP
+#endif // POLYGRAPH_BFSRESULT_HPP

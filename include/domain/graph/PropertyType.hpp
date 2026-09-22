@@ -7,10 +7,10 @@
 // Created by akos on 29. 3. 2026.
 //
 
-#ifndef CPGDB_PROPERTYTYPE_HPP
-#define CPGDB_PROPERTYTYPE_HPP
+#ifndef POLYGRAPH_PROPERTYTYPE_HPP
+#define POLYGRAPH_PROPERTYTYPE_HPP
 
-namespace cpgdb::domain {
+namespace polygraph::domain {
 enum class PropertyType {
     string,
     integer,
@@ -21,4 +21,4 @@ enum class PropertyType {
 };
 }
 
-#endif // CPGDB_PROPERTYTYPE_HPP
+#endif // POLYGRAPH_PROPERTYTYPE_HPP

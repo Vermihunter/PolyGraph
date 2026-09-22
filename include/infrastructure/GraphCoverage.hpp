@@ -3,8 +3,8 @@
  * @brief Declarations for graph coverage in the backend infrastructure module.
  */
 
-#ifndef CPGDB_INFRASTRUCTURE_GRAPH_COVERAGE_HPP
-#define CPGDB_INFRASTRUCTURE_GRAPH_COVERAGE_HPP
+#ifndef POLYGRAPH_INFRASTRUCTURE_GRAPH_COVERAGE_HPP
+#define POLYGRAPH_INFRASTRUCTURE_GRAPH_COVERAGE_HPP
 
 #include "algorithms/ExpandSpec.hpp"
 #include "data_model/NodeRef.hpp"
@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <unordered_set>
 
-namespace cpgdb {
+namespace polygraph {
 
 struct GraphCoverage {
     bool fresh = true;
@@ -29,6 +29,6 @@ struct GraphCoverage {
     [[nodiscard]] bool can_answer_whole_bfs(const NodeRef& source, const ExpandSpec& spec) const;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_INFRASTRUCTURE_GRAPH_COVERAGE_HPP
+#endif // POLYGRAPH_INFRASTRUCTURE_GRAPH_COVERAGE_HPP

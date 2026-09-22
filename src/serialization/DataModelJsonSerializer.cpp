@@ -11,7 +11,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace cpgdb {
+namespace polygraph {
 
     value_t DataModelJsonSerializer::json_primitive_to_value(const json &value) {
         if (value.is_number_unsigned()) {
@@ -36,4 +36,4 @@ namespace cpgdb {
         return nullptr;
     }
 
-} // namespace cpgdb
+} // namespace polygraph

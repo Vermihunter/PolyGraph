@@ -14,7 +14,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace cpgdb::config {
+namespace polygraph::config {
 
     std::string backend_id_to_string(BackendId id) {
         switch (id) {
@@ -26,20 +26,67 @@ namespace cpgdb::config {
                 return "Neo4J";
             case ARANGO:
                 return "ArangoDB";
+            case POSTGRESQL:
+                return "PostgreSQL";
+            case REDIS:
+                return "Redis";
+            case MMAP:
+                return "MMap";
             default:
+                if (is_gpu_backend_id(id)) {
+                    return "GPU:" + std::to_string(gpu_device_id_from_backend(id));
+                }
                 return "Backend#" + std::to_string(id);
         }
     }
 
     BackendId backend_id_from_string(const std::string &value) {
         static const std::unordered_map<std::string, BackendId> map{
-                {"GPU", GPU},           {"CuGraph", GPU},   {"cuGraph", GPU},   {"Memgraph", MEMGRAPH},
-                {"MEMGRAPH", MEMGRAPH}, {"Neo4J", NEO4J},   {"Neo4j", NEO4J},   {"NEO4J", NEO4J},
-                {"ArangoDB", ARANGO},   {"Arango", ARANGO}, {"ARANGO", ARANGO},
+                {"GPU", GPU},
+                {"CuGraph", GPU},
+                {"cuGraph", GPU},
+                {"Memgraph", MEMGRAPH},
+                {"MEMGRAPH", MEMGRAPH},
+                {"Neo4J", NEO4J},
+                {"Neo4j", NEO4J},
+                {"NEO4J", NEO4J},
+                {"ArangoDB", ARANGO},
+                {"Arango", ARANGO},
+                {"ARANGO", ARANGO},
+                {"Redis", REDIS},
+                {"REDIS", REDIS},
+                {"PostgreSQL", POSTGRESQL},
+                {"Postgres", POSTGRESQL},
+                {"POSTGRESQL", POSTGRESQL},
+                {"MMap", MMAP},
+                {"MMAP", MMAP},
+                {"MemoryMapped", MMAP},
         };
 
         if (auto it = map.find(value); it != map.end()) {
             return it->second;
+        }
+
+        const auto parse_gpu = [&](const std::string &prefix) -> std::optional<BackendId> {
+            if (!value.starts_with(prefix)) {
+                return std::nullopt;
+            }
+            const auto suffix = value.substr(prefix.size());
+            if (suffix.empty()) {
+                return std::nullopt;
+            }
+            std::size_t consumed = 0;
+            const auto device = std::stoul(suffix, &consumed);
+            if (consumed != suffix.size() || device >= insertion::BackendEncodedId::MAX_GPU_DEVICES) {
+                throw std::runtime_error("Invalid NVIDIA GPU id in backend id: " + value);
+            }
+            return gpu_backend_id(static_cast<unsigned int>(device));
+        };
+        if (const auto gpu = parse_gpu("GPU:"); gpu.has_value()) {
+            return *gpu;
+        }
+        if (const auto gpu = parse_gpu("GPU"); gpu.has_value()) {
+            return *gpu;
         }
 
         throw std::runtime_error("Unknown backend id: " + value);
@@ -47,10 +94,20 @@ namespace cpgdb::config {
 
     BackendKind backend_kind_from_string(const std::string &value) {
         static const std::unordered_map<std::string, BackendKind> map{
-                {"Neo4j", BackendKind::Neo4j},       {"Neo4J", BackendKind::Neo4j},
-                {"Arango", BackendKind::Arango},     {"ArangoDB", BackendKind::Arango},
-                {"Memgraph", BackendKind::Memgraph}, {"RamCache", BackendKind::RamCache},
-                {"CuGraph", BackendKind::CuGraph},   {"GPU", BackendKind::CuGraph},
+                {"Neo4j", BackendKind::Neo4j},
+                {"Neo4J", BackendKind::Neo4j},
+                {"Arango", BackendKind::Arango},
+                {"ArangoDB", BackendKind::Arango},
+                {"PostgreSQL", BackendKind::PostgreSQL},
+                {"Postgres", BackendKind::PostgreSQL},
+                {"Memgraph", BackendKind::Memgraph},
+                {"RamCache", BackendKind::RamCache},
+                {"CuGraph", BackendKind::CuGraph},
+                {"GPU", BackendKind::CuGraph},
+                {"RedisCache", BackendKind::RedisCache},
+                {"Redis", BackendKind::RedisCache},
+                {"MemoryMapped", BackendKind::MemoryMapped},
+                {"MMap", BackendKind::MemoryMapped},
                 {"Janus", BackendKind::Janus},
         };
 
@@ -67,12 +124,18 @@ namespace cpgdb::config {
                 return "Neo4j";
             case BackendKind::Arango:
                 return "Arango";
+            case BackendKind::PostgreSQL:
+                return "PostgreSQL";
             case BackendKind::Memgraph:
                 return "Memgraph";
             case BackendKind::RamCache:
                 return "RamCache";
             case BackendKind::CuGraph:
                 return "CuGraph";
+            case BackendKind::RedisCache:
+                return "RedisCache";
+            case BackendKind::MemoryMapped:
+                return "MemoryMapped";
             case BackendKind::Janus:
                 return "Janus";
             case BackendKind::COUNT:
@@ -236,7 +299,7 @@ namespace cpgdb::config {
 
     namespace {
 
-#ifdef CPGDB_ENABLE_GPU
+#ifdef POLYGRAPH_ENABLE_GPU
         constexpr bool gpu_backend_enabled = true;
 #else
         constexpr bool gpu_backend_enabled = false;
@@ -329,7 +392,12 @@ namespace cpgdb::config {
         }
         for (const auto &value: *configured) {
             const BackendId id = backend_id_from_string(value.get<std::string>());
-            if (!enabled.contains(id)) {
+            const bool enabled_owner =
+                    is_gpu_backend_id(id)
+                            ? std::ranges::any_of(
+                                      enabled, [](const BackendId candidate) { return is_gpu_backend_id(candidate); })
+                            : enabled.contains(id);
+            if (!enabled_owner) {
                 throw std::runtime_error("ID routing backend is not enabled: " + backend_id_to_string(id));
             }
             if (std::ranges::find(result, id) != result.end()) {
@@ -352,11 +420,11 @@ namespace cpgdb::config {
         }
         out << "\n";
 
-        out << "  ID routing (MSB):";
+        out << "  authoritative ID owners:";
         for (std::size_t code = 0; code < context.id_routing_backends.size(); ++code) {
             out << ' ' << code << '=' << backend_id_to_string(context.id_routing_backends[code]);
         }
-        out << " (bits=" << insertion::BackendEncodedId::bit_count(context.id_routing_backends.size()) << ")\n";
+        out << " (location-mask bits=" << insertion::BackendEncodedId::LOCATION_BITS << ")\n";
 
         out << "  backends:\n";
         for (const auto &[id, descriptor]: context.backend_registry->descriptors()) {
@@ -367,4 +435,4 @@ namespace cpgdb::config {
         }
     }
 
-} // namespace cpgdb::config
+} // namespace polygraph::config

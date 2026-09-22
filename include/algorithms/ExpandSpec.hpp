@@ -3,15 +3,15 @@
  * @brief Defines one-hop graph expansion filtering and direction semantics.
  */
 
-#ifndef CPGDB_ALGORITHMS_EXPAND_SPEC_HPP
-#define CPGDB_ALGORITHMS_EXPAND_SPEC_HPP
+#ifndef POLYGRAPH_ALGORITHMS_EXPAND_SPEC_HPP
+#define POLYGRAPH_ALGORITHMS_EXPAND_SPEC_HPP
 
 #include "domain/graph/Direction.hpp"
 #include "domain/graph/TypeId.hpp"
 
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 /**
  * @brief Describes which incident edges and destination vertices may be traversed.
@@ -37,6 +37,6 @@ struct ExpandSpec {
     [[nodiscard]] bool allows_target_type(TypeId node_type) const noexcept;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_ALGORITHMS_EXPAND_SPEC_HPP
+#endif // POLYGRAPH_ALGORITHMS_EXPAND_SPEC_HPP

@@ -11,7 +11,7 @@
 #include <memory>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 struct Record {
     std::vector<Value> fields;
@@ -27,4 +27,4 @@ struct Record {
 
 using record_t = std::unique_ptr<Record>;
 
-} // namespace cpgdb
+} // namespace polygraph

@@ -3,8 +3,8 @@
  * @brief Declarations for get neighbors batch query in the query dispatch module.
  */
 
-#ifndef CPGDB_QUERY_GET_NEIGHBORS_BATCH_QUERY_HPP
-#define CPGDB_QUERY_GET_NEIGHBORS_BATCH_QUERY_HPP
+#ifndef POLYGRAPH_QUERY_GET_NEIGHBORS_BATCH_QUERY_HPP
+#define POLYGRAPH_QUERY_GET_NEIGHBORS_BATCH_QUERY_HPP
 
 #include "algorithms/ExpandSpec.hpp"
 #include "data_model/NodeRef.hpp"
@@ -12,7 +12,7 @@
 
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 class GetNeighborsBatchQuery final : public Query {
   public:
@@ -28,6 +28,6 @@ class GetNeighborsBatchQuery final : public Query {
     ExpandSpec spec_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_QUERY_GET_NEIGHBORS_BATCH_QUERY_HPP
+#endif // POLYGRAPH_QUERY_GET_NEIGHBORS_BATCH_QUERY_HPP

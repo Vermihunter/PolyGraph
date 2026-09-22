@@ -3,15 +3,15 @@
  * @brief Generic row-oriented result returned by visitor-based queries.
  */
 
-#ifndef CPGDB_QUERY_QUERY_RESULT_HPP
-#define CPGDB_QUERY_QUERY_RESULT_HPP
+#ifndef POLYGRAPH_QUERY_QUERY_RESULT_HPP
+#define POLYGRAPH_QUERY_QUERY_RESULT_HPP
 
 #include "data_model/Record.hpp"
 
 #include <memory>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 struct QueryResult;
 /// Owning pointer used by query and visitor interfaces.
@@ -26,6 +26,6 @@ struct QueryResult {
     void combine(query_result_t other);
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_QUERY_QUERY_RESULT_HPP
+#endif // POLYGRAPH_QUERY_QUERY_RESULT_HPP

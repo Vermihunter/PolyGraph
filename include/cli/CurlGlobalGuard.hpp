@@ -3,10 +3,10 @@
  * @brief Declarations for curl global guard in the command-line and runtime configuration module.
  */
 
-#ifndef CPGDB_CLI_CURL_GLOBAL_GUARD_HPP
-#define CPGDB_CLI_CURL_GLOBAL_GUARD_HPP
+#ifndef POLYGRAPH_CLI_CURL_GLOBAL_GUARD_HPP
+#define POLYGRAPH_CLI_CURL_GLOBAL_GUARD_HPP
 
-namespace cpgdb::runtime {
+namespace polygraph::runtime {
 
 class CurlGlobalGuard {
   public:
@@ -16,6 +16,6 @@ class CurlGlobalGuard {
     ~CurlGlobalGuard();
 };
 
-} // namespace cpgdb::runtime
+} // namespace polygraph::runtime
 
-#endif // CPGDB_CLI_CURL_GLOBAL_GUARD_HPP
+#endif // POLYGRAPH_CLI_CURL_GLOBAL_GUARD_HPP

@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
     struct LocallyDeployedNeo4JResponseProcessor::Impl final : Neo4JResponseProcessor {
         DatabaseContext &db_context_;
@@ -30,7 +30,7 @@ namespace cpgdb {
         explicit Impl(DatabaseContext &db_context) : db_context_(db_context) {}
 
         [[nodiscard]] query_result_t process(const json &response, ResultParseType parse_type) const override {
-            CPGDB_PROFILE_FUNCTION();
+            POLYGRAPH_PROFILE_FUNCTION();
 
             if (response.contains("errors") && !response["errors"].empty()) {
                 throw std::runtime_error("Neo4j returned errors: " + response["errors"].dump());
@@ -51,7 +51,7 @@ namespace cpgdb {
 
     private:
         [[nodiscard]] query_result_t construct_result(const json &result_block, ResultParseType parse_type) const {
-            CPGDB_PROFILE_FUNCTION();
+            POLYGRAPH_PROFILE_FUNCTION();
 
             auto result = std::make_unique<QueryResult>();
 
@@ -131,9 +131,9 @@ namespace cpgdb {
             throw std::runtime_error("Neo4j ID property '" + name + "' has unsupported JSON type: " + value->dump());
         }
 
-        [[nodiscard]] GlobalId native_global_id(const json &native_value) const {
+        [[nodiscard]] GlobalId local_global_id(const json &native_value) const {
             if (!native_value.is_number_integer() && !native_value.is_number_unsigned()) {
-                throw std::runtime_error("Neo4j native ID is not an integer: " + native_value.dump());
+                throw std::runtime_error("Neo4j localId is not an integer: " + native_value.dump());
             }
             const auto native_id = native_value.get<std::uint64_t>();
             return insertion::BackendEncodedId::from_local_id(native_id, NEO4J, db_context_.id_routing_backends);
@@ -148,9 +148,9 @@ namespace cpgdb {
                 return *stored;
             }
             if (!row.contains("native_id")) {
-                throw std::runtime_error("Neo4j real node does not contain native_id: " + row.dump());
+                throw std::runtime_error("Neo4j real node does not contain localId projection: " + row.dump());
             }
-            return native_global_id(row["native_id"]);
+            return local_global_id(row["native_id"]);
         }
 
 
@@ -210,7 +210,7 @@ namespace cpgdb {
 
         static std::optional<std::string> first_logical_label(const std::vector<std::string> &labels) {
             for (const auto &label: labels) {
-                if (label != "Proxy" && label != "CPGDBVertex" && label != "__GraphNode") {
+                if (label != "Proxy" && label != "POLYGRAPHVertex" && label != "__GraphNode") {
                     return label;
                 }
             }
@@ -248,7 +248,7 @@ namespace cpgdb {
         }
 
         [[nodiscard]] Node json_to_node(const json &row) const {
-            CPGDB_PROFILE_FUNCTION();
+            POLYGRAPH_PROFILE_FUNCTION();
 
             const std::vector<std::string> labels = get_labels(row);
             const auto explicit_type = get_string_property_opt(row, "type");
@@ -297,14 +297,14 @@ namespace cpgdb {
             if (native == row.end()) {
                 throw std::runtime_error("Neo4j edge is missing " + prefix + "_native_id: " + row.dump());
             }
-            return native_global_id(*native);
+            return local_global_id(*native);
         }
 
         [[nodiscard]] Edge json_to_edge(const json &row) const {
-            CPGDB_PROFILE_FUNCTION();
+            POLYGRAPH_PROFILE_FUNCTION();
 
             const auto stored_id = get_global_id_property_opt(row, "uuid");
-            const GlobalId edge_id = stored_id.has_value() ? *stored_id : native_global_id(row.at("native_id"));
+            const GlobalId edge_id = stored_id.has_value() ? *stored_id : local_global_id(row.at("native_id"));
             const std::string edge_type_name = get_required_string_property(row, "type", "Neo4j edge");
 
             return Edge{.global_id = edge_id,
@@ -325,4 +325,4 @@ namespace cpgdb {
         return impl_->process(response, parse_type);
     }
 
-} // namespace cpgdb
+} // namespace polygraph

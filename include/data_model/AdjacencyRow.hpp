@@ -7,17 +7,17 @@
 // Created by akos on 1. 5. 2026.
 //
 
-#ifndef CPGDB_ADJACENCYROW_HPP
-#define CPGDB_ADJACENCYROW_HPP
+#ifndef POLYGRAPH_ADJACENCYROW_HPP
+#define POLYGRAPH_ADJACENCYROW_HPP
 #include "NeighborRef.hpp"
 #include "Node.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 struct AdjacencyRow {
     NodeRef source;
     std::vector<NeighborRef> neighbors;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_ADJACENCYROW_HPP
+#endif // POLYGRAPH_ADJACENCYROW_HPP

@@ -7,7 +7,7 @@
 
 #include <stdexcept>
 
-namespace cpgdb {
+namespace polygraph {
 
     QueryVisitor::QueryVisitor(DatabaseContext &database_context) noexcept : db_context_(database_context) {}
 
@@ -21,4 +21,4 @@ namespace cpgdb {
         throw std::logic_error("This query visitor does not support InsertBatchQuery");
     }
 
-} // namespace cpgdb
+} // namespace polygraph

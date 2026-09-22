@@ -3,15 +3,15 @@
  * @brief Streaming events emitted after each completed BFS depth.
  */
 
-#ifndef CPGDB_BFSLAYER_HPP
-#define CPGDB_BFSLAYER_HPP
+#ifndef POLYGRAPH_BFSLAYER_HPP
+#define POLYGRAPH_BFSLAYER_HPP
 
 #include "data_model/NodeRef.hpp"
 
 #include <cstdint>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 /** @brief One predecessor-tree edge discovered while constructing a BFS layer. */
 struct BfsTreeEdgeRef {
@@ -31,6 +31,6 @@ struct BfsLayerEvent {
     std::vector<BfsTreeEdgeRef> tree_edges;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_BFSLAYER_HPP
+#endif // POLYGRAPH_BFSLAYER_HPP

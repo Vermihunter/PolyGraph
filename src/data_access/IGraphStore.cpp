@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace cpgdb {
+namespace polygraph {
 
     IGraphStore::~IGraphStore() = default;
 
@@ -38,6 +38,36 @@ namespace cpgdb {
         return minimal_rows;
     }
 
+    void IGraphStore::stream_neighbor_candidates(std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth,
+                                                 const BfsOptions &options, const NeighborBatchConsumer &consumer) {
+        if (!consumer || frontier.empty()) {
+            return;
+        }
+
+        auto rows = get_minimal_neighbors_batch(frontier, spec, depth, options);
+        std::vector<NodeRef> batch;
+        batch.reserve(options.streaming_candidate_batch_size);
+
+        for (const auto &row: rows) {
+            for (const NodeRef &neighbor: row.neighbors) {
+                batch.push_back(neighbor);
+                if (batch.size() >= options.streaming_candidate_batch_size) {
+                    consumer(std::span<const NodeRef>(batch));
+                    batch.clear();
+                }
+            }
+        }
+        if (!batch.empty()) {
+            consumer(std::span<const NodeRef>(batch));
+        }
+    }
+
+    bool IGraphStore::can_expand(const NodeRef &source, const ExpandSpec &spec) const {
+        const BackendDescriptor &value = descriptor();
+        return value.capabilities.supports_batch_neighbors && value.coverage.fresh &&
+               value.coverage.covers_expand_spec(source, spec);
+    }
+
     bool IGraphStore::can_run_native_bfs(const NodeRef &source, const ExpandSpec &spec,
                                          const BfsOptions &options) const {
         const BackendDescriptor &value = descriptor();
@@ -49,4 +79,4 @@ namespace cpgdb {
         throw std::runtime_error("Native BFS not supported by this graph store");
     }
 
-} // namespace cpgdb
+} // namespace polygraph

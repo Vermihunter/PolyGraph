@@ -8,7 +8,7 @@
 #include <limits>
 #include <stdexcept>
 
-namespace cpgdb::insertion {
+namespace polygraph::insertion {
 
     IHomeBackendSelector::~IHomeBackendSelector() = default;
 
@@ -61,4 +61,4 @@ namespace cpgdb::insertion {
         return ownership_score + storage_score + static_cast<double>(backend_priority) * weights_.backend_priority;
     }
 
-} // namespace cpgdb::insertion
+} // namespace polygraph::insertion

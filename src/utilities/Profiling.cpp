@@ -10,7 +10,7 @@
 #include <mutex>
 #include <unordered_map>
 
-namespace cpgdb::prof {
+namespace polygraph::prof {
     namespace {
 
         std::mutex profiler_mutex;
@@ -49,7 +49,7 @@ namespace cpgdb::prof {
             total_inclusive = std::max(total_inclusive, row.stats.inclusive_ns);
         }
 
-        output << "\n================ CPGDB PROFILER ================\n"
+        output << "\n================ PolyGraph PROFILER ================\n"
                << std::left << std::setw(8) << "Calls" << std::setw(14) << "Incl ms" << std::setw(14) << "Self ms"
                << std::setw(12) << "Avg us" << std::setw(12) << "Max ms" << std::setw(9) << "Incl %"
                << "Function\n"
@@ -97,4 +97,4 @@ namespace cpgdb::prof {
         Profiler::add(frame.name, inclusive_ns, self_ns);
     }
 
-} // namespace cpgdb::prof
+} // namespace polygraph::prof

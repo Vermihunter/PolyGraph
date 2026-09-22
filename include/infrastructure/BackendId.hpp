@@ -7,17 +7,17 @@
 // Created by akos on 30. 4. 2026.
 //
 
-#ifndef CPGDB_BACKENDID_HPP
-#define CPGDB_BACKENDID_HPP
+#ifndef POLYGRAPH_BACKENDID_HPP
+#define POLYGRAPH_BACKENDID_HPP
 
 #include <cstdint>
 
-namespace cpgdb {
+namespace polygraph {
 /**
  * Stable id of a logical backend, e.g. 1 = Neo4jMain, 2 = MemgraphHotCache
  */
 using BackendId = std::uint32_t;
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_BACKENDID_HPP
+#endif // POLYGRAPH_BACKENDID_HPP

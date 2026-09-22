@@ -3,13 +3,14 @@
  * @brief Declarations for neo4 jquery visitor in the graph-store access module.
  */
 
-#ifndef CPGDB_DATA_ACCESS_NEO4J_QUERY_VISITOR_HPP
-#define CPGDB_DATA_ACCESS_NEO4J_QUERY_VISITOR_HPP
+#ifndef POLYGRAPH_DATA_ACCESS_NEO4J_QUERY_VISITOR_HPP
+#define POLYGRAPH_DATA_ACCESS_NEO4J_QUERY_VISITOR_HPP
 
 #include "algorithms/ExpandSpec.hpp"
 #include "data_model/AdjacencyRow.hpp"
 #include "data_model/MinimalAdjacencyRow.hpp"
 #include "infrastructure/BackendConnectionConfig.hpp"
+#include "infrastructure/scheduling/BackendRequestScheduler.hpp"
 #include "query/QueryVisitor.hpp"
 
 #include <cstddef>
@@ -17,11 +18,12 @@
 #include <span>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 class Neo4JQueryVisitor final : public QueryVisitor {
   public:
-    Neo4JQueryVisitor(DatabaseContext& database_context, const BackendConnectionConfig& config);
+    Neo4JQueryVisitor(DatabaseContext& database_context, const BackendConnectionConfig& config,
+                      std::shared_ptr<BackendRequestScheduler> scheduler);
     ~Neo4JQueryVisitor() override;
 
     query_result_t visit(const GetAllVerticesQuery& query) override;
@@ -41,13 +43,14 @@ class Neo4JQueryVisitor final : public QueryVisitor {
         std::size_t batch_size,
         std::size_t max_concurrent_requests,
         std::size_t request_retries,
-        std::size_t retry_delay_ms) const;
+        std::size_t retry_delay_ms,
+        const BackendRequestScheduling& scheduling) const;
 
   private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_DATA_ACCESS_NEO4J_QUERY_VISITOR_HPP
+#endif // POLYGRAPH_DATA_ACCESS_NEO4J_QUERY_VISITOR_HPP

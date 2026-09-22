@@ -3,8 +3,8 @@
  * @brief Declares the planner-driven distributed breadth-first-search executor.
  */
 
-#ifndef CPGDB_ALGORITHMS_BFS_EXECUTOR_HPP
-#define CPGDB_ALGORITHMS_BFS_EXECUTOR_HPP
+#ifndef POLYGRAPH_ALGORITHMS_BFS_EXECUTOR_HPP
+#define POLYGRAPH_ALGORITHMS_BFS_EXECUTOR_HPP
 
 #include "algorithms/ExpandSpec.hpp"
 #include "algorithms/bfs/BfsLayer.hpp"
@@ -19,7 +19,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 /**
  * @brief Executes BFS against one logical graph distributed across registered stores.
@@ -88,6 +88,13 @@ class BfsExecutor {
         const BfsOptions& options,
         const std::function<void(const BfsLayerEvent&)>& on_layer) const;
 
+    /** @brief Candidate-streaming fallback used when predecessor edges are not requested. */
+    [[nodiscard]] BfsResult run_distributed_frontier_bfs_candidates(
+        const NodeRef& source,
+        const ExpandSpec& spec,
+        const BfsOptions& options,
+        const std::function<void(const BfsLayerEvent&)>& on_layer) const;
+
     /** @brief Converts compact dense state to the external ID-keyed representation. */
     [[nodiscard]] static BfsResult make_result(const DenseBfsState& state,
                                                bool include_predecessors);
@@ -97,6 +104,6 @@ class BfsExecutor {
     NeighborExpander expander_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_ALGORITHMS_BFS_EXECUTOR_HPP
+#endif // POLYGRAPH_ALGORITHMS_BFS_EXECUTOR_HPP

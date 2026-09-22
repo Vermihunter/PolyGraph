@@ -5,14 +5,14 @@
  * module.
  */
 
-#ifndef CPGDB_DATA_ACCESS_NEO4J_LOCAL_RESPONSE_PROCESSOR_HPP
-#define CPGDB_DATA_ACCESS_NEO4J_LOCAL_RESPONSE_PROCESSOR_HPP
+#ifndef POLYGRAPH_DATA_ACCESS_NEO4J_LOCAL_RESPONSE_PROCESSOR_HPP
+#define POLYGRAPH_DATA_ACCESS_NEO4J_LOCAL_RESPONSE_PROCESSOR_HPP
 
 #include "data_access/adapters/Neo4J/response_processors/Neo4JResponseProcessor.hpp"
 
 #include <memory>
 
-namespace cpgdb {
+namespace polygraph {
 
 class DatabaseContext;
 
@@ -29,6 +29,6 @@ class LocallyDeployedNeo4JResponseProcessor final : public Neo4JResponseProcesso
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_DATA_ACCESS_NEO4J_LOCAL_RESPONSE_PROCESSOR_HPP
+#endif // POLYGRAPH_DATA_ACCESS_NEO4J_LOCAL_RESPONSE_PROCESSOR_HPP

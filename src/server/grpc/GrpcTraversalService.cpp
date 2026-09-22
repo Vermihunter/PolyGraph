@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace cpgdb::server::grpc_api {
+namespace polygraph::server::grpc_api {
     namespace {
 
         std::string uuid_to_string(const GlobalId &id) { return global_id_to_string(id); }
@@ -84,4 +84,4 @@ namespace cpgdb::server::grpc_api {
         }
     }
 
-} // namespace cpgdb::server::grpc_api
+} // namespace polygraph::server::grpc_api

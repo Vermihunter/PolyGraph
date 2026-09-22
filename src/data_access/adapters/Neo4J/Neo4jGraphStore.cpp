@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <utility>
 
-namespace cpgdb {
+namespace polygraph {
 
     Neo4jGraphStore::Neo4jGraphStore(DatabaseContext &context, BackendDescriptor descriptor,
                                      std::shared_ptr<QueryVisitor> visitor) :
@@ -34,13 +34,13 @@ namespace cpgdb {
 
     std::vector<AdjacencyRow> Neo4jGraphStore::get_neighbors_batch(std::span<const NodeRef> frontier,
                                                                    const ExpandSpec &spec, int depth) {
-        CPGDB_PROFILE_FUNCTION();
+        POLYGRAPH_PROFILE_FUNCTION();
         if (frontier.empty()) {
             return {};
         }
 
         if (auto *visitor = dynamic_cast<Neo4JQueryVisitor *>(visitor_.get())) {
-            CPGDB_PROFILE_SCOPE("Neo4jGraphStore: fast get_neighbors_batch");
+            POLYGRAPH_PROFILE_SCOPE("Neo4jGraphStore: fast get_neighbors_batch");
             return visitor->get_neighbors_batch_fast(frontier, spec, depth);
         }
 
@@ -57,9 +57,13 @@ namespace cpgdb {
         }
 
         if (auto *visitor = dynamic_cast<Neo4JQueryVisitor *>(visitor_.get())) {
+            const BackendRequestScheduling scheduling{.query_id = options.scheduler_query_id,
+                                                      .max_in_flight = options.neo4j_max_concurrent_requests,
+                                                      .priority = options.backend_scheduler_priority,
+                                                      .weight = options.backend_scheduler_weight};
             return visitor->get_minimal_neighbors_batch_fast(
                     frontier, spec, depth, options.neighbor_batch_size, options.neo4j_max_concurrent_requests,
-                    options.backend_request_retries, options.backend_retry_delay_ms);
+                    options.backend_request_retries, options.backend_retry_delay_ms, scheduling);
         }
 
         return IGraphStore::get_minimal_neighbors_batch(frontier, spec, depth, options);
@@ -141,4 +145,4 @@ namespace cpgdb {
         return rows;
     }
 
-} // namespace cpgdb
+} // namespace polygraph

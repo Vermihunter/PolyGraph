@@ -7,9 +7,9 @@
 
 #include "query/QueryVisitor.hpp"
 
-namespace cpgdb {
+namespace polygraph {
     GetVertexByIdQuery::GetVertexByIdQuery(Node &node) noexcept : node_(node) {}
     Node &GetVertexByIdQuery::node() const noexcept { return node_; }
     query_result_t GetVertexByIdQuery::accept(QueryVisitor &visitor) const { return visitor.visit(*this); }
     query_t GetVertexByIdQuery::clone() const { return std::make_unique<GetVertexByIdQuery>(node_); }
-} // namespace cpgdb
+} // namespace polygraph

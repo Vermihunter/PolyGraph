@@ -3,8 +3,8 @@
  * @brief Declarations for record json serializer in the serialization module.
  */
 
-#ifndef CPGDB_SERIALIZATION_RECORD_JSON_SERIALIZER_HPP
-#define CPGDB_SERIALIZATION_RECORD_JSON_SERIALIZER_HPP
+#ifndef POLYGRAPH_SERIALIZATION_RECORD_JSON_SERIALIZER_HPP
+#define POLYGRAPH_SERIALIZATION_RECORD_JSON_SERIALIZER_HPP
 
 #include <data_model/Record.hpp>
 #include <data_model/Value.hpp>
@@ -25,7 +25,7 @@ template <typename T> struct adl_serializer<std::unique_ptr<T>> {
 
 } // namespace nlohmann
 
-namespace cpgdb {
+namespace polygraph {
 
 void to_json(json& value, const Node& node);
 void from_json(const json& value, Node& node);
@@ -42,6 +42,6 @@ void from_json(const json& value, Value& target);
 void to_json(json& value, const Record& record);
 void from_json(const json& value, Record& record);
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_SERIALIZATION_RECORD_JSON_SERIALIZER_HPP
+#endif // POLYGRAPH_SERIALIZATION_RECORD_JSON_SERIALIZER_HPP

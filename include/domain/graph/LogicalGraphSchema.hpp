@@ -3,8 +3,8 @@
  * @brief Declarations for logical graph schema in the logical graph schema module.
  */
 
-#ifndef CPGDB_DOMAIN_GRAPH_LOGICAL_GRAPH_SCHEMA_HPP
-#define CPGDB_DOMAIN_GRAPH_LOGICAL_GRAPH_SCHEMA_HPP
+#ifndef POLYGRAPH_DOMAIN_GRAPH_LOGICAL_GRAPH_SCHEMA_HPP
+#define POLYGRAPH_DOMAIN_GRAPH_LOGICAL_GRAPH_SCHEMA_HPP
 
 #include "domain/graph/EdgeType.hpp"
 #include "domain/graph/NodeType.hpp"
@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace cpgdb::domain {
+namespace polygraph::domain {
 
 class LogicalGraphSchema {
   public:
@@ -46,6 +46,6 @@ class LogicalGraphSchema {
 
 using graph_t = std::unique_ptr<LogicalGraphSchema>;
 
-} // namespace cpgdb::domain
+} // namespace polygraph::domain
 
-#endif // CPGDB_DOMAIN_GRAPH_LOGICAL_GRAPH_SCHEMA_HPP
+#endif // POLYGRAPH_DOMAIN_GRAPH_LOGICAL_GRAPH_SCHEMA_HPP

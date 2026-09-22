@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <unordered_set>
 
-namespace cpgdb::insertion {
+namespace polygraph::insertion {
 
     IInsertionPlacementPolicy::~IInsertionPlacementPolicy() = default;
 
@@ -37,4 +37,4 @@ namespace cpgdb::insertion {
         }
     }
 
-} // namespace cpgdb::insertion
+} // namespace polygraph::insertion

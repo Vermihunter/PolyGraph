@@ -7,7 +7,7 @@
 
 #include <utility>
 
-namespace cpgdb::http {
+namespace polygraph::http {
 
     drogon::HttpResponsePtr jsonResponse(drogon::HttpStatusCode status, const nlohmann::json &body) {
         auto response = drogon::HttpResponse::newHttpResponse();
@@ -19,4 +19,4 @@ namespace cpgdb::http {
 
     drogon::HttpResponsePtr jsonOk(const nlohmann::json &body) { return jsonResponse(drogon::k200OK, body); }
 
-} // namespace cpgdb::http
+} // namespace polygraph::http

@@ -3,8 +3,8 @@
  * @brief Declarations for neo4j graph store in the graph-store access module.
  */
 
-#ifndef CPGDB_DATA_ACCESS_NEO4J_GRAPH_STORE_HPP
-#define CPGDB_DATA_ACCESS_NEO4J_GRAPH_STORE_HPP
+#ifndef POLYGRAPH_DATA_ACCESS_NEO4J_GRAPH_STORE_HPP
+#define POLYGRAPH_DATA_ACCESS_NEO4J_GRAPH_STORE_HPP
 
 #include "data_access/IGraphStore.hpp"
 #include "infrastructure/DatabaseContext.hpp"
@@ -14,7 +14,7 @@
 #include <span>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 class Neo4jGraphStore final : public IGraphStore {
   public:
@@ -51,6 +51,6 @@ class Neo4jGraphStore final : public IGraphStore {
     std::shared_ptr<QueryVisitor> visitor_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_DATA_ACCESS_NEO4J_GRAPH_STORE_HPP
+#endif // POLYGRAPH_DATA_ACCESS_NEO4J_GRAPH_STORE_HPP

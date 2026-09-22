@@ -3,8 +3,8 @@
  * @brief Defines the backend-neutral graph store contract.
  */
 
-#ifndef CPGDB_DATA_ACCESS_I_GRAPH_STORE_HPP
-#define CPGDB_DATA_ACCESS_I_GRAPH_STORE_HPP
+#ifndef POLYGRAPH_DATA_ACCESS_I_GRAPH_STORE_HPP
+#define POLYGRAPH_DATA_ACCESS_I_GRAPH_STORE_HPP
 
 #include "algorithms/ExpandSpec.hpp"
 #include "algorithms/bfs/BfsOptions.hpp"
@@ -12,6 +12,7 @@
 #include "data_model/AdjacencyRow.hpp"
 #include "data_model/MinimalAdjacencyRow.hpp"
 #include "data_model/NodeRef.hpp"
+#include "data_access/NeighborBatchConsumer.hpp"
 #include "infrastructure/BackendDescriptor.hpp"
 #include "infrastructure/BackendKind.hpp"
 #include "query/QueryResult.hpp"
@@ -20,7 +21,7 @@
 #include <span>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 class Query;
 
@@ -58,7 +59,25 @@ class IGraphStore {
         int depth,
         const BfsOptions& options);
 
+    /**
+     * @brief Streams one-hop neighbor candidates in bounded transient batches.
+     *
+     * This is the preferred path for BFS runs that do not need predecessor
+     * information.  The default adapter flattens get_minimal_neighbors_batch(),
+     * while high-volume backends override it so complete adjacency results never
+     * need to exist in application memory.
+     */
+    virtual void stream_neighbor_candidates(
+        std::span<const NodeRef> frontier,
+        const ExpandSpec& spec,
+        int depth,
+        const BfsOptions& options,
+        const NeighborBatchConsumer& consumer);
+
     /** @brief Returns whether this store can execute the complete requested BFS natively. */
+    /** @brief Returns whether this store can answer one-hop expansion for this vertex/spec. */
+    [[nodiscard]] virtual bool can_expand(const NodeRef& source, const ExpandSpec& spec) const;
+
     [[nodiscard]] virtual bool can_run_native_bfs(const NodeRef& source,
                                                   const ExpandSpec& spec,
                                                   const BfsOptions& options) const;
@@ -77,6 +96,6 @@ class IGraphStore {
     run_bfs(const NodeRef& source, const ExpandSpec& spec, const BfsOptions& options);
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_DATA_ACCESS_I_GRAPH_STORE_HPP
+#endif // POLYGRAPH_DATA_ACCESS_I_GRAPH_STORE_HPP

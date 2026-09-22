@@ -5,17 +5,17 @@
 
 #pragma once
 
-#ifdef CPGDB_ENABLE_GPU
+#ifdef POLYGRAPH_ENABLE_GPU
 #include <raft/core/handle.hpp>
 #endif
 
-namespace cpgdb {
+namespace polygraph {
 
 struct GpuRuntime {
     int device_id = 0;
-#ifdef CPGDB_ENABLE_GPU
+#ifdef POLYGRAPH_ENABLE_GPU
     raft::handle_t handle;
 #endif
 };
 
-} // namespace cpgdb
+} // namespace polygraph

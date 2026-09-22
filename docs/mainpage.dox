@@ -1,9 +1,9 @@
 /**
-@mainpage CPGDB Developer Documentation
+@mainpage PolyGraph Developer Documentation
 
 @tableofcontents
 
-CPGDB is a C++23 graph execution engine that presents one logical graph across
+PolyGraph is a C++23 graph execution engine that presents one logical graph across
 multiple physical stores. It contains a distributed breadth-first-search
 executor, Neo4j and ArangoDB adapters, optional CUDA/cuGraph acceleration,
 HTTP and gRPC frontends, and a policy-driven insertion subsystem.

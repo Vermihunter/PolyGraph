@@ -5,8 +5,8 @@
 
 #include "query/Query.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 
     Query::~Query() = default;
 
-} // namespace cpgdb
+} // namespace polygraph

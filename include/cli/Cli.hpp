@@ -1,15 +1,20 @@
-//
-// Created by akos on 11. 7. 2026.
-//
+/**
+ * @file include/cli/Cli.hpp
+ * @brief Shared observability command-line options.
+ */
+#pragma once
 
-#ifndef CPGDB_CLI_HPP
-#define CPGDB_CLI_HPP
-#include "CommandLine.hpp"
-#include "logging/LoggingSetup.hpp"
+#include "cli/CommandLine.hpp"
+#include "observability/ObservabilityConfig.hpp"
 
-namespace cpgdb::cli {
-logging::LoggingOptions parse_log_options(const CommandLine& args);
+namespace polygraph::cli {
+
 void add_log_arguments(CommandLine& program);
-} // namespace cpgdb::cli
 
-#endif // CPGDB_CLI_HPP
+/** Load event/logging/metrics configuration and apply CLI overrides. */
+[[nodiscard]] observability::ObservabilityConfig parse_observability_config(const CommandLine& args);
+
+[[nodiscard]] observability::EventGatheringOptions parse_event_options(const CommandLine& args);
+[[nodiscard]] observability::LoggingOptions parse_log_options(const CommandLine& args);
+
+} // namespace polygraph::cli

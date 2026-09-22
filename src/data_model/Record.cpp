@@ -5,8 +5,8 @@
 
 #include "data_model/Record.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 
     const Value &Record::operator[](const std::size_t index) const { return fields[index]; }
 
-} // namespace cpgdb
+} // namespace polygraph

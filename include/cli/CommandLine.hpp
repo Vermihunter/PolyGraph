@@ -12,7 +12,7 @@
 #include <string_view>
 #include <vector>
 
-namespace cpgdb::cli {
+namespace polygraph::cli {
 
 class CommandLine {
   public:
@@ -47,4 +47,4 @@ class CommandLine {
 
 std::ostream& operator<<(std::ostream& output, const CommandLine& command_line);
 
-} // namespace cpgdb::cli
+} // namespace polygraph::cli

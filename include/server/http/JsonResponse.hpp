@@ -9,11 +9,11 @@
 
 #include <drogon/HttpResponse.h>
 
-namespace cpgdb::http {
+namespace polygraph::http {
 
 [[nodiscard]] drogon::HttpResponsePtr jsonResponse(drogon::HttpStatusCode status,
                                                    const nlohmann::json& body);
 
 [[nodiscard]] drogon::HttpResponsePtr jsonOk(const nlohmann::json& body);
 
-} // namespace cpgdb::http
+} // namespace polygraph::http

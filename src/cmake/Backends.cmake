@@ -1,4 +1,4 @@
-set(CPGDB_BACKEND_SOURCES
+set(POLYGRAPH_BACKEND_SOURCES
     "${PROJECT_SOURCE_DIR}/src/cli/BackendConfigParser.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/ArangoDB/ArangoGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/ArangoDB/ArangoQueryVisitor.cpp"
@@ -7,31 +7,32 @@ set(CPGDB_BACKEND_SOURCES
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/Neo4J/Neo4JBoltClient.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/Neo4J/Neo4JQueryVisitor.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/Neo4J/Neo4jGraphStore.cpp"
+    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/PostgreSqlGraphStore.cpp"
+    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/cache/MMapGraphStore.cpp"
+    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/cache/RedisGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/infrastructure/ConfiguredGraphStoreFactory.cpp"
     "${PROJECT_SOURCE_DIR}/src/utilities/curl.cpp"
-    "${PROJECT_SOURCE_DIR}/src/logging/sinks/SpdlogEventSink.cpp"
-    "${PROJECT_SOURCE_DIR}/src/logging/sinks/TextEventSerializer.cpp"
-    "${PROJECT_SOURCE_DIR}/src/logging/sinks/JsonEventSerializer.cpp"
 )
 
-add_library(cpgdb_backends STATIC ${CPGDB_BACKEND_SOURCES})
-add_library(cpgdb::backends ALIAS cpgdb_backends)
+add_library(polygraph_backends STATIC ${POLYGRAPH_BACKEND_SOURCES})
+add_library(polygraph::backends ALIAS polygraph_backends)
 
 target_link_libraries(
-    cpgdb_backends
+    polygraph_backends
     PUBLIC
-        cpgdb::core
-        cpgdb::serialization
-        cpgdb::curl
+        polygraph::core
+        polygraph::serialization
+        polygraph::curl
+        PostgreSQL::PostgreSQL
 )
 
-if(CPGDB_ENABLE_GPU)
-    target_link_libraries(cpgdb_backends PUBLIC cpgdb::gpu_dependencies)
+if(POLYGRAPH_ENABLE_GPU)
+    target_link_libraries(polygraph_backends PUBLIC polygraph::gpu_dependencies)
     set_property(
         SOURCE "${PROJECT_SOURCE_DIR}/src/infrastructure/ConfiguredGraphStoreFactory.cpp"
-        TARGET_DIRECTORY cpgdb_backends
+        TARGET_DIRECTORY polygraph_backends
         PROPERTY SKIP_LINTING ON
     )
 endif()
 
-cpgdb_configure_target(cpgdb_backends)
+polygraph_configure_target(polygraph_backends)

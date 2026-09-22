@@ -8,7 +8,7 @@
 #include <curl/curl.h>
 #include <stdexcept>
 
-namespace cpgdb::runtime {
+namespace polygraph::runtime {
 
     CurlGlobalGuard::CurlGlobalGuard() {
         if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
@@ -18,4 +18,4 @@ namespace cpgdb::runtime {
 
     CurlGlobalGuard::~CurlGlobalGuard() { curl_global_cleanup(); }
 
-} // namespace cpgdb::runtime
+} // namespace polygraph::runtime

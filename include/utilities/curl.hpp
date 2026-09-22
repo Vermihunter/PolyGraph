@@ -3,13 +3,13 @@
  * @brief Declarations for curl in the utility module.
  */
 
-#ifndef CPGDB_UTILITIES_CURL_HPP
-#define CPGDB_UTILITIES_CURL_HPP
+#ifndef POLYGRAPH_UTILITIES_CURL_HPP
+#define POLYGRAPH_UTILITIES_CURL_HPP
 
 #include <curl/curl.h>
 #include <string>
 
-namespace cpgdb {
+namespace polygraph {
 
 class CurlHttpClient {
   public:
@@ -42,6 +42,6 @@ http_post(const std::string& url, const std::string& body, const std::string& au
 [[nodiscard]] std::string
 http_put(const std::string& url, const std::string& body = "{}", const std::string& auth = {});
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_UTILITIES_CURL_HPP
+#endif // POLYGRAPH_UTILITIES_CURL_HPP

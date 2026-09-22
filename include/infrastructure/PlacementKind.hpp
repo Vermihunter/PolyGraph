@@ -7,12 +7,12 @@
 // Created by akos on 5. 5. 2026.
 //
 
-#ifndef CPGDB_PLACEMENTKIND_HPP
-#define CPGDB_PLACEMENTKIND_HPP
+#ifndef POLYGRAPH_PLACEMENTKIND_HPP
+#define POLYGRAPH_PLACEMENTKIND_HPP
 
-namespace cpgdb {
+namespace polygraph {
 enum class PlacementKind { Primary, Cache, GpuProjection, Replica };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_PLACEMENTKIND_HPP
+#endif // POLYGRAPH_PLACEMENTKIND_HPP

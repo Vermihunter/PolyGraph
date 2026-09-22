@@ -7,7 +7,7 @@
 
 #include <utility>
 
-namespace cpgdb::insertion {
+namespace polygraph::insertion {
 
     IBackendLoadTracker::~IBackendLoadTracker() = default;
 
@@ -61,4 +61,4 @@ namespace cpgdb::insertion {
         cached_.insert_or_assign(backend_id, load_value);
     }
 
-} // namespace cpgdb::insertion
+} // namespace polygraph::insertion

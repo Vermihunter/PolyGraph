@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <utility>
 
-namespace cpgdb {
+namespace polygraph {
 
     ArangoGraphStore::ArangoGraphStore(BackendDescriptor descriptor, std::shared_ptr<QueryVisitor> visitor) :
         descriptor_(std::move(descriptor)), visitor_(std::move(visitor)) {
@@ -49,12 +49,40 @@ namespace cpgdb {
         }
 
         if (auto *visitor = dynamic_cast<ArangoQueryVisitor *>(visitor_.get())) {
+            const BackendRequestScheduling scheduling{.query_id = options.scheduler_query_id,
+                                                      .max_in_flight = options.arango_max_concurrent_requests,
+                                                      .priority = options.backend_scheduler_priority,
+                                                      .weight = options.backend_scheduler_weight};
             return visitor->get_minimal_neighbors_batch_fast(
                     frontier, spec, depth, options.neighbor_batch_size, options.arango_max_concurrent_requests,
-                    options.backend_request_retries, options.backend_retry_delay_ms);
+                    options.arango_request_strategy, options.arango_single_request_max_frontier,
+                    options.backend_request_retries, options.backend_retry_delay_ms, scheduling);
         }
 
         return IGraphStore::get_minimal_neighbors_batch(frontier, spec, depth, options);
+    }
+
+    void ArangoGraphStore::stream_neighbor_candidates(std::span<const NodeRef> frontier, const ExpandSpec &spec,
+                                                      int depth, const BfsOptions &options,
+                                                      const NeighborBatchConsumer &consumer) {
+        if (!consumer || frontier.empty()) {
+            return;
+        }
+
+        if (auto *visitor = dynamic_cast<ArangoQueryVisitor *>(visitor_.get())) {
+            const BackendRequestScheduling scheduling{.query_id = options.scheduler_query_id,
+                                                      .max_in_flight = options.arango_max_concurrent_requests,
+                                                      .priority = options.backend_scheduler_priority,
+                                                      .weight = options.backend_scheduler_weight};
+            visitor->stream_neighbor_candidates_fast(
+                    frontier, spec, depth, options.neighbor_batch_size, options.arango_max_concurrent_requests,
+                    options.arango_request_strategy, options.arango_single_request_max_frontier,
+                    options.backend_request_retries, options.backend_retry_delay_ms,
+                    options.streaming_candidate_batch_size, consumer, scheduling);
+            return;
+        }
+
+        IGraphStore::stream_neighbor_candidates(frontier, spec, depth, options, consumer);
     }
 
     NodeRef ArangoGraphStore::node_to_ref(const Node &node) {
@@ -96,4 +124,4 @@ namespace cpgdb {
         return rows;
     }
 
-} // namespace cpgdb
+} // namespace polygraph

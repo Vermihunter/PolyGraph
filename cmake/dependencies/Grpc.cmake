@@ -15,4 +15,4 @@ foreach(required_target
     endif()
 endforeach()
 
-message(STATUS "CPGDB dependency: Protobuf and gRPC")
+message(STATUS "PolyGraph dependency: Protobuf and gRPC")

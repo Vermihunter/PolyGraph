@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace cpgdb {
+namespace polygraph {
 
     void QueryResult::combine(query_result_t other) {
         if (!other) {
@@ -19,4 +19,4 @@ namespace cpgdb {
         std::move(other->data.begin(), other->data.end(), std::back_inserter(data));
     }
 
-} // namespace cpgdb
+} // namespace polygraph

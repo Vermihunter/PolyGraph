@@ -641,7 +641,7 @@ def main():
     parser.add_argument(
         "--storage-backends",
         nargs="+",
-        choices=["Neo4J", "ArangoDB", "GPU"],
+        choices=["Neo4J", "ArangoDB", "PostgreSQL", "GPU"],
         default=None,
         help="Optional ordered backend layout encoded in ID MSBs; otherwise derive it from the schema.",
     )

@@ -3,8 +3,8 @@
  * @brief Declarations for traversal service in the server frontend module.
  */
 
-#ifndef CPGDB_SERVER_SERVICES_TRAVERSAL_SERVICE_HPP
-#define CPGDB_SERVER_SERVICES_TRAVERSAL_SERVICE_HPP
+#ifndef POLYGRAPH_SERVER_SERVICES_TRAVERSAL_SERVICE_HPP
+#define POLYGRAPH_SERVER_SERVICES_TRAVERSAL_SERVICE_HPP
 
 #include "algorithms/bfs/BfsLayer.hpp"
 #include "algorithms/bfs/BfsResult.hpp"
@@ -16,16 +16,16 @@
 #include <functional>
 #include <string>
 
-namespace cpgdb::services {
+namespace polygraph::services {
 
 class TraversalService {
   public:
     explicit TraversalService(DatabaseContext& context) noexcept;
 
-    [[nodiscard]] BfsResult runBfs(const std::string& source_vertex_uuid, const dto::BfsRequest& request);
+    [[nodiscard]] BfsResult runBfs(const std::string& source_vertex_uuid, const dto::BfsRequest& request) const;
 
     [[nodiscard]] std::vector<MinimalAdjacencyRow>
-    getNeighbors(const std::string& source_vertex_uuid);
+    getNeighbors(const std::string& source_vertex_uuid) const;
 
     [[nodiscard]] BfsResult streamBfs(const std::string& graph_id,
                                       const std::string& source_vertex_id,
@@ -33,13 +33,13 @@ class TraversalService {
                                       bool return_predecessors,
                                       bool allow_native_pushdown,
                                       bool allow_partial_acceleration,
-                                      const std::function<void(const BfsLayerEvent&)>& on_layer);
+                                      const std::function<void(const BfsLayerEvent&)>& on_layer) const;
 
   private:
     DatabaseContext& context_;
     NeighborExpander expander_;
 };
 
-} // namespace cpgdb::services
+} // namespace polygraph::services
 
-#endif // CPGDB_SERVER_SERVICES_TRAVERSAL_SERVICE_HPP
+#endif // POLYGRAPH_SERVER_SERVICES_TRAVERSAL_SERVICE_HPP

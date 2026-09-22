@@ -1,4 +1,4 @@
-"""Reusable BFS measurement framework for the CPGDB project."""
+"""Reusable BFS measurement framework for the PolyGraph project."""
 
 from .config import BenchmarkConfig, load_config
 from .metrics import MeasurementSink, RunRecord

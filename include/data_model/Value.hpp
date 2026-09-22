@@ -19,7 +19,7 @@
 #include <variant>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 struct Value;
 using value_t = std::unique_ptr<Value>;
@@ -63,4 +63,4 @@ struct Value {
     }
 };
 
-} // namespace cpgdb
+} // namespace polygraph

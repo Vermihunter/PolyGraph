@@ -3,12 +3,12 @@
  * @brief Declarations for get all edges query in the query dispatch module.
  */
 
-#ifndef CPGDB_QUERY_GET_ALL_EDGES_QUERY_HPP
-#define CPGDB_QUERY_GET_ALL_EDGES_QUERY_HPP
+#ifndef POLYGRAPH_QUERY_GET_ALL_EDGES_QUERY_HPP
+#define POLYGRAPH_QUERY_GET_ALL_EDGES_QUERY_HPP
 
 #include "query/Query.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 
 class GetAllEdgesQuery final : public Query {
   public:
@@ -16,6 +16,6 @@ class GetAllEdgesQuery final : public Query {
     [[nodiscard]] query_t clone() const override;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_QUERY_GET_ALL_EDGES_QUERY_HPP
+#endif // POLYGRAPH_QUERY_GET_ALL_EDGES_QUERY_HPP

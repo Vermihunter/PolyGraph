@@ -1,67 +1,87 @@
-# Runtime configuration
+# Configuration
 
-The BFS runtime consumes three JSON inputs:
+PolyGraph configuration is split by responsibility so graph data, storage ownership, cache strategy, and observability can evolve independently.
 
-1. a logical graph schema;
-2. graph data used to construct host/GPU projection inputs;
-3. an optional backend configuration.
+## Domain manifest
 
-Working templates are provided under `config/`.
+`domain.json` is the main runtime entry point. Its `paths` section references the logical schema, canonical graph, persistent backend config, observability config, optional native-ID map, and optionally a default cache plan.
 
-## Logical graph schema
-
-`nodeTypes` entries define a logical name, physical source backend, and property
-schema. `relations` entries define the logical edge name, source backend,
-endpoint node types, and properties.
-
-Supported property types are `string`, `integer`, `boolean`, `float`, `date`, and
-`datetime`.
-
-The `source` value must be one of the backend aliases recognized by
-`cpgdb::config::backend_id_from_string`, such as `Neo4J`, `ArangoDB`, or `GPU`.
-
-## Graph data
-
-The `nodes` array requires `uuid`, `type`, and `source`. The `relationships` array
-requires `uuid`, `type`, `source`, `from`, and `to`. Optional `properties` values
-are converted to the CPGDB `Value` model.
-
-All relationship endpoint UUIDs must appear in the node array. Records whose
-`source` is `GPU` are additionally copied into GPU projection input records.
+A cache plan does not need to be written into the domain: `--cache-plan FILE` is the preferred experiment-time override.
 
 ## Backend configuration
 
-Each backend entry supports:
+The backend config contains:
 
-- `id`, `kind`, `enabled`, `name`, and `priority`;
-- `connection.endpoint`, `database`, `transport`, `bolt_endpoint`, credentials,
-  and replica endpoints;
-- capabilities for batch neighbors, native BFS, property filters, GPU execution,
-  and replica parallelism;
-- coverage mode and freshness metadata.
+- `idRouting`: ordered authoritative-owner layout encoded in IDs;
+- persistent backend entries such as Neo4j, ArangoDB, and PostgreSQL;
+- connection details and capabilities;
+- priorities and coverage metadata.
 
-Coverage modes:
+In the new cache workflow, generated LDBC backend config is **authoritative-data-only**. GPU cache, Redis, and mmap execution entries can come from the selected cache plan's `runtimeBackends`.
 
-- `schema-source`: derive covered logical types from schema `source` fields;
-- `all`: mark all node and edge types covered;
-- `explicit`: provide `node_types`, `edge_types`, and all-type flags;
-- `empty` or `none`: advertise no coverage.
+## Cache configuration
 
-Do not commit real credentials. Copy the example and inject secrets through your
-deployment mechanism.
+Cache configuration JSON is an input to planning, not runtime graph identity. Example:
 
-## Example CLI invocation
-
-```bash
-./build/cpu-bfs/bin/bfs \
-  --logical-graph-schema config/logical_graph_schema.example.json \
-  --data config/graph_data.example.json \
-  --backend-config config/backends.example.json \
-  --start-uuid 11111111-1111-4111-8111-111111111111 \
-  --start-type Person \
-  --max-depth 4 \
-  --direction directed
+```json
+{
+  "version": 1,
+  "priorities": {
+    "GPU": 0,
+    "MMap": 10,
+    "Redis": 20,
+    "Neo4J": 50,
+    "ArangoDB": 50
+  },
+  "gpus": [
+    {
+      "device_id": 0,
+      "memory": "4GiB",
+      "relation_limit": 150000000,
+      "regions": [
+        {
+          "name": "hot-vertices",
+          "policy": {
+            "kind": "top-degree",
+            "vertex_count": 100000,
+            "include_neighbors": true
+          }
+        }
+      ]
+    }
+  ],
+  "mmap": {"enabled": false},
+  "redis": {
+    "enabled": true,
+    "endpoint": "127.0.0.1:6379",
+    "memory": "2GiB",
+    "vertex_limit": 1000000,
+    "shared_hot_fraction": 0.075,
+    "memory_utilization": 0.9,
+    "entry_overhead_bytes": 128,
+    "policy": {"kind": "top-degree"}
+  }
+}
 ```
 
-The configured database must contain matching logical data for database-backed
-queries. The example graph-data file alone does not seed Neo4j or ArangoDB.
+Important Redis values:
+
+- `shared_hot_fraction`: intentional GPU/Redis overlap; default `0.075` when omitted.
+- `memory_utilization`: fraction of configured Redis memory made available to planned payload.
+- `entry_overhead_bytes`: estimated per-key Redis overhead for budget planning.
+- `vertex_limit`, `relation_limit`, `memory`: optional plan bounds.
+
+## Cache plan output
+
+`cache-plan.json` is generated. Do not hand-edit residency. It records region selection statistics, artifacts, runtime cache backends, the planning DB, and `residency.bin` metadata.
+
+## Observability configuration
+
+`config/observability/observability.json` independently controls:
+
+- event gathering and JSONL sinks;
+- operational logging and stdout/file sinks;
+- metrics endpoint/namespace;
+- process, allocator, GPU, and other collectors.
+
+CLI paths override sinks without changing the config file. See [OBSERVABILITY.md](OBSERVABILITY.md).

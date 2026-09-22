@@ -7,8 +7,8 @@
 // Created by akos on 29. 3. 2026.
 //
 
-#ifndef CPGDB_NODE_HPP
-#define CPGDB_NODE_HPP
+#ifndef POLYGRAPH_NODE_HPP
+#define POLYGRAPH_NODE_HPP
 
 #include "../../infrastructure/BackendKind.hpp"
 #include "Property.hpp"
@@ -17,13 +17,13 @@
 #include <string>
 #include <vector>
 
-namespace cpgdb::domain {
+namespace polygraph::domain {
 struct NodeType {
     TypeId id;
     std::string name;
     // DatabaseTypes source;
     std::vector<Property> properties;
 };
-} // namespace cpgdb::domain
+} // namespace polygraph::domain
 
-#endif // CPGDB_NODE_HPP
+#endif // POLYGRAPH_NODE_HPP

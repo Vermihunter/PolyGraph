@@ -11,8 +11,14 @@ class GraphJsonLinesWriter:
     def __init__(self, path: str | Path, metadata: dict | None = None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._handle = self.path.open("w", encoding="utf-8")
-        self.write_raw({"kind": "metadata", "format": "cpgdb.graph.jsonl", "version": 1, **(metadata or {})})
+        self._handle = self.path.open("w", encoding="utf-8", buffering=4 * 1024 * 1024)
+        self.write_raw({
+            "kind": "metadata",
+            "format": "polygraph.graph.jsonl",
+            "version": 1,
+            "recordOrder": "nodes-then-relationships",
+            **(metadata or {}),
+        })
 
     def __enter__(self) -> "GraphJsonLinesWriter":
         return self

@@ -3,8 +3,8 @@
  * @brief Declarations for placement in the backend infrastructure module.
  */
 
-#ifndef CPGDB_INFRASTRUCTURE_PLACEMENT_HPP
-#define CPGDB_INFRASTRUCTURE_PLACEMENT_HPP
+#ifndef POLYGRAPH_INFRASTRUCTURE_PLACEMENT_HPP
+#define POLYGRAPH_INFRASTRUCTURE_PLACEMENT_HPP
 
 #include "algorithms/ExpandSpec.hpp"
 #include "data_model/NodeRef.hpp"
@@ -13,7 +13,7 @@
 
 #include <unordered_set>
 
-namespace cpgdb {
+namespace polygraph {
 
 struct Placement {
     BackendId backend_id;
@@ -27,6 +27,6 @@ struct Placement {
     [[nodiscard]] bool can_expand_from(const NodeRef& source, const ExpandSpec& spec) const;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_INFRASTRUCTURE_PLACEMENT_HPP
+#endif // POLYGRAPH_INFRASTRUCTURE_PLACEMENT_HPP

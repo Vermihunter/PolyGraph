@@ -7,10 +7,10 @@
 // Created by akos on 30. 4. 2026.
 //
 
-#ifndef CPGDB_BACKENDCAPABILITIES_HPP
-#define CPGDB_BACKENDCAPABILITIES_HPP
+#ifndef POLYGRAPH_BACKENDCAPABILITIES_HPP
+#define POLYGRAPH_BACKENDCAPABILITIES_HPP
 
-namespace cpgdb {
+namespace polygraph {
 /**
  * What a given backend can do: batch neighbors, native BFS, GPU execution, filters, etc
  */
@@ -22,6 +22,6 @@ struct BackendCapabilities {
     bool supports_replica_parallelism = false;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_BACKENDCAPABILITIES_HPP
+#endif // POLYGRAPH_BACKENDCAPABILITIES_HPP

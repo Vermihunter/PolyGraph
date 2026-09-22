@@ -6,23 +6,33 @@
 #include "algorithms/bfs/BfsExecutor.hpp"
 #include "utilities/uuid.hpp"
 
-#include "logging/level/Debug.hpp"
+#include "events/EventContext.hpp"
+#include "events/Events.hpp"
+#include "infrastructure/scheduling/BackendRequestScheduler.hpp"
 #include "utilities/Profiling.hpp"
-#include "utilities/logging.hpp"
 
+#include <atomic>
 #include <future>
 #include <iterator>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <stdexcept>
 #include <utility>
 
-#include "logging/level/Info.hpp"
 
-namespace cpgdb {
+namespace polygraph {
     namespace {
 
         constexpr std::size_t expected_vertex_count = 65'536;
+
+        [[nodiscard]] BfsOptions with_scheduler_query_id(const BfsOptions &options) {
+            BfsOptions result = options;
+            if (result.scheduler_query_id == 0) {
+                result.scheduler_query_id = next_backend_scheduler_query_id();
+            }
+            return result;
+        }
 
     } // namespace
 
@@ -53,12 +63,17 @@ namespace cpgdb {
     }
 
     BfsResult BfsExecutor::run(const NodeRef &source, const ExpandSpec &spec, const BfsOptions &options) const {
-        if (options.allow_native_pushdown) {
-            if (const auto backend = catalog_.choose_native_bfs_backend(source, spec, options)) {
-                return catalog_.store(*backend)->run_bfs(source, spec, options);
+        const BfsOptions effective_options = with_scheduler_query_id(options);
+        [[maybe_unused]] events::ScopedQueryExecutionContext event_context(effective_options.scheduler_query_id);
+        if (effective_options.allow_native_pushdown) {
+            if (const auto backend = catalog_.choose_native_bfs_backend(source, spec, effective_options)) {
+                return catalog_.store(*backend)->run_bfs(source, spec, effective_options);
             }
         }
-        return run_distributed_frontier_bfs(source, spec, options);
+        if (!effective_options.return_predecessors) {
+            return run_distributed_frontier_bfs_candidates(source, spec, effective_options, {});
+        }
+        return run_distributed_frontier_bfs(source, spec, effective_options);
     }
 
     BfsResult BfsExecutor::run_streaming(const NodeRef &source, const ExpandSpec &spec, const BfsOptions &options,
@@ -66,7 +81,12 @@ namespace cpgdb {
         if (!on_layer) {
             throw std::invalid_argument("BFS streaming callback must not be empty");
         }
-        return run_distributed_frontier_bfs_streaming(source, spec, options, on_layer);
+        const BfsOptions effective_options = with_scheduler_query_id(options);
+        [[maybe_unused]] events::ScopedQueryExecutionContext event_context(effective_options.scheduler_query_id);
+        if (!effective_options.return_predecessors) {
+            return run_distributed_frontier_bfs_candidates(source, spec, effective_options, on_layer);
+        }
+        return run_distributed_frontier_bfs_streaming(source, spec, effective_options, on_layer);
     }
 
     BfsResult BfsExecutor::run_distributed_frontier_bfs(const NodeRef &source, const ExpandSpec &spec,
@@ -129,7 +149,7 @@ namespace cpgdb {
     BfsResult BfsExecutor::run_distributed_frontier_bfs_streaming(
             const NodeRef &source, const ExpandSpec &spec, const BfsOptions &options,
             const std::function<void(const BfsLayerEvent &)> &on_layer) const {
-        CPGDB_PROFILE_FUNCTION();
+        POLYGRAPH_PROFILE_FUNCTION();
 
         DenseBfsState state;
         state.reserve(expected_vertex_count);
@@ -189,6 +209,85 @@ namespace cpgdb {
         return make_result(state, options.return_predecessors);
     }
 
+    BfsResult BfsExecutor::run_distributed_frontier_bfs_candidates(
+            const NodeRef &source, const ExpandSpec &spec, const BfsOptions &options,
+            const std::function<void(const BfsLayerEvent &)> &on_layer) const {
+        EVENT_SCOPE_INFO(full_bfs, "full_bfs.candidate_streaming",
+                         {"source-uuid", global_id_to_string(source.global_id)},
+                         {"streaming_candidate_batch_size", options.streaming_candidate_batch_size},
+                         {"scheduler_query_id", options.scheduler_query_id},
+                         {"scheduler_priority", options.backend_scheduler_priority},
+                         {"scheduler_weight", options.backend_scheduler_weight});
+
+        BfsResult result;
+        result.distance.reserve(expected_vertex_count);
+        result.distance.emplace(source.global_id, 0U);
+
+        std::vector<NodeRef> frontier{source};
+        if (on_layer) {
+            on_layer(BfsLayerEvent{.depth = 0, .vertices = {source}, .tree_edges = {}});
+        }
+
+        std::uint32_t depth = 0;
+        while (!frontier.empty() && (!options.max_depth || depth < *options.max_depth)) {
+            std::vector<NodeRef> next_frontier;
+            BfsLayerEvent layer{.depth = depth + 1, .vertices = {}, .tree_edges = {}};
+            std::mutex discovery_mutex;
+            std::atomic_size_t candidate_count{0};
+            std::atomic_size_t emitted_batch_count{0};
+
+            {
+                EVENT_SCOPE_INFO(expansion_layer, "bfs.expand_layer.candidate_streaming", {"depth", depth},
+                                 {"frontier_size", frontier.size()});
+
+                expander_.expand_layer_candidates(
+                        frontier, spec, static_cast<int>(depth), options,
+                        [&](const std::span<const NodeRef> candidates) {
+                            candidate_count.fetch_add(candidates.size(), std::memory_order_relaxed);
+                            emitted_batch_count.fetch_add(1, std::memory_order_relaxed);
+
+                            // Backend/query workers may call this concurrently.  One
+                            // batch-level lock keeps the visited map and next frontier
+                            // single-owner without paying a lock for every edge.
+                            std::scoped_lock lock(discovery_mutex);
+                            for (const NodeRef &neighbor: candidates) {
+                                if (!spec.allows_target_type(neighbor.type)) {
+                                    continue;
+                                }
+
+                                const auto [iterator, inserted] =
+                                        result.distance.emplace(neighbor.global_id, depth + 1);
+                                (void) iterator;
+                                if (!inserted) {
+                                    continue;
+                                }
+
+                                next_frontier.push_back(neighbor);
+                                if (on_layer) {
+                                    layer.vertices.push_back(neighbor);
+                                }
+                            }
+                        });
+
+                expansion_layer.add_end_field("candidate_count", candidate_count.load(std::memory_order_relaxed));
+                expansion_layer.add_end_field("candidate_batch_count",
+                                              emitted_batch_count.load(std::memory_order_relaxed));
+                expansion_layer.add_end_field("new_vertex_count", next_frontier.size());
+                expansion_layer.add_end_field("visited_vertex_count", result.distance.size());
+            }
+
+            if (on_layer && !layer.vertices.empty()) {
+                on_layer(layer);
+            }
+
+            frontier = std::move(next_frontier);
+            ++depth;
+        }
+
+        EVENT_SCOPE_INFO_FIELD(full_bfs, "result_vertices", result.distance.size());
+        return result;
+    }
+
     BfsResult BfsExecutor::make_result(const DenseBfsState &state, bool include_predecessors) {
         BfsResult result;
         result.distance.reserve(state.to_global.size());
@@ -211,4 +310,4 @@ namespace cpgdb {
         return result;
     }
 
-} // namespace cpgdb
+} // namespace polygraph

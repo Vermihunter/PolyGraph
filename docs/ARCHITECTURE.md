@@ -1,112 +1,78 @@
-# Architecture {#architecture}
+# Architecture
 
-## Goals
+## Runtime layers
 
-CPGDB separates a logical graph from its physical storage. Algorithms operate on
-stable graph-domain types while a placement catalog and backend registry decide
-which stores can answer each operation. This keeps traversal planning independent
-from Neo4j, ArangoDB, Bolt, HTTP, and CUDA implementation details.
-
-## Library graph
+PolyGraph presents one logical graph over heterogeneous storage/execution backends. The main runtime path is:
 
 ```text
-cpgdb_project_options
-        |
-        +--> cpgdb_model
-                 |
-                 +--> cpgdb_core
-                         |
-                         +--> cpgdb_backends
-                         |       |
-                         |       +--> cpgdb_runtime --> cpgdb_cli --> bfs
-                         |
-                         +--> cpgdb_services
-                                 +--> cpgdb_http
-                                 +--> cpgdb_grpc
+CLI / HTTP / gRPC
+       ↓
+DatabaseContext + LogicalGraphSchema
+       ↓
+PlacementCatalog
+       ↓
+BFS executor / query model
+       ↓
+IGraphStore adapters
+  ├─ Neo4j
+  ├─ ArangoDB
+  ├─ GPU/cuGraph
+  ├─ Redis cache
+  └─ memory-mapped cache
 ```
 
-When GPU support is enabled, `cpgdb_gpu_dependencies` carries the GPU compile
-definition and CUDA/RAFT/RMM/cuGraph usage requirements as one inseparable unit.
-No CPU-only target receives `CPGDB_ENABLE_GPU`.
+`GraphRuntimeBuilder` loads the domain/schema/backend configuration, validates the ID-routing layout, applies an optional cache plan, creates backend stores, and builds GPU projections where configured.
 
-## Source layout
+## Authoritative ownership versus cache residency
 
-Public declarations are under `include/`. Non-template implementations mirror
-the same relative path under `src/`. Templates whose definitions are required at
-instantiation time remain in headers.
-
-| Area | Responsibility |
-|---|---|
-| `data_model` | Nodes, edges, paths, records, variants, and lightweight references |
-| `domain/graph` | Logical type schema and property metadata |
-| `query` | Backend-neutral query objects and visitor dispatch |
-| `data_access` | Store interface and concrete backend adapters |
-| `infrastructure` | Registry, capabilities, coverage, placements, and runtime context |
-| `algorithms` | Expansion specification and distributed BFS |
-| `insertion` | Placement policies, ownership selection, batching, and load tracking |
-| `gpu` | Dense ID mapping, CSR projection, GPU expansion, and cuGraph BFS |
-| `server` | Transport-neutral service plus HTTP/gRPC adapters |
-| `cli` | Configuration parsing, runtime construction, and BFS command line |
-| `logging` / `utilities` | Structured events, profiling, curl, UUID, and helpers |
-
-## Query dispatch
-
-`Query` is the backend-neutral command abstraction. Each concrete query accepts a
-`QueryVisitor`. A graph store owns or creates the visitor appropriate for its
-backend. Read and write operations therefore share one dispatch mechanism.
+A global ID contains the stable logical authoritative owner plus the local payload. Cache placement is no longer required to be encoded by rewriting the graph. Logical GPU ownership remains stable in the ID, while physical multi-GPU placement is supplied separately by `gpu-storage/ownership.bin`:
 
 ```text
-caller -> IGraphStore::execute(Query)
-       -> Query::accept(QueryVisitor)
-       -> Neo4JQueryVisitor / ArangoQueryVisitor / other visitor
-       -> QueryResult
+logical owner == GPU
+        +
+ownership[canonical_id]
+        ↓
+physical owner == GPU:0 / GPU:1 / ...
 ```
 
-The insertion module adds `InsertQuery` and `InsertBatchQuery` to this same path,
-so adding another backend requires implementing visitor methods rather than
-changing insertion orchestration.
+With no external cache plan, legacy embedded cache-location bits are still understood for compatibility. With `--cache-plan`, the runtime intentionally ignores those legacy cache bits and computes locations from the physical authoritative owner plus selected-plan residency. This guarantees that selecting cache B cannot accidentally inherit Redis/GPU bits from cache A, and moving authoritative GPU data between devices does not rewrite canonical IDs.
 
-## Distributed BFS
+See [CACHING.md](CACHING.md).
 
-`BfsExecutor` first asks `PlacementCatalog` whether one backend can answer the
-entire traversal natively. Otherwise it performs layered expansion:
+## PlacementCatalog
 
-1. partition the current frontier by eligible backend;
-2. execute independent batch-neighbor queries;
-3. merge adjacency rows;
-4. deduplicate globally discovered vertices;
-5. update distances and optional predecessors;
-6. emit an optional streaming layer callback;
-7. stop at an empty frontier or the configured depth limit.
+`PlacementCatalog` is the fast runtime router. For every frontier vertex it:
 
-The placement catalog considers backend capabilities, placement freshness,
-coverage, priority, and whether partial acceleration is allowed.
+1. decodes the stable logical authoritative owner;
+2. resolves logical GPU ownership through the physical GPU ownership table when present;
+3. merges external cache residency when enabled;
+4. identifies resident stores;
+5. checks whether a store can answer the requested `ExpandSpec`;
+6. chooses the best eligible backend by priority.
 
-## Runtime ownership
+A cache is therefore an optional execution location, not the source of graph identity.
 
-`DatabaseContext` owns shared runtime services:
+## BFS execution
 
-- backend registry;
-- placement catalog;
-- logical graph schema;
-- configured backend connections;
-- optional GPU runtime state.
+The distributed BFS executor groups frontier vertices by selected backend and issues batch-neighbor operations. Neo4j/ArangoDB/PostgreSQL can serve persistent adjacency; Redis/MMAP provide precomputed unfiltered adjacency; GPU/cuGraph provides accelerated projection execution.
 
-Long-lived services receive the context by reference or shared pointer. Query
-visitors keep a context reference so backend behavior can consult the same schema
-and placement metadata.
+The runtime can also choose native pushdown when a backend advertises complete/fresh coverage and the BFS options allow it.
 
-## Error model
+## GPU projection construction
 
-Core code uses exceptions for invalid configuration, unsupported operations,
-backend failures, malformed responses, and violated invariants. The HTTP layer
-maps known failures to structured responses. The gRPC layer converts service
-failures to gRPC status codes. CLI entry points report errors and return a
-non-zero process status.
+For newly prepared domains, expensive graph-wide selection/renumbering is an offline step. Preparation materializes reusable dense projections separately for:
 
-## Threading
+- authoritative GPU storage (`gpu-storage/gpu/gpuN/`);
+- optional GPU cache residency (`caches/<plan>/gpu/gpuN/`).
 
-Distributed frontier expansion may execute backend requests concurrently. Shared
-registries are read-mostly after construction. `InMemoryBackendLoadTracker` uses a
-mutex because insertion accounting can be updated from multiple request threads.
-Backend clients must obey their own thread-safety guarantees.
+Runtime bulk-loads those arrays. If a physical GPU has both authoritative and cache projections, `GraphRuntimeBuilder` unions their sorted canonical-ID sets, remaps the two dense edge streams, deduplicates them, and then builds one cuGraph device graph. The device object remains process-local, so host-to-device upload and cuGraph CSR construction still occur on startup.
+
+Older domains without a GPU storage plan retain the legacy `graph.jsonl` projection scan only as a compatibility fallback.
+
+## Redis safety
+
+Redis is treated as usable only when its readiness manifest exists and names the same selected cache plan. This protects BFS from stale or empty Redis state even if a plan says a vertex is Redis-resident.
+
+## Configuration composition
+
+`domain.json` references the stable schema/data/backend/observability files. Persistent backend configuration describes authoritative data. A selected `cache-plan.json` supplies cache runtime backends and `residency.bin` at startup, allowing many cache plans to target the same domain.

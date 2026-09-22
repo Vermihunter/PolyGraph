@@ -6,6 +6,7 @@ import csv
 import json
 import re
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,11 +24,60 @@ from tools.graphio import (
     deterministic_entity_uuid,
     deterministic_routed_entity_uuid,
     write_graph_json,
+    plan_graph_caches,
+    load_cache_config,
+    plan_gpu_storage,
+    load_gpu_distribution_config,
 )
 from tools.graphio.domain import write_backend_config_for_sources
-from tools.ldbc_snb.spec import AUXILIARY_PREFIXES, EDGE_SPECS, NODE_SPECS, EdgeSpec
+from tools.ldbc_snb.placement_report import (
+    PlacementStatistics,
+    build_placement_report,
+    write_placement_outputs,
+)
+from tools.ldbc_snb.spec import (
+    AUXILIARY_PREFIXES,
+    EDGE_SPECS,
+    NODE_SPECS,
+    EdgeSpec,
+    NodeSpec,
+)
 
 PARTITION_SUFFIX = re.compile(r"_\d+_\d+$")
+PARTITION_KEY = re.compile(r"(_\d+_\d+)(?:\.csv)?$", re.IGNORECASE)
+
+# The global ID format reserves 48 payload bits below the 16 location bits.
+#
+# LDBC Hadoop Datagen IDs are large sparse 64-bit-ish integers whose upper bits
+# are part of Datagen's own allocation scheme.  They are not a single namespace
+# per entity type, so neither reserving fixed type bits nor masking the upper
+# Datagen bits is safe.
+#
+# The highest payload bit separates nodes from relationships, preserving the
+# original converter's guarantee that all entity IDs owned by the same backend
+# share one collision-free namespace.
+#
+# For nodes, preserve the low 31 raw-ID bits exactly and compact only the pair
+#   (PolyGraph node type, raw LDBC high prefix)
+# into 16 prefix bits.  Therefore node payloads use 47 bits in total and always
+# have payload bit 47 clear.  The dictionary is bounded to 2^16 entries, so RAM
+# depends on the number of ID blocks, not on |V|.
+ENTITY_KIND_BIT = 1 << 47
+NODE_LOCAL_ID_BITS = 31
+NODE_PREFIX_BITS = 16
+NODE_LOCAL_ID_MASK = (1 << NODE_LOCAL_ID_BITS) - 1
+NODE_PREFIX_MASK = (1 << NODE_PREFIX_BITS) - 1
+NODE_TYPE_NAMES = frozenset(spec.type_name for spec in NODE_SPECS.values())
+
+# Relationships live in the upper half of the payload space (kind bit = 1) and
+# use deterministic per-(type, backend) sequence IDs.  With 23 LDBC relation
+# types this leaves 42 sequence bits per type/backend.
+RELATIONSHIP_TYPE_BITS = max(1, (len(EDGE_SPECS) - 1).bit_length())
+RELATIONSHIP_SEQUENCE_BITS = 47 - RELATIONSHIP_TYPE_BITS
+RELATIONSHIP_SEQUENCE_MASK = (1 << RELATIONSHIP_SEQUENCE_BITS) - 1
+RELATIONSHIP_TYPE_CODES = {
+    spec.type_name: code for code, spec in enumerate(EDGE_SPECS.values())
+}
 
 NODE_MEANINGS = {
     "Person": "A person participating in the generated social network.",
@@ -83,10 +133,12 @@ class Placement:
     node_sources: dict[str, str] | None = None
     relationship_sources: dict[str, str] | None = None
     _layout: BackendLayout = field(init=False, repr=False, compare=False)
+    _node_prefix_codes: dict[tuple[str, int], int] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         layout = BackendLayout(tuple(self.storage_backends))
         object.__setattr__(self, "_layout", layout)
+        object.__setattr__(self, "_node_prefix_codes", {})
         for source in (
             self.default_node_source,
             self.default_relationship_source,
@@ -99,34 +151,90 @@ class Placement:
     def routing_layout(self) -> BackendLayout:
         return self._layout
 
-    def _route(
-        self,
-        entity_kind: str,
-        type_name: str,
-        external_id: str,
-        explicit_source: str | None,
-    ) -> tuple[str, str]:
-        if explicit_source is None:
-            return deterministic_routed_entity_uuid(
-                entity_kind, type_name, external_id, self._layout
-            )
-        source = self._layout.source_for_code(self._layout.code_for(explicit_source))
-        return (
-            deterministic_entity_uuid(
-                source, entity_kind, type_name, external_id, self._layout
-            ),
-            source,
-        )
-
-    def node_route(self, type_name: str, external_id: str) -> tuple[str, str]:
+    def node_route(self, type_name: str, external_id: str) -> tuple[int, str]:
         explicit = (self.node_sources or {}).get(type_name, self.default_node_source)
-        return self._route("node", type_name, external_id, explicit)
+        identity = f"node:{type_name}:{external_id}"
+        source = (
+            self._layout.source_for_identity(identity)
+            if explicit is None
+            else self._layout.source_for_code(self._layout.code_for(explicit))
+        )
+        try:
+            numeric_id = int(external_id)
+        except ValueError as exc:
+            raise ValueError(
+                f"LDBC node ID must be numeric for scalable direct ID encoding: "
+                f"type={type_name} id={external_id!r}"
+            ) from exc
+        if numeric_id < 0:
+            raise ValueError(
+                f"LDBC node ID must be non-negative: type={type_name} id={numeric_id}"
+            )
+        if type_name not in NODE_TYPE_NAMES:
+            raise ValueError(f"Unknown LDBC node type for ID encoding: {type_name}")
 
-    def relationship_route(self, type_name: str, identity: str) -> tuple[str, str]:
+        raw_prefix = numeric_id >> NODE_LOCAL_ID_BITS
+        prefix_key = (type_name, raw_prefix)
+        prefix_code = self._node_prefix_codes.get(prefix_key)
+        if prefix_code is None:
+            prefix_code = len(self._node_prefix_codes)
+            if prefix_code > NODE_PREFIX_MASK:
+                raise OverflowError(
+                    "LDBC node IDs require more than "
+                    f"{NODE_PREFIX_MASK + 1:,} distinct (type, high-32) prefixes; "
+                    "the bounded 48-bit PolyGraph payload prefix table is exhausted"
+                )
+            self._node_prefix_codes[prefix_key] = prefix_code
+
+        local_component = numeric_id & NODE_LOCAL_ID_MASK
+        payload = (prefix_code << NODE_LOCAL_ID_BITS) | local_component
+        return self._layout.encode_local(payload, source), source
+
+    def relationship_source(self, type_name: str, identity: str | None = None) -> str:
         explicit = (self.relationship_sources or {}).get(
             type_name, self.default_relationship_source
         )
-        return self._route("relationship", type_name, identity, explicit)
+        if explicit is not None:
+            return self._layout.source_for_code(self._layout.code_for(explicit))
+        if identity is None:
+            raise ValueError(
+                f"Relationship identity is required for hash placement of {type_name}"
+            )
+        return self._layout.source_for_identity(f"relationship:{type_name}:{identity}")
+
+    def relationship_uuid(self, type_name: str, source: str, sequence: int) -> int:
+        if sequence < 0 or sequence > RELATIONSHIP_SEQUENCE_MASK:
+            raise OverflowError(
+                f"LDBC relationship sequence {sequence} for {type_name}/{source} "
+                f"does not fit the {RELATIONSHIP_SEQUENCE_BITS}-bit namespace"
+            )
+        try:
+            type_code = RELATIONSHIP_TYPE_CODES[type_name]
+        except KeyError as exc:
+            raise ValueError(
+                f"Unknown LDBC relationship type for ID encoding: {type_name}"
+            ) from exc
+        payload = ENTITY_KIND_BIT | (type_code << RELATIONSHIP_SEQUENCE_BITS) | sequence
+        return self._layout.encode_local(payload, source)
+
+    def configured_node_source(self, type_name: str) -> str | None:
+        source = (self.node_sources or {}).get(type_name, self.default_node_source)
+        if source is None:
+            return None
+        return self._layout.source_for_code(self._layout.code_for(source))
+
+    def configured_relationship_source(self, type_name: str) -> str | None:
+        source = (self.relationship_sources or {}).get(
+            type_name, self.default_relationship_source
+        )
+        if source is None:
+            return None
+        return self._layout.source_for_code(self._layout.code_for(source))
+
+
+    @property
+    def node_prefix_count(self) -> int:
+        return len(self._node_prefix_codes)
 
     @property
     def strategy_name(self) -> str:
@@ -137,6 +245,10 @@ class Placement:
             or self.relationship_sources
         )
         return "explicit-overrides-v1" if has_explicit else "identity-hash-v1"
+
+    @property
+    def payload_strategy_name(self) -> str:
+        return "ldbc-block31-v3"
 
 
 def load_placement(
@@ -234,12 +346,49 @@ def csv_rows(path: Path) -> Iterator[tuple[list[str], list[str]]]:
             yield header, row[: len(header)]
 
 
-def read_auxiliary(grouped: dict[str, list[Path]]) -> dict[str, dict[str, list[str]]]:
+def partition_key(path: Path) -> str | None:
+    match = PARTITION_KEY.search(path.name)
+    return match.group(1) if match else None
+
+
+def _auxiliary_paths_for_person_partition(
+    grouped: dict[str, list[Path]],
+    prefix: str,
+    person_path: Path,
+) -> list[Path]:
+    candidates = grouped.get(prefix, [])
+    if not candidates:
+        return []
+    key = partition_key(person_path)
+    if key is not None:
+        exact = [path for path in candidates if partition_key(path) == key]
+        if exact:
+            return exact
+    # Unpartitioned exports commonly contain a single auxiliary file.  Keep a
+    # safe fallback for those while avoiding a global SF-scale in-memory map.
+    if len(candidates) == 1:
+        return candidates
+    if key is None:
+        return candidates
+    return []
+
+
+def read_person_auxiliary_partition(
+    grouped: dict[str, list[Path]], person_path: Path
+) -> dict[str, dict[str, list[str]]]:
+    """Load only the email/language shard matching one Person CSV shard.
+
+    Old conversion loaded every Person auxiliary value into Python at once.
+    At large scale factors that alone can consume multiple GiB.  LDBC CsvBasic
+    uses matching partition suffixes, so processing one shard at a time bounds
+    auxiliary memory by the largest shard rather than the whole dataset.
+    """
+
     result: dict[str, dict[str, list[str]]] = {
         name: defaultdict(list) for name in AUXILIARY_PREFIXES.values()
     }
     for prefix, property_name in AUXILIARY_PREFIXES.items():
-        for path in grouped.get(prefix, []):
+        for path in _auxiliary_paths_for_person_partition(grouped, prefix, person_path):
             for _header, row in csv_rows(path):
                 if len(row) >= 2 and row[1].strip():
                     result[property_name][row[0].strip()].append(row[1].strip())
@@ -258,10 +407,14 @@ def row_properties(header: list[str], row: list[str], *, skip: int) -> dict[str,
 def iter_nodes(
     grouped: dict[str, list[Path]],
     placement: Placement,
-    auxiliary: dict[str, dict[str, list[str]]],
 ) -> Iterator[NodeRecord]:
     for prefix, spec in NODE_SPECS.items():
         for path in grouped.get(prefix, []):
+            auxiliary = (
+                read_person_auxiliary_partition(grouped, path)
+                if spec.type_name == "Person"
+                else None
+            )
             for header, row in csv_rows(path):
                 external_id = row[0].strip()
                 if not external_id:
@@ -269,7 +422,7 @@ def iter_nodes(
                 node_uuid, source = placement.node_route(spec.type_name, external_id)
                 properties = row_properties(header, row, skip=1)
                 properties["ldbc_id"] = parse_scalar(external_id, "ldbc_id")
-                if spec.type_name == "Person":
+                if auxiliary is not None:
                     for property_name in ("email", "language"):
                         values = auxiliary[property_name].get(external_id)
                         if values:
@@ -282,12 +435,15 @@ def iter_nodes(
                 )
 
 
-def edge_identity(spec: EdgeSpec, from_id: str, to_id: str, properties: dict[str, Any]) -> str:
-    stable_properties = json.dumps(properties, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return f"{from_id}->{to_id}:{stable_properties}"
+def edge_identity(from_id: str, to_id: str, raw_property_values: list[str]) -> str:
+    # Used only for identity-hash *placement*.  Relationship IDs themselves are
+    # allocated from deterministic counters, so schema-based placement avoids
+    # this string construction entirely.
+    return f"{from_id}->{to_id}:" + "|".join(raw_property_values)
 
 
 def iter_relationships(grouped: dict[str, list[Path]], placement: Placement) -> Iterator[RelationshipRecord]:
+    sequence_by_type_and_source: dict[tuple[str, str], int] = defaultdict(int)
     for prefix, spec in EDGE_SPECS.items():
         for path in grouped.get(prefix, []):
             for header, row in csv_rows(path):
@@ -298,8 +454,13 @@ def iter_relationships(grouped: dict[str, list[Path]], placement: Placement) -> 
                 if not from_id or not to_id:
                     continue
                 properties = row_properties(header, row, skip=2)
-                identity = edge_identity(spec, from_id, to_id, properties)
-                relationship_uuid, source = placement.relationship_route(spec.type_name, identity)
+                configured_source = placement.configured_relationship_source(spec.type_name)
+                identity = None if configured_source is not None else edge_identity(from_id, to_id, row[2:])
+                source = placement.relationship_source(spec.type_name, identity)
+                sequence_key = (spec.type_name, source)
+                sequence = sequence_by_type_and_source[sequence_key]
+                sequence_by_type_and_source[sequence_key] += 1
+                relationship_uuid = placement.relationship_uuid(spec.type_name, source, sequence)
                 from_uuid, _ = placement.node_route(spec.from_type, from_id)
                 to_uuid, _ = placement.node_route(spec.to_type, to_id)
                 yield RelationshipRecord(
@@ -334,11 +495,10 @@ def _property_json(name: str, type_name: str, samples: dict[str, Any]) -> dict[s
 def collect_samples(
     grouped: dict[str, list[Path]],
     placement: Placement,
-    auxiliary: dict[str, dict[str, list[str]]],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     node_samples: dict[str, dict[str, Any]] = {}
     relationship_samples: dict[str, dict[str, Any]] = {}
-    for node in iter_nodes(grouped, placement, auxiliary):
+    for node in iter_nodes(grouped, placement):
         node_samples.setdefault(node.type, node.properties)
         if len(node_samples) == len(NODE_SPECS):
             break
@@ -355,6 +515,7 @@ def write_schema(
     *,
     node_samples: dict[str, dict[str, Any]] | None = None,
     relationship_samples: dict[str, dict[str, Any]] | None = None,
+    placement_statistics: PlacementStatistics | None = None,
 ) -> None:
     node_samples = node_samples or {}
     relationship_samples = relationship_samples or {}
@@ -363,41 +524,84 @@ def write_schema(
         connects_to[relation.from_type].add(relation.to_type)
         connects_to[relation.to_type].add(relation.from_type)
 
+    def placement_fields(
+        counts: dict[str, int], configured_source: str | None
+    ) -> dict[str, Any]:
+        placements = [
+            {"backend": backend, "count": count}
+            for backend, count in sorted(counts.items())
+        ]
+        if configured_source is not None:
+            source = configured_source
+        elif len(counts) == 1:
+            source = next(iter(counts))
+        else:
+            source = "Distributed"
+        return {
+            "source": source,
+            "count": sum(counts.values()),
+            "placements": placements,
+        }
+
+    def node_schema(spec: NodeSpec) -> dict[str, Any]:
+        counts = (
+            placement_statistics.node_type_counts(spec.type_name)
+            if placement_statistics
+            else {}
+        )
+        return {
+            "name": spec.type_name,
+            "meaning": NODE_MEANINGS.get(
+                spec.type_name, f"LDBC {spec.type_name} entity."
+            ),
+            "connectsTo": sorted(connects_to[spec.type_name]),
+            **placement_fields(
+                counts, placement.configured_node_source(spec.type_name)
+            ),
+            "properties": [
+                _property_json(
+                    name, type_name, node_samples.get(spec.type_name, {})
+                )
+                for name, type_name in spec.properties
+            ],
+        }
+
+    def relationship_schema(spec: EdgeSpec) -> dict[str, Any]:
+        counts = (
+            placement_statistics.relationship_type_counts(spec.type_name)
+            if placement_statistics
+            else {}
+        )
+        return {
+            "name": spec.type_name,
+            "meaning": RELATION_MEANINGS.get(
+                spec.type_name,
+                f"Connects {spec.from_type} to {spec.to_type} in the LDBC SNB graph.",
+            ),
+            "from": spec.from_type,
+            "to": spec.to_type,
+            "directed": spec.directed,
+            **placement_fields(
+                counts, placement.configured_relationship_source(spec.type_name)
+            ),
+            "properties": [
+                _property_json(
+                    name,
+                    type_name,
+                    relationship_samples.get(spec.type_name, {}),
+                )
+                for name, type_name in spec.properties
+            ],
+        }
+
     schema = {
         "domain": "LDBC SNB Interactive v1",
         "description": (
             "The LDBC Social Network Benchmark Interactive v1 graph, including both the static "
             "reference data and the dynamic initial social-network snapshot. Update streams are not included."
         ),
-        "nodeTypes": [
-            {
-                "name": spec.type_name,
-                "meaning": NODE_MEANINGS.get(spec.type_name, f"LDBC {spec.type_name} entity."),
-                "connectsTo": sorted(connects_to[spec.type_name]),
-                "properties": [
-                    _property_json(name, type_name, node_samples.get(spec.type_name, {}))
-                    for name, type_name in spec.properties
-                ],
-            }
-            for spec in NODE_SPECS.values()
-        ],
-        "relations": [
-            {
-                "name": spec.type_name,
-                "meaning": RELATION_MEANINGS.get(
-                    spec.type_name,
-                    f"Connects {spec.from_type} to {spec.to_type} in the LDBC SNB graph.",
-                ),
-                "from": spec.from_type,
-                "to": spec.to_type,
-                "directed": spec.directed,
-                "properties": [
-                    _property_json(name, type_name, relationship_samples.get(spec.type_name, {}))
-                    for name, type_name in spec.properties
-                ],
-            }
-            for spec in EDGE_SPECS.values()
-        ],
+        "nodeTypes": [node_schema(spec) for spec in NODE_SPECS.values()],
+        "relations": [relationship_schema(spec) for spec in EDGE_SPECS.values()],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
@@ -407,7 +611,7 @@ def write_jsonl(
     output: Path,
     grouped: dict[str, list[Path]],
     placement: Placement,
-    auxiliary: dict[str, dict[str, list[str]]],
+    placement_statistics: PlacementStatistics | None = None,
 ) -> tuple[int, int]:
     node_count = relationship_count = 0
     routing_layout = placement.routing_layout()
@@ -416,15 +620,45 @@ def write_jsonl(
         {
             "dataset": "ldbc-snb-interactive-v1",
             "idRoutingStrategy": placement.strategy_name,
+            "idPayloadStrategy": placement.payload_strategy_name,
             **routing_layout.metadata(),
         },
     ) as writer:
-        for node in iter_nodes(grouped, placement, auxiliary):
+        started = time.monotonic()
+        last_report = started
+        for node in iter_nodes(grouped, placement):
             writer.write_node(node)
+            if placement_statistics is not None:
+                placement_statistics.record_node(node)
             node_count += 1
+            now = time.monotonic()
+            if now - last_report >= 5.0:
+                print(
+                    f"[ldbc] wrote {node_count:,} nodes ({now - started:,.1f}s)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                last_report = now
+        print(
+            f"[ldbc] node ID prefix table: {placement.node_prefix_count:,}/"
+            f"{NODE_PREFIX_MASK + 1:,} entries",
+            file=sys.stderr,
+            flush=True,
+        )
         for relationship in iter_relationships(grouped, placement):
             writer.write_relationship(relationship)
+            if placement_statistics is not None:
+                placement_statistics.record_relationship(relationship, routing_layout)
             relationship_count += 1
+            now = time.monotonic()
+            if now - last_report >= 5.0:
+                print(
+                    f"[ldbc] wrote {node_count:,} nodes and {relationship_count:,} relationships "
+                    f"({now - started:,.1f}s)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                last_report = now
     return node_count, relationship_count
 
 
@@ -432,16 +666,23 @@ def write_monolithic_json(
     output: Path,
     grouped: dict[str, list[Path]],
     placement: Placement,
-    auxiliary: dict[str, dict[str, list[str]]],
+    placement_statistics: PlacementStatistics | None = None,
 ) -> tuple[int, int]:
-    nodes = list(iter_nodes(grouped, placement, auxiliary))
+    nodes = list(iter_nodes(grouped, placement))
     relationships = list(iter_relationships(grouped, placement))
+    if placement_statistics is not None:
+        routing_layout = placement.routing_layout()
+        for node in nodes:
+            placement_statistics.record_node(node)
+        for relationship in relationships:
+            placement_statistics.record_relationship(relationship, routing_layout)
     write_graph_json(
         output,
         nodes,
         relationships,
         metadata={
             "idRoutingStrategy": placement.strategy_name,
+            "idPayloadStrategy": placement.payload_strategy_name,
             **placement.routing_layout().metadata(),
         },
     )
@@ -458,6 +699,12 @@ def convert_dataset(
     default_source: str = "Neo4J",
     storage_backends: tuple[str, ...] | list[str] = DEFAULT_ROUTING_BACKENDS,
     arango_database: str = "university",
+    placement_report_dir: str | Path | None = None,
+    render_placement_graph: bool = True,
+    cache_config: str | Path | None = None,
+    cache_output_dir: str | Path | None = None,
+    gpu_distribution_config: str | Path | None = None,
+    gpu_distribution_output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     source_dir = Path(input_dir).expanduser().resolve()
     graph_output = Path(output).expanduser().resolve()
@@ -474,27 +721,90 @@ def convert_dataset(
         print(f"warning: ignored unrecognized CSV groups: {', '.join(unknown)}", file=sys.stderr)
 
     placement = load_placement(placement_config, default_source, tuple(storage_backends))
-    auxiliary = read_auxiliary(grouped)
+    placement_statistics = PlacementStatistics()
     graph_output.parent.mkdir(parents=True, exist_ok=True)
+    print(
+        f"[ldbc] discovered {sum(len(paths) for paths in grouped.values()):,} CSV shards; "
+        f"streaming conversion with bounded-memory ID allocation",
+        file=sys.stderr,
+        flush=True,
+    )
     if graph_output.suffix.lower() in {".jsonl", ".ndjson"}:
-        node_count, relationship_count = write_jsonl(graph_output, grouped, placement, auxiliary)
+        node_count, relationship_count = write_jsonl(
+            graph_output,
+            grouped,
+            placement,
+            placement_statistics,
+        )
     elif graph_output.suffix.lower() == ".json":
-        node_count, relationship_count = write_monolithic_json(graph_output, grouped, placement, auxiliary)
+        node_count, relationship_count = write_monolithic_json(
+            graph_output,
+            grouped,
+            placement,
+            placement_statistics,
+        )
     else:
         raise ValueError("Output must end in .json, .jsonl, or .ndjson")
 
-    node_samples, relationship_samples = collect_samples(grouped, placement, auxiliary)
+    node_samples, relationship_samples = collect_samples(grouped, placement)
     write_schema(
         schema_path,
         placement,
         node_samples=node_samples,
         relationship_samples=relationship_samples,
+        placement_statistics=placement_statistics,
     )
+    placement_report = build_placement_report(
+        placement_statistics,
+        routing_layout=placement.routing_layout(),
+        placement_strategy=placement.strategy_name,
+    )
+    placement_outputs = write_placement_outputs(
+        placement_report_dir or graph_output.parent,
+        placement_report,
+        render_graph=render_placement_graph,
+    )
+    planning_db = graph_output.parent / "cache-plan.sqlite3"
+    gpu_storage_result: dict[str, Any] | None = None
+    gpu_distribution_raw: dict[str, Any] | None = None
+    if "GPU" in placement.routing_layout().backends:
+        gpu_distribution_raw = load_gpu_distribution_config(gpu_distribution_config)
+        gpu_storage_root = (
+            Path(gpu_distribution_output_dir).expanduser().resolve()
+            if gpu_distribution_output_dir
+            else graph_output.parent / "gpu-storage"
+        )
+        gpu_storage_result = plan_gpu_storage(
+            graph_output,
+            gpu_distribution_raw,
+            output_dir=gpu_storage_root,
+            routing_layout=placement.routing_layout(),
+            planning_db_path=planning_db,
+        )
+
+    cache_result: dict[str, Any] | None = None
+    cache_raw = load_cache_config(cache_config) if cache_config else None
+    cache_root = Path(cache_output_dir).expanduser().resolve() if cache_output_dir else graph_output.parent / "cache"
+    if cache_raw:
+        cache_result = plan_graph_caches(
+            graph_output,
+            cache_raw,
+            output_dir=cache_root,
+            routing_layout=placement.routing_layout(),
+            planning_db_path=planning_db,
+        )
+
     if backend_config_output:
         write_backend_config_for_sources(
             placement.routing_layout().backends,
             backend_config_output,
             arango_database=arango_database,
+            # Cache backends are selected by cache-plan.json at runtime. Keep
+            # the domain backend configuration authoritative-data-only.
+            cache_config=None,
+            cache_root=None,
+            gpu_distribution_config=gpu_distribution_raw,
+            gpu_storage_plan=(gpu_storage_result or {}).get("plan"),
         )
 
     return {
@@ -505,13 +815,17 @@ def convert_dataset(
         "relationships": relationship_count,
         "uuid_routing": list(placement.routing_layout().backends),
         "uuid_routing_bits": placement.routing_layout().bit_count,
+        "id_payload_strategy": placement.payload_strategy_name,
+        "placement": placement_outputs,
+        "gpu_storage": gpu_storage_result,
+        "cache": cache_result,
         "ignored_csv_groups": unknown,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Convert LDBC SNB Interactive v1 CsvBasic static+dynamic data to CPGDB."
+        description="Convert LDBC SNB Interactive v1 CsvBasic static+dynamic data to PolyGraph."
     )
     parser.add_argument("--input-dir", required=True, help="Directory containing sibling static/ and dynamic/ folders.")
     parser.add_argument("--output", required=True, help="Output .jsonl/.ndjson (recommended) or .json graph file.")
@@ -524,12 +838,34 @@ def main() -> int:
     parser.add_argument(
         "--storage-backends",
         nargs="+",
-        choices=["Neo4J", "ArangoDB", "GPU"],
+        choices=["Neo4J", "ArangoDB", "PostgreSQL", "GPU"],
         default=list(DEFAULT_ROUTING_BACKENDS),
         help="Ordered backend list; B=3 automatically uses two ID MSB routing bits.",
     )
-    parser.add_argument("--default-source", default="Neo4J", choices=["Neo4J", "ArangoDB", "GPU"])
+    parser.add_argument("--default-source", default="Neo4J", choices=["Neo4J", "ArangoDB", "PostgreSQL", "GPU"])
     parser.add_argument("--arango-database", default="university")
+    parser.add_argument("--cache-config", help="Optional GPU/Redis/mmap acceleration-cache configuration.")
+    parser.add_argument("--cache-output-dir", help="Cache artifact directory; defaults to <graph-dir>/cache.")
+    parser.add_argument(
+        "--gpu-distribution-config",
+        help="Physical distribution of authoritative GPU-owned vertices across GPU devices.",
+    )
+    parser.add_argument(
+        "--gpu-distribution-output-dir",
+        help="Authoritative GPU artifacts; defaults to <graph-dir>/gpu-storage.",
+    )
+    parser.add_argument(
+        "--placement-report-dir",
+        help=(
+            "Directory for placement-report.json/.txt and placement-graph.dot/.svg/.pdf; "
+            "defaults to the graph output directory."
+        ),
+    )
+    parser.add_argument(
+        "--no-placement-graph-render",
+        action="store_true",
+        help="Write the DOT source but skip Graphviz SVG/PDF rendering.",
+    )
     args = parser.parse_args()
 
     result = convert_dataset(
@@ -541,6 +877,12 @@ def main() -> int:
         default_source=args.default_source,
         storage_backends=args.storage_backends,
         arango_database=args.arango_database,
+        placement_report_dir=args.placement_report_dir,
+        render_placement_graph=not args.no_placement_graph_render,
+        cache_config=args.cache_config,
+        cache_output_dir=args.cache_output_dir,
+        gpu_distribution_config=args.gpu_distribution_config,
+        gpu_distribution_output_dir=args.gpu_distribution_output_dir,
     )
     print(json.dumps(result, indent=2))
     return 0

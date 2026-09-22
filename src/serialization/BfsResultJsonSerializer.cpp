@@ -8,7 +8,7 @@
 
 #include <utility>
 
-namespace cpgdb {
+namespace polygraph {
 
     namespace {
         std::string globalIdToString(const GlobalId &id) { return global_id_to_string(id); }
@@ -28,4 +28,4 @@ namespace cpgdb {
         json = {{"distance", std::move(distances)}, {"predecessor", std::move(predecessors)}};
     }
 
-} // namespace cpgdb
+} // namespace polygraph

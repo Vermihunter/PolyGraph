@@ -13,9 +13,9 @@ add_custom_target(
 )
 
 set(DOXYGEN_INPUT_PATHS
-    "${PROJECT_SOURCE_DIR}/README.md"
+    "${PROJECT_SOURCE_DIR}/docs/README.md"
     "${PROJECT_SOURCE_DIR}/docs"
-    "../../../../Projects/diplomka/vermesa/include"
+    "${PROJECT_SOURCE_DIR}/include"
     "${PROJECT_SOURCE_DIR}/src"
 )
 
@@ -32,7 +32,7 @@ add_custom_target(
     docs
     COMMAND "${DOXYGEN_EXECUTABLE}" "${CMAKE_CURRENT_BINARY_DIR}/Doxyfile"
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-    COMMENT "Generating CPGDB HTML API documentation"
+    COMMENT "Generating PolyGraph HTML API documentation"
     VERBATIM
 )
 

@@ -7,7 +7,7 @@
 
 #include "query/QueryVisitor.hpp"
 
-namespace cpgdb {
+namespace polygraph {
     query_result_t GetAllEdgesQuery::accept(QueryVisitor &visitor) const { return visitor.visit(*this); }
     query_t GetAllEdgesQuery::clone() const { return std::make_unique<GetAllEdgesQuery>(); }
-} // namespace cpgdb
+} // namespace polygraph

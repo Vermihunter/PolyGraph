@@ -3,15 +3,15 @@
  * @brief Declarations for traversal controller in the server frontend module.
  */
 
-#ifndef CPGDB_SERVER_CONTROLLERS_TRAVERSAL_CONTROLLER_HPP
-#define CPGDB_SERVER_CONTROLLERS_TRAVERSAL_CONTROLLER_HPP
+#ifndef POLYGRAPH_SERVER_CONTROLLERS_TRAVERSAL_CONTROLLER_HPP
+#define POLYGRAPH_SERVER_CONTROLLERS_TRAVERSAL_CONTROLLER_HPP
 
 #include <drogon/drogon.h>
 #include <functional>
 #include <spdlog/spdlog.h>
 #include <string>
 
-namespace cpgdb::http::api::v1 {
+namespace polygraph::http::api::v1 {
 
 class TraversalController final : public drogon::HttpController<TraversalController> {
   public:
@@ -29,6 +29,6 @@ class TraversalController final : public drogon::HttpController<TraversalControl
                       const std::string& source_vertex_uuid);
 };
 
-} // namespace cpgdb::http::api::v1
+} // namespace polygraph::http::api::v1
 
-#endif // CPGDB_SERVER_CONTROLLERS_TRAVERSAL_CONTROLLER_HPP
+#endif // POLYGRAPH_SERVER_CONTROLLERS_TRAVERSAL_CONTROLLER_HPP

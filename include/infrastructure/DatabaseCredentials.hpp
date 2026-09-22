@@ -7,17 +7,17 @@
 // Created by akos on 7. 5. 2026.
 //
 
-#ifndef CPGDB_DATABASECREDENTIALS_HPP
-#define CPGDB_DATABASECREDENTIALS_HPP
+#ifndef POLYGRAPH_DATABASECREDENTIALS_HPP
+#define POLYGRAPH_DATABASECREDENTIALS_HPP
 
 #include <string>
 
-namespace cpgdb {
+namespace polygraph {
 struct DatabaseCredentials {
     std::string username;
     std::string password;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_DATABASECREDENTIALS_HPP
+#endif // POLYGRAPH_DATABASECREDENTIALS_HPP

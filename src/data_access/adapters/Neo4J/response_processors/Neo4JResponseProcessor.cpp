@@ -5,9 +5,9 @@
 
 #include "data_access/adapters/Neo4J/response_processors/Neo4JResponseProcessor.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 
     Neo4JResponseProcessor::Neo4JResponseProcessor() = default;
     Neo4JResponseProcessor::~Neo4JResponseProcessor() = default;
 
-} // namespace cpgdb
+} // namespace polygraph

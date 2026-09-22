@@ -9,11 +9,11 @@
 
 #include <utility>
 
-namespace cpgdb {
+namespace polygraph {
     GetNeighborsBatchQuery::GetNeighborsBatchQuery(std::vector<NodeRef> frontier, ExpandSpec spec) :
         frontier_(std::move(frontier)), spec_(std::move(spec)) {}
     const std::vector<NodeRef> &GetNeighborsBatchQuery::frontier() const noexcept { return frontier_; }
     const ExpandSpec &GetNeighborsBatchQuery::spec() const noexcept { return spec_; }
     query_result_t GetNeighborsBatchQuery::accept(QueryVisitor &visitor) const { return visitor.visit(*this); }
     query_t GetNeighborsBatchQuery::clone() const { return std::make_unique<GetNeighborsBatchQuery>(*this); }
-} // namespace cpgdb
+} // namespace polygraph

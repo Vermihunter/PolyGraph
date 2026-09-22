@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Compatibility wrapper around the canonical native-ID graph loader.
+"""Compatibility wrapper around the canonical integer-ID graph loader.
 
 The old implementation duplicated the loader and stored a uuid property on every
-Neo4j entity. Keeping one loader is important now that real Neo4j entities use
-id(n)/id(r), proxies retain numeric uuid, and ArangoDB uses uint64 IDs.
+Neo4j entity. Keeping one loader is important now that real Neo4j entities use explicit integer localId properties, proxies retain numeric uuid,
+and ArangoDB uses uint64 IDs.
 """
 from __future__ import annotations
 
@@ -25,15 +25,15 @@ from tools.graphio.reader import open_graph_reader
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Load CPGDB JSON/JSONL data using uint64 MSB routing, Neo4j native IDs, "
-            "numeric proxy uuid properties, and indexed ArangoDB uuid properties."
+            "Load PolyGraph JSON/JSONL data using uint64 MSB routing, Neo4j localId integers, "
+            "numeric proxy uuid properties, indexed ArangoDB uuid properties, and PostgreSQL relational storage."
         )
     )
     parser.add_argument("input_graph", help="Path to graph .json, .jsonl, or .ndjson")
     parser.add_argument("--batch-size", type=int, default=5000)
     parser.add_argument("--reset", action="store_true")
     parser.add_argument(
-        "--only-source", choices=["Neo4J", "ArangoDB", "GPU"], action="append", default=[]
+        "--only-source", choices=["Neo4J", "ArangoDB", "PostgreSQL", "GPU"], action="append", default=[]
     )
     parser.add_argument("--resolved-output")
     parser.add_argument("--id-map-output")
@@ -45,6 +45,10 @@ def main() -> int:
     parser.add_argument("--neo4j-http", default="http://localhost:7474/db/neo4j/tx/commit")
     parser.add_argument("--neo4j-user", default="neo4j")
     parser.add_argument("--neo4j-password", default="password")
+    parser.add_argument("--postgres-endpoint", default="127.0.0.1:5432")
+    parser.add_argument("--postgres-db", default="polygraph")
+    parser.add_argument("--postgres-user", default="polygraph")
+    parser.add_argument("--postgres-password", default="polygraph")
     args = parser.parse_args()
 
     if args.batch_size <= 0:
@@ -77,6 +81,20 @@ def main() -> int:
                 "credentials": {"username": args.arango_user, "password": args.arango_password},
             },
         })
+    if "PostgreSQL" in layout:
+        backends.append({
+            "id": "PostgreSQL",
+            "kind": "PostgreSQL",
+            "enabled": "PostgreSQL" in selected,
+            "connection": {
+                "endpoint": args.postgres_endpoint,
+                "database": args.postgres_db,
+                "credentials": {
+                    "username": args.postgres_user,
+                    "password": args.postgres_password,
+                },
+            },
+        })
     if "GPU" in layout:
         backends.append({"id": "GPU", "enabled": "GPU" in selected})
 
@@ -86,7 +104,7 @@ def main() -> int:
     for backend in backends:
         backend["enabled"] = True
 
-    with tempfile.TemporaryDirectory(prefix="cpgdb-loader-") as directory:
+    with tempfile.TemporaryDirectory(prefix="polygraph-loader-") as directory:
         config = Path(directory) / "backends.json"
         config.write_text(
             json.dumps({"version": 1, "idRouting": list(layout), "backends": backends}, indent=2) + "\n",

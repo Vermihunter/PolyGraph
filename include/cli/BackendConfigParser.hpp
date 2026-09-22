@@ -4,8 +4,8 @@
  * module.
  */
 
-#ifndef CPGDB_CLI_BACKEND_CONFIG_PARSER_HPP
-#define CPGDB_CLI_BACKEND_CONFIG_PARSER_HPP
+#ifndef POLYGRAPH_CLI_BACKEND_CONFIG_PARSER_HPP
+#define POLYGRAPH_CLI_BACKEND_CONFIG_PARSER_HPP
 
 #include "domain/graph/LogicalGraphSchema.hpp"
 #include "infrastructure/BackendCapabilities.hpp"
@@ -22,7 +22,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace cpgdb::config {
+namespace polygraph::config {
 
 [[nodiscard]] std::string backend_id_to_string(BackendId id);
 [[nodiscard]] BackendId backend_id_from_string(const std::string& value);
@@ -46,6 +46,6 @@ parse_descriptor(const json& backend_json,
 [[nodiscard]] bool backend_enabled(const DatabaseContext& context, BackendId id);
 void print_backend_summary(const DatabaseContext& context, std::ostream& output);
 
-} // namespace cpgdb::config
+} // namespace polygraph::config
 
-#endif // CPGDB_CLI_BACKEND_CONFIG_PARSER_HPP
+#endif // POLYGRAPH_CLI_BACKEND_CONFIG_PARSER_HPP

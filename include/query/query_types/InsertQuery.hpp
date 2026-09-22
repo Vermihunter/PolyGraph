@@ -3,13 +3,13 @@
  * @brief Backend-neutral query for one immutable node or edge insertion.
  */
 
-#ifndef CPGDB_QUERY_QUERY_TYPES_INSERT_QUERY_HPP
-#define CPGDB_QUERY_QUERY_TYPES_INSERT_QUERY_HPP
+#ifndef POLYGRAPH_QUERY_QUERY_TYPES_INSERT_QUERY_HPP
+#define POLYGRAPH_QUERY_QUERY_TYPES_INSERT_QUERY_HPP
 
 #include "insertion/InsertionItem.hpp"
 #include "query/Query.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 
 /** @brief Visitor-dispatched write query containing exactly one insertion item. */
 class InsertQuery final : public Query {
@@ -26,6 +26,6 @@ class InsertQuery final : public Query {
     insertion::InsertionItem item_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_QUERY_QUERY_TYPES_INSERT_QUERY_HPP
+#endif // POLYGRAPH_QUERY_QUERY_TYPES_INSERT_QUERY_HPP

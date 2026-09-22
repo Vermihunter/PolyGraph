@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
     struct Neo4JBoltClient::Impl {
     public:
@@ -256,7 +256,7 @@ namespace cpgdb {
 
         void authenticate() {
             if (bolt_major_ == 5 && bolt_minor_ >= 1) {
-                send_message(pack_struct(0x01, json::array({json{{"user_agent", "cpgdb-bolt/0.1"}}})));
+                send_message(pack_struct(0x01, json::array({json{{"user_agent", "polygraph-bolt/0.1"}}})));
                 expect_success("HELLO");
 
                 send_message(pack_struct(0x6A, json::array({auth_token()})));
@@ -265,7 +265,7 @@ namespace cpgdb {
             }
 
             json hello = auth_token();
-            hello["user_agent"] = "cpgdb-bolt/0.1";
+            hello["user_agent"] = "polygraph-bolt/0.1";
             send_message(pack_struct(0x01, json::array({hello})));
             expect_success("HELLO");
         }
@@ -681,4 +681,4 @@ namespace cpgdb {
         return impl_->run(cypher, parameters);
     }
 
-} // namespace cpgdb
+} // namespace polygraph

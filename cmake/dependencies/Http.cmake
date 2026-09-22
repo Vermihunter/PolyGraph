@@ -5,7 +5,7 @@ include(FetchContent)
 find_package(jsoncpp CONFIG QUIET)
 find_package(Drogon CONFIG QUIET)
 
-function(_cpgdb_select_jsoncpp_target output)
+function(_polygraph_select_jsoncpp_target output)
     if(TARGET JsonCpp::JsonCpp)
         set(${output} JsonCpp::JsonCpp PARENT_SCOPE)
     elseif(TARGET jsoncpp_lib)
@@ -17,10 +17,10 @@ function(_cpgdb_select_jsoncpp_target output)
     endif()
 endfunction()
 
-_cpgdb_select_jsoncpp_target(_cpgdb_jsoncpp_target)
+_polygraph_select_jsoncpp_target(_polygraph_jsoncpp_target)
 
-if(NOT _cpgdb_jsoncpp_target AND CPGDB_FETCH_DEPENDENCIES)
-    message(STATUS "CPGDB dependency: JsonCpp not installed; fetching 1.9.6")
+if(NOT _polygraph_jsoncpp_target AND POLYGRAPH_FETCH_DEPENDENCIES)
+    message(STATUS "PolyGraph dependency: JsonCpp not installed; fetching 1.9.6")
     FetchContent_Declare(
         jsoncpp
         GIT_REPOSITORY https://github.com/open-source-parsers/jsoncpp.git
@@ -31,24 +31,30 @@ if(NOT _cpgdb_jsoncpp_target AND CPGDB_FETCH_DEPENDENCIES)
     set(JSONCPP_WITH_POST_BUILD_UNITTEST OFF CACHE BOOL "" FORCE)
     set(JSONCPP_WITH_WARNING_AS_ERROR OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(jsoncpp)
-    _cpgdb_select_jsoncpp_target(_cpgdb_jsoncpp_target)
+    _polygraph_select_jsoncpp_target(_polygraph_jsoncpp_target)
 endif()
 
-if(NOT _cpgdb_jsoncpp_target)
+if(NOT _polygraph_jsoncpp_target)
     message(FATAL_ERROR "The HTTP frontend requires JsonCpp")
 endif()
 
 if(TARGET Drogon::Drogon)
-    set(_cpgdb_drogon_target Drogon::Drogon)
+    set(_polygraph_drogon_target Drogon::Drogon)
 elseif(TARGET drogon)
-    set(_cpgdb_drogon_target drogon)
-elseif(CPGDB_FETCH_DEPENDENCIES)
-    message(STATUS "CPGDB dependency: Drogon not installed; fetching v1.9.9")
+    set(_polygraph_drogon_target drogon)
+elseif(POLYGRAPH_FETCH_DEPENDENCIES)
+    message(STATUS "PolyGraph dependency: Drogon not installed; fetching v1.9.9")
 
     # Drogon's fallback finder understands these variables when JsonCpp was
     # built by FetchContent in the same project.
-    set(JSONCPP_INCLUDE_DIRS "${jsoncpp_SOURCE_DIR}/include" CACHE PATH "" FORCE)
-    set(JSONCPP_LIBRARIES "${_cpgdb_jsoncpp_target}" CACHE STRING "" FORCE)
+    get_target_property(
+            JSONCPP_INCLUDE_DIRS
+            "${_polygraph_jsoncpp_target}"
+            INTERFACE_INCLUDE_DIRECTORIES
+    )
+
+    set(JSONCPP_INCLUDE_DIRS "${JSONCPP_INCLUDE_DIRS}" CACHE PATH "" FORCE)
+    set(JSONCPP_LIBRARIES "${_polygraph_jsoncpp_target}" CACHE STRING "" FORCE)
 
     FetchContent_Declare(
         drogon
@@ -62,22 +68,22 @@ elseif(CPGDB_FETCH_DEPENDENCIES)
     FetchContent_MakeAvailable(drogon)
 
     if(TARGET Drogon::Drogon)
-        set(_cpgdb_drogon_target Drogon::Drogon)
+        set(_polygraph_drogon_target Drogon::Drogon)
     elseif(TARGET drogon)
-        set(_cpgdb_drogon_target drogon)
+        set(_polygraph_drogon_target drogon)
     endif()
 endif()
 
-if(NOT _cpgdb_drogon_target)
+if(NOT _polygraph_drogon_target)
     message(FATAL_ERROR "The HTTP frontend requires Drogon")
 endif()
 
-add_library(cpgdb_jsoncpp INTERFACE)
-add_library(cpgdb::jsoncpp ALIAS cpgdb_jsoncpp)
-target_link_libraries(cpgdb_jsoncpp INTERFACE "${_cpgdb_jsoncpp_target}")
+add_library(polygraph_jsoncpp INTERFACE)
+add_library(polygraph::jsoncpp ALIAS polygraph_jsoncpp)
+target_link_libraries(polygraph_jsoncpp INTERFACE "${_polygraph_jsoncpp_target}")
 
-add_library(cpgdb_drogon INTERFACE)
-add_library(cpgdb::drogon ALIAS cpgdb_drogon)
-target_link_libraries(cpgdb_drogon INTERFACE "${_cpgdb_drogon_target}")
+add_library(polygraph_drogon INTERFACE)
+add_library(polygraph::drogon ALIAS polygraph_drogon)
+target_link_libraries(polygraph_drogon INTERFACE "${_polygraph_drogon_target}")
 
-message(STATUS "CPGDB dependency: Drogon and JsonCpp")
+message(STATUS "PolyGraph dependency: Drogon and JsonCpp")

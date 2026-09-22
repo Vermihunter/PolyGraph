@@ -3,14 +3,14 @@
  * @brief Visitor interface implemented by backend query translators.
  */
 
-#ifndef CPGDB_QUERY_QUERY_VISITOR_HPP
-#define CPGDB_QUERY_QUERY_VISITOR_HPP
+#ifndef POLYGRAPH_QUERY_QUERY_VISITOR_HPP
+#define POLYGRAPH_QUERY_QUERY_VISITOR_HPP
 
 #include "query/QueryResult.hpp"
 
 #include <memory>
 
-namespace cpgdb {
+namespace polygraph {
 
 class DatabaseContext;
 class GetAllEdgesQuery;
@@ -54,6 +54,6 @@ class QueryVisitor {
     DatabaseContext& db_context_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_QUERY_QUERY_VISITOR_HPP
+#endif // POLYGRAPH_QUERY_QUERY_VISITOR_HPP

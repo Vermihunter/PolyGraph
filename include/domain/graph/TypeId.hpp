@@ -7,12 +7,12 @@
 // Created by akos on 30. 4. 2026.
 //
 
-#ifndef CPGDB_TYPEID_HPP
-#define CPGDB_TYPEID_HPP
+#ifndef POLYGRAPH_TYPEID_HPP
+#define POLYGRAPH_TYPEID_HPP
 
 #include <cstdint>
 
-namespace cpgdb {
+namespace polygraph {
 using TypeId = std::uint32_t;
 
 /**
@@ -24,6 +24,6 @@ using TypeId = std::uint32_t;
  */
 inline constexpr TypeId unresolved_type_id = 0;
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_TYPEID_HPP
+#endif // POLYGRAPH_TYPEID_HPP

@@ -30,6 +30,8 @@ def build_node_label(node):
     name = node.get("name", "UnknownNode")
     meaning = wrap_text(node.get("meaning", ""), 32)
     source = node.get("source", "Unknown")
+    count = node.get("count")
+    count_text = f"count: {count:,}" if isinstance(count, int) else "count: unknown"
     properties = format_properties(node.get("properties", []))
 
     label = (
@@ -37,6 +39,7 @@ def build_node_label(node):
         f"<TR><TD><B>{name}</B></TD></TR>"
         f"<TR><TD ALIGN='LEFT'><FONT POINT-SIZE='10'>{meaning}</FONT></TD></TR>"
         f"<TR><TD ALIGN='LEFT'><FONT POINT-SIZE='10'><I>source: {source}</I></FONT></TD></TR>"
+        f"<TR><TD ALIGN='LEFT'><FONT POINT-SIZE='10'><I>{count_text}</I></FONT></TD></TR>"
         f"<TR><TD ALIGN='LEFT'><FONT POINT-SIZE='9'>{properties}</FONT></TD></TR>"
         f"</TABLE>>"
     )

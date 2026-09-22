@@ -3,15 +3,15 @@
  * @brief Registry of active graph stores and immutable backend descriptors.
  */
 
-#ifndef CPGDB_INFRASTRUCTURE_BACKEND_REGISTRY_HPP
-#define CPGDB_INFRASTRUCTURE_BACKEND_REGISTRY_HPP
+#ifndef POLYGRAPH_INFRASTRUCTURE_BACKEND_REGISTRY_HPP
+#define POLYGRAPH_INFRASTRUCTURE_BACKEND_REGISTRY_HPP
 
 #include "data_access/IGraphStore.hpp"
 
 #include <memory>
 #include <unordered_map>
 
-namespace cpgdb {
+namespace polygraph {
 
 /**
  * @brief Owns shared graph-store instances indexed by BackendId.
@@ -46,6 +46,6 @@ class BackendRegistry {
     DescriptorMap descriptors_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_INFRASTRUCTURE_BACKEND_REGISTRY_HPP
+#endif // POLYGRAPH_INFRASTRUCTURE_BACKEND_REGISTRY_HPP

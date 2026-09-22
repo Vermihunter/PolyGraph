@@ -6,7 +6,7 @@
 #include "utilities/uuid.hpp"
 
 
-namespace cpgdb {
+namespace polygraph {
 
     void to_json(json &value, const NodeRef &node) { value = global_id_to_string(node.global_id); }
-} // namespace cpgdb
+} // namespace polygraph

@@ -7,19 +7,19 @@
 // Created by akos on 1. 5. 2026.
 //
 
-#ifndef CPGDB_NEIGHBORREF_HPP
-#define CPGDB_NEIGHBORREF_HPP
+#ifndef POLYGRAPH_NEIGHBORREF_HPP
+#define POLYGRAPH_NEIGHBORREF_HPP
 #include "EdgeRef.hpp"
 #include "NodeRef.hpp"
 
 #include <optional>
 
-namespace cpgdb {
+namespace polygraph {
 struct NeighborRef {
     NodeRef vertex;
     std::optional<EdgeRef> via_edge;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_NEIGHBORREF_HPP
+#endif // POLYGRAPH_NEIGHBORREF_HPP

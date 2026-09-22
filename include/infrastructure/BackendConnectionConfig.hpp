@@ -7,8 +7,8 @@
 // Created by akos on 7. 5. 2026.
 //
 
-#ifndef CPGDB_BACKENDCONNECTIONCONFIG_HPP
-#define CPGDB_BACKENDCONNECTIONCONFIG_HPP
+#ifndef POLYGRAPH_BACKENDCONNECTIONCONFIG_HPP
+#define POLYGRAPH_BACKENDCONNECTIONCONFIG_HPP
 #include "BackendId.hpp"
 #include "BackendKind.hpp"
 #include "DatabaseCredentials.hpp"
@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 struct BackendConnectionConfig {
     BackendId id;
     BackendKind kind;
@@ -31,7 +31,7 @@ struct BackendConnectionConfig {
 
     // Neo4j can use either HTTP transaction API or Bolt.
     // transport: "http" or "bolt".  Environment variable
-    // CPGDB_NEO4J_TRANSPORT=bolt overrides this field.
+    // POLYGRAPH_NEO4J_TRANSPORT=bolt overrides this field.
     std::string transport = "http";
     std::string bolt_endpoint;
 
@@ -39,6 +39,6 @@ struct BackendConnectionConfig {
     std::vector<std::string> replica_endpoints;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_BACKENDCONNECTIONCONFIG_HPP
+#endif // POLYGRAPH_BACKENDCONNECTIONCONFIG_HPP

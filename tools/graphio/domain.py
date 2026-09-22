@@ -17,6 +17,7 @@ from .id_codec import (
     parse_global_id,
     read_native_node_id_map,
     resolve_native_node_id,
+    gpu_location_bit,
 )
 from .model import NodeRecord, RelationshipRecord
 from .reader import open_graph_reader
@@ -29,8 +30,13 @@ class DomainPaths:
     schema: Path
     data: Path
     backends: Path
+    observability: Path
     source_data: Path | None = None
     native_id_map: Path | None = None
+    cache_config: Path | None = None
+    cache_plan: Path | None = None
+    gpu_distribution_config: Path | None = None
+    gpu_storage_plan: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,8 @@ class DomainConfig:
     name: str
     description: str
     paths: DomainPaths
+    graph_version: int
+    verbose: bool
     start_uuid: str
     max_depth: int
     direction: str
@@ -58,6 +66,10 @@ def _portable_path(target: Path, base: Path) -> str:
         return str(target)
 
 
+def _default_observability_config() -> Path:
+    return Path(__file__).resolve().parents[2] / "config" / "observability" / "observability.json"
+
+
 def materialize_graph_jsonl(
     input_path: str | Path,
     output_path: str | Path,
@@ -69,7 +81,7 @@ def materialize_graph_jsonl(
     reroute: bool = False,
     migrate_missing_routing: bool = False,
 ) -> tuple[int, int]:
-    """Convert a supported graph input into canonical CPGDB JSONL.
+    """Convert a supported graph input into canonical PolyGraph JSONL.
 
     Legacy inputs without ``idRouting`` metadata can be migrated by supplying a
     graph-shape schema and setting ``migrate_missing_routing``. ``reroute`` forces
@@ -137,6 +149,13 @@ def write_domain_manifest(
     data: str | Path,
     backends: str | Path,
     start_uuid: int | str,
+    observability: str | Path | None = None,
+    cache_config: str | Path | None = None,
+    cache_plan: str | Path | None = None,
+    gpu_distribution_config: str | Path | None = None,
+    gpu_storage_plan: str | Path | None = None,
+    graph_version: int = 1,
+    verbose: bool = False,
     max_depth: int = 7,
     direction: str = "undirected",
 ) -> Path:
@@ -144,7 +163,7 @@ def write_domain_manifest(
     output.parent.mkdir(parents=True, exist_ok=True)
     base = output.parent
     payload = {
-        "format": "cpgdb.domain",
+        "format": "polygraph.domain",
         "version": 1,
         "id": domain_id,
         "name": name,
@@ -153,6 +172,14 @@ def write_domain_manifest(
             "schema": _portable_path(Path(schema), base),
             "data": _portable_path(Path(data), base),
             "backendConfig": _portable_path(Path(backends), base),
+            "observabilityConfig": _portable_path(
+                Path(observability) if observability is not None else _default_observability_config(),
+                base,
+            ),
+        },
+        "runtime": {
+            "graphVersion": int(graph_version),
+            "verbose": bool(verbose),
         },
         "defaults": {
             "bfs": {
@@ -162,6 +189,16 @@ def write_domain_manifest(
             }
         },
     }
+    if cache_config is not None:
+        payload["paths"]["cacheConfig"] = _portable_path(Path(cache_config), base)
+    if cache_plan is not None:
+        payload["paths"]["cachePlan"] = _portable_path(Path(cache_plan), base)
+    if gpu_distribution_config is not None:
+        payload["paths"]["gpuDistributionConfig"] = _portable_path(
+            Path(gpu_distribution_config), base
+        )
+    if gpu_storage_plan is not None:
+        payload["paths"]["gpuStoragePlan"] = _portable_path(Path(gpu_storage_plan), base)
     output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return output
 
@@ -169,9 +206,10 @@ def write_domain_manifest(
 def load_domain_manifest(path: str | Path) -> DomainConfig:
     manifest = Path(path).expanduser().resolve()
     raw = json.loads(manifest.read_text(encoding="utf-8"))
-    if raw.get("format") != "cpgdb.domain" or raw.get("version") != 1:
+    if raw.get("format") != "polygraph.domain" or raw.get("version") != 1:
         raise ValueError(f"Unsupported domain manifest: {manifest}")
     paths = raw.get("paths", {})
+    runtime = raw.get("runtime", {})
     bfs = raw.get("defaults", {}).get("bfs", {})
     base = manifest.parent
     return DomainConfig(
@@ -183,6 +221,10 @@ def load_domain_manifest(path: str | Path) -> DomainConfig:
             schema=_resolve_relative(base, str(paths["schema"])),
             data=_resolve_relative(base, str(paths["data"])),
             backends=_resolve_relative(base, str(paths["backendConfig"])),
+            observability=_resolve_relative(
+                base,
+                str(paths.get("observabilityConfig", _default_observability_config())),
+            ),
             source_data=(
                 _resolve_relative(base, str(paths["sourceData"]))
                 if paths.get("sourceData")
@@ -193,7 +235,29 @@ def load_domain_manifest(path: str | Path) -> DomainConfig:
                 if paths.get("nativeIdMap")
                 else None
             ),
+            cache_config=(
+                _resolve_relative(base, str(paths["cacheConfig"]))
+                if paths.get("cacheConfig")
+                else None
+            ),
+            cache_plan=(
+                _resolve_relative(base, str(paths["cachePlan"]))
+                if paths.get("cachePlan")
+                else None
+            ),
+            gpu_distribution_config=(
+                _resolve_relative(base, str(paths["gpuDistributionConfig"]))
+                if paths.get("gpuDistributionConfig")
+                else None
+            ),
+            gpu_storage_plan=(
+                _resolve_relative(base, str(paths["gpuStoragePlan"]))
+                if paths.get("gpuStoragePlan")
+                else None
+            ),
         ),
+        graph_version=int(runtime.get("graphVersion", 1)),
+        verbose=bool(runtime.get("verbose", False)),
         start_uuid=str(bfs["startUuid"]),
         max_depth=int(bfs.get("maxDepth", 7)),
         direction=str(bfs.get("direction", "undirected")),
@@ -202,7 +266,7 @@ def load_domain_manifest(path: str | Path) -> DomainConfig:
 
 
 def resolve_domain_node_id(domain: DomainConfig, value: int | str) -> int:
-    """Resolve an original generated node ID to the currently loaded Neo4j-native global ID."""
+    """Resolve an original generated node ID to the currently loaded Neo4j localId-based global ID."""
     mapping = read_native_node_id_map(domain.paths.native_id_map)
     return resolve_native_node_id(value, mapping)
 
@@ -213,7 +277,7 @@ def record_native_id_resolution(
     resolved_graph: str | Path,
     native_id_map: str | Path,
 ) -> DomainConfig:
-    """Make the domain manifest point at the graph matching the current Neo4j store."""
+    """Make the domain manifest point at the graph matching the current Neo4j localId allocation."""
     manifest = domain.paths.manifest
     raw = json.loads(manifest.read_text(encoding="utf-8"))
     paths = raw.setdefault("paths", {})
@@ -253,7 +317,7 @@ def resolve_domain(reference: str | Path, data_root: str | Path) -> DomainConfig
         if domain.domain_id == str(reference) or manifest.parent.name == str(reference):
             matches.append(domain)
     if not matches:
-        raise FileNotFoundError(f"Unknown domain '{reference}'. Run 'python3 tools/cpgdb.py list'.")
+        raise FileNotFoundError(f"Unknown domain '{reference}'. Run 'python3 tools/polygraph.py list'.")
     if len(matches) > 1:
         rendered = "\n".join(f"  {item.paths.manifest}" for item in matches)
         raise ValueError(f"Domain reference '{reference}' is ambiguous:\n{rendered}")
@@ -267,6 +331,20 @@ def sanitize_name(value: str) -> str:
     if cleaned[0].isdigit():
         cleaned = f"X_{cleaned}"
     return cleaned
+
+
+def _config_bytes(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip().lower().replace(" ", "")
+    units = {"kib": 1024, "mib": 1024**2, "gib": 1024**3, "tib": 1024**4,
+             "kb": 1000, "mb": 1000**2, "gb": 1000**3, "tb": 1000**4, "b": 1}
+    for suffix in sorted(units, key=len, reverse=True):
+        if text.endswith(suffix):
+            return int(float(text[:-len(suffix)]) * units[suffix])
+    return int(text)
 
 
 def _backend_entry(source: str, enabled: bool, arango_database: str) -> dict[str, Any]:
@@ -284,6 +362,13 @@ def _backend_entry(source: str, enabled: bool, arango_database: str) -> dict[str
             },
             "capabilities": {"batch_neighbors": True, "native_bfs": False, "property_filters": True},
             "coverage": {"mode": "id-routing", "fresh": True, "complete_for_requested_subgraph": False},
+            "scheduler": {
+                "max_in_flight": 64,
+                "max_queued": 4096,
+                "max_queued_per_query": 512,
+                "policy": "priority-weighted-fair",
+                "priority_aging_ms": 5000,
+            },
         }
     if source == "ArangoDB":
         return {
@@ -298,6 +383,35 @@ def _backend_entry(source: str, enabled: bool, arango_database: str) -> dict[str
                 "credentials": {"username": "root", "password": "rootpassword"},
             },
             "capabilities": {"batch_neighbors": True, "native_bfs": False, "gpu_execution": False},
+            "coverage": {"mode": "id-routing", "fresh": True, "complete_for_requested_subgraph": False},
+            "scheduler": {
+                "max_in_flight": 128,
+                "max_queued": 8192,
+                "max_queued_per_query": 1024,
+                "policy": "priority-weighted-fair",
+                "priority_aging_ms": 5000,
+            },
+        }
+    if source == "PostgreSQL":
+        return {
+            "id": "PostgreSQL",
+            "kind": "PostgreSQL",
+            "enabled": enabled,
+            "name": "PostgreSQL Primary",
+            "priority": 50,
+            "connection": {
+                "endpoint": "127.0.0.1:5432",
+                "database": "polygraph",
+                "credentials": {"username": "polygraph", "password": "polygraph"},
+            },
+            "server_side_candidate_deduplication": False,
+            "capabilities": {
+                "batch_neighbors": True,
+                "native_bfs": False,
+                "property_filters": False,
+                "gpu_execution": False,
+                "replica_parallelism": False,
+            },
             "coverage": {"mode": "id-routing", "fresh": True, "complete_for_requested_subgraph": False},
         }
     if source == "GPU":
@@ -324,23 +438,99 @@ def write_backend_config_for_sources(
     output_path: str | Path,
     *,
     arango_database: str,
+    cache_config: dict[str, Any] | None = None,
+    cache_root: str | Path | None = None,
+    gpu_distribution_config: dict[str, Any] | None = None,
+    gpu_storage_plan: str | Path | None = None,
 ) -> Path:
     requested = tuple(str(source) for source in sources)
     routing_layout = BackendLayout(requested)
     used = set(routing_layout.backends)
-    unknown = used - {"Neo4J", "ArangoDB", "GPU"}
+    unknown = used - {"Neo4J", "ArangoDB", "PostgreSQL", "GPU"}
     if unknown:
-        raise ValueError(f"Unsupported backend sources: {sorted(unknown)}")
+        raise ValueError(f"Unsupported authoritative backend sources: {sorted(unknown)}")
     output = Path(output_path).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
+
+    # Cache backends are no longer part of the static domain configuration.
+    # cache_config/cache_root remain accepted for source compatibility with
+    # callers from older prepared domains, but cache-plan.json injects those
+    # runtime backends independently.
+    _ = cache_config, cache_root
+
+    distribution = gpu_distribution_config or {}
+    priorities = dict(distribution.get("priorities", {}))
+    backends = [
+        _backend_entry(source, source in used, arango_database)
+        for source in ("Neo4J", "ArangoDB", "PostgreSQL")
+    ]
+
+    # Without a materialized storage plan keep the legacy GPU:0 behavior so old
+    # callers still get a runnable backend config. New LDBC preparation always
+    # materializes gpu-storage-plan.json first and runtime injects its physical
+    # GPU:N backend set from that plan.
+    if "GPU" in used and gpu_storage_plan is None:
+        configured_gpus = [
+            gpu
+            for gpu in distribution.get("gpus", [])
+            if gpu.get("enabled", True)
+        ]
+        if not configured_gpus:
+            configured_gpus = [
+                {
+                    "device_id": 0,
+                    "name": "GPU 0 authoritative storage",
+                    "priority": priorities.get("GPU", 0),
+                    "regions": [{"name": "all", "policy": {"kind": "all"}}],
+                }
+            ]
+        for gpu in configured_gpus:
+            device_id = int(gpu["device_id"])
+            gpu_location_bit(device_id)
+            backends.append({
+                "id": f"GPU:{device_id}",
+                "kind": "CuGraph",
+                "enabled": True,
+                "name": str(gpu.get("name", f"GPU {device_id} authoritative storage")),
+                "priority": int(
+                    gpu.get(
+                        "priority",
+                        priorities.get(f"GPU:{device_id}", priorities.get("GPU", 0)),
+                    )
+                ),
+                "device_id": device_id,
+                "memory_limit_bytes": _config_bytes(
+                    gpu.get("memory_limit_bytes", gpu.get("memory", 0))
+                ),
+                "relation_limit": int(
+                    gpu.get("relation_limit", gpu.get("relations", 0)) or 0
+                ),
+                "regions": gpu.get("regions", []),
+                "storage_role": "authoritative",
+                "connection": {"endpoint": "", "database": ""},
+                "capabilities": {
+                    "batch_neighbors": True,
+                    "native_bfs": False,
+                    "property_filters": False,
+                    "gpu_execution": True,
+                    "replica_parallelism": False,
+                },
+                "coverage": {
+                    "mode": "id-routing",
+                    "fresh": True,
+                    "complete_for_requested_subgraph": False,
+                },
+            })
+
     payload = {
-        "version": 1,
+        "version": 2,
         "idRouting": list(routing_layout.backends),
-        "backends": [
-            _backend_entry(source, source in used, arango_database)
-            for source in ("Neo4J", "ArangoDB", "GPU")
-        ],
+        "idLocationEncoding": "bitmask-msb-v1",
+        "backends": backends,
     }
+    if gpu_storage_plan is not None:
+        payload["gpuStoragePlan"] = _portable_path(Path(gpu_storage_plan), output.parent)
+
     output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return output
 

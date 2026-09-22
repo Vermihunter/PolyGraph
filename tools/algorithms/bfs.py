@@ -67,7 +67,7 @@ def save_depths_to_csv(depths: dict[int, int], path: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run reference BFS over CPGDB JSON or JSONL graph data.")
+    parser = argparse.ArgumentParser(description="Run reference BFS over PolyGraph JSON or JSONL graph data.")
     parser.add_argument("--input", help="Path to .json/.jsonl graph data")
     parser.add_argument("--input-json", dest="input_json", help="Backward-compatible alias for --input")
     parser.add_argument("--output-csv", required=True)

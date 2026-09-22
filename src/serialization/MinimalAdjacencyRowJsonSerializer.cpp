@@ -8,7 +8,7 @@
 #include "serialization/NodeRefJsonSerializer.hpp"
 
 
-namespace cpgdb {
+namespace polygraph {
     void to_json(json &value, const MinimalAdjacencyRow &adj_row) {
         value = json{{"source-id", global_id_to_string(adj_row.source.global_id)}, {"neighbors", adj_row.neighbors}};
     }
@@ -22,4 +22,4 @@ namespace cpgdb {
             value.at("properties").get<std::unordered_map<std::string, std::unique_ptr<Value>>>();
     }
     */
-} // namespace cpgdb
+} // namespace polygraph

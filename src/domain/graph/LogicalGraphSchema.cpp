@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace cpgdb::domain {
+namespace polygraph::domain {
 
     TypeId LogicalGraphSchema::add_node_type(std::string name, std::vector<Property> properties) {
         const TypeId id = next_type_id_++;
@@ -89,4 +89,4 @@ namespace cpgdb::domain {
         return output;
     }
 
-} // namespace cpgdb::domain
+} // namespace polygraph::domain

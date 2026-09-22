@@ -1,50 +1,149 @@
+# Database services are kept separate from observability/docker-compose.yml but
+# share one explicitly named network so Prometheus can scrape stable DNS names.
 services:
   neo4j:
     build:
       context: ./neo4j
       dockerfile: Dockerfile
       args:
-        NEO4J_IMAGE_TAG: ${NEO4J_IMAGE_TAG}
-    image: cpgdb-neo4j:${NEO4J_IMAGE_TAG}
-    container_name: ${NEO4J_CONTAINER_NAME}
+        NEO4J_IMAGE_TAG: ${NEO4J_IMAGE_TAG:-5.26-enterprise}
+    image: polygraph-neo4j:${NEO4J_IMAGE_TAG:-5.26-enterprise}
     restart: unless-stopped
+    labels:
+      polygraph.scale-factor: ${POLYGRAPH_SCALE_FACTOR:-default}
+      polygraph.distribution: ${POLYGRAPH_DISTRIBUTION:-default}
+      polygraph.observability: "true"
     ports:
-      - "${NEO4J_HTTP_PORT}:7474"
-      - "${NEO4J_BOLT_PORT}:7687"
-    environment:
-      NEO4J_AUTH: ${NEO4J_USERNAME}/${NEO4J_PASSWORD}
-      # The native full-replica benchmark loads ~1.5M relationships. Explicit
-      # sizing avoids Neo4j selecting small container defaults and gives write
-      # transactions enough headroom while keeping per-transaction bounds.
-      NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP_INITIAL_SIZE:-4G}
-      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX_SIZE:-4G}
-      NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE_SIZE:-2G}
-      NEO4J_dbms_memory_transaction_total_max: ${NEO4J_TRANSACTION_TOTAL_MAX:-3G}
-      NEO4J_db_memory_transaction_total_max: ${NEO4J_DATABASE_TRANSACTION_TOTAL_MAX:-3G}
-      NEO4J_db_memory_transaction_max: ${NEO4J_TRANSACTION_MAX:-512M}
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+      - "${NEO4J_METRICS_PORT:-2004}:2004"
+    env_file:
+      - ./neo4j/.env
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
+    networks: [observability]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          cypher-shell -a bolt://localhost:7687
+          -u "$${NEO4J_AUTH%%/*}" -p "$${NEO4J_AUTH#*/}"
+          "RETURN 1" >/dev/null 2>&1 || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 45s
+
+  postgresql:
+    image: postgres:${POSTGRES_IMAGE_TAG:-17}
+    restart: unless-stopped
+    labels:
+      polygraph.scale-factor: ${POLYGRAPH_SCALE_FACTOR:-default}
+      polygraph.distribution: ${POLYGRAPH_DISTRIBUTION:-default}
+      polygraph.observability: "true"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-polygraph}
+      POSTGRES_USER: ${POSTGRES_USER:-polygraph}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-polygraph}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-2GB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-8GB}
+      - -c
+      - work_mem=${POSTGRES_WORK_MEM:-64MB}
+      - -c
+      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-1GB}
+      - -c
+      - max_parallel_workers=${POSTGRES_MAX_PARALLEL_WORKERS:-16}
+      - -c
+      - max_parallel_workers_per_gather=${POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER:-8}
+      - -c
+      - random_page_cost=${POSTGRES_RANDOM_PAGE_COST:-1.1}
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+      - ./postgresql/init:/docker-entrypoint-initdb.d:ro
+    networks: [observability]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
 
   arangodb:
     build:
       context: ./arango
       dockerfile: Dockerfile
       args:
-        ARANGO_IMAGE_TAG: ${ARANGO_IMAGE_TAG}
-    image: cpgdb-arangodb:${ARANGO_IMAGE_TAG}
-    container_name: ${ARANGO_CONTAINER_NAME}
+        ARANGO_IMAGE_TAG: ${ARANGO_IMAGE_TAG:-3.12}
+    image: polygraph-arangodb:${ARANGO_IMAGE_TAG:-3.12}
     restart: unless-stopped
+
+    command:
+      - --server.endpoint=tcp://0.0.0.0:8529
+      - --server.export-metrics-api=true
+      - --server.export-read-write-metrics=true
+      - --server.options-api=${ARANGO_OPTIONS_API:-admin}
+
+      # Request scheduler
+      - --server.minimal-threads=${ARANGO_SERVER_MINIMAL_THREADS:-16}
+      - --server.maximal-threads=${ARANGO_SERVER_MAXIMAL_THREADS:-64}
+      - --server.io-threads=${ARANGO_SERVER_IO_THREADS:-4}
+      - --server.scheduler-queue-size=${ARANGO_SERVER_SCHEDULER_QUEUE_SIZE:-4096}
+      - --server.ongoing-low-priority-multiplier=${ARANGO_SERVER_LOW_PRIORITY_MULTIPLIER:-2}
+
+      # Memory and caches
+      - --rocksdb.block-cache-size=${ARANGO_ROCKSDB_BLOCK_CACHE_SIZE:-3221225472}
+      - --cache.size=${ARANGO_CACHE_SIZE:-2147483648}
+      - --rocksdb.total-write-buffer-size=${ARANGO_ROCKSDB_WRITE_BUFFER_SIZE:-1073741824}
+      - --rocksdb.enforce-block-cache-size-limit=${ARANGO_ROCKSDB_ENFORCE_CACHE_LIMIT:-true}
+
+      # AQL memory control
+      - --query.memory-limit=${ARANGO_QUERY_MEMORY_LIMIT:-536870912}
+      - --query.global-memory-limit=${ARANGO_QUERY_GLOBAL_MEMORY_LIMIT:-2147483648}
+      - --query.memory-limit-override=${ARANGO_QUERY_MEMORY_LIMIT_OVERRIDE:-false}
+      - --query.log-memory-usage-threshold=${ARANGO_QUERY_LOG_MEMORY_THRESHOLD:-268435456}
+      - --query.max-runtime=${ARANGO_QUERY_MAX_RUNTIME:-0}
+      - --query.log-failed=${ARANGO_QUERY_LOG_FAILED:-true}
+    labels:
+      polygraph.scale-factor: ${POLYGRAPH_SCALE_FACTOR:-default}
+      polygraph.distribution: ${POLYGRAPH_DISTRIBUTION:-default}
+      polygraph.observability: "true"
     ports:
-      - "${ARANGO_PORT}:8529"
-    environment:
-      ARANGO_ROOT_PASSWORD: ${ARANGO_ROOT_PASSWORD}
+      - "${ARANGO_PORT:-8529}:8529"
+    env_file:
+      - ./arango/.env
     volumes:
       - arangodb_data:/var/lib/arangodb3
       - arangodb_apps:/var/lib/arangodb3-apps
+    networks: [observability]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          arangosh --server.endpoint tcp://127.0.0.1:8529
+          --server.username root --server.password "$$ARANGO_ROOT_PASSWORD"
+          --javascript.execute-string "db._version();" >/dev/null 2>&1 || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+networks:
+  observability:
+    name: polygraph-observability
+    external: true
 
 volumes:
   neo4j_data:
   neo4j_logs:
   arangodb_data:
   arangodb_apps:
+  postgresql_data:

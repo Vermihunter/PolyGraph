@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace cpgdb {
+namespace polygraph {
 
     void BackendRegistry::register_store(std::shared_ptr<IGraphStore> store) {
         if (!store) {
@@ -35,4 +35,4 @@ namespace cpgdb {
 
     bool BackendRegistry::contains(BackendId id) const noexcept { return stores_.contains(id); }
 
-} // namespace cpgdb
+} // namespace polygraph

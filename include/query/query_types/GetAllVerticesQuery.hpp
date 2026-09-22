@@ -3,12 +3,12 @@
  * @brief Declarations for get all vertices query in the query dispatch module.
  */
 
-#ifndef CPGDB_QUERY_GET_ALL_VERTICES_QUERY_HPP
-#define CPGDB_QUERY_GET_ALL_VERTICES_QUERY_HPP
+#ifndef POLYGRAPH_QUERY_GET_ALL_VERTICES_QUERY_HPP
+#define POLYGRAPH_QUERY_GET_ALL_VERTICES_QUERY_HPP
 
 #include "query/Query.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 
 class GetAllVerticesQuery final : public Query {
   public:
@@ -16,6 +16,6 @@ class GetAllVerticesQuery final : public Query {
     [[nodiscard]] query_t clone() const override;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_QUERY_GET_ALL_VERTICES_QUERY_HPP
+#endif // POLYGRAPH_QUERY_GET_ALL_VERTICES_QUERY_HPP

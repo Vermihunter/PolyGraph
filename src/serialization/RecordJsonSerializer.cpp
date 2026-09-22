@@ -14,7 +14,7 @@
 #include <variant>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
     namespace {
 
         [[nodiscard]] GlobalId json_to_global_id(const json &value) {
@@ -110,4 +110,4 @@ namespace cpgdb {
 
     void from_json(const json &value, Record &record) { record.fields = value.at("fields").get<std::vector<Value>>(); }
 
-} // namespace cpgdb
+} // namespace polygraph

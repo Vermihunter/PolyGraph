@@ -40,6 +40,21 @@ def write_backend_config(config: BenchmarkConfig, output: str | Path, enabled: I
             "coverage": {"mode": "id-routing", "fresh": True, "complete_for_requested_subgraph": False},
         },
         {
+            "id": "PostgreSQL",
+            "kind": "PostgreSQL",
+            "enabled": "PostgreSQL" in enabled_set,
+            "name": "PostgreSQL Primary",
+            "priority": 40,
+            "connection": {
+                "endpoint": config.postgresql.endpoint,
+                "database": config.postgresql.database,
+                "credentials": {"username": config.postgresql.user, "password": config.postgresql.password},
+            },
+            "server_side_candidate_deduplication": False,
+            "capabilities": {"batch_neighbors": True, "native_bfs": False, "property_filters": False},
+            "coverage": {"mode": "id-routing", "fresh": True, "complete_for_requested_subgraph": False},
+        },
+        {
             "id": "GPU",
             "kind": "CuGraph",
             "enabled": "GPU" in enabled_set,
@@ -52,7 +67,7 @@ def write_backend_config(config: BenchmarkConfig, output: str | Path, enabled: I
     ]
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    routing_order = [name for name in ("Neo4J", "ArangoDB", "GPU") if name in enabled_set]
+    routing_order = [name for name in ("Neo4J", "ArangoDB", "PostgreSQL", "GPU") if name in enabled_set]
     if not routing_order:
         raise ValueError("At least one backend must be enabled for ID routing")
     with open(out, "w", encoding="utf-8") as f:

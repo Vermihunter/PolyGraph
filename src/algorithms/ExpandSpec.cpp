@@ -7,7 +7,7 @@
 
 #include <algorithm>
 
-namespace cpgdb {
+namespace polygraph {
 
     bool ExpandSpec::allows_edge_type(TypeId edge_type) const noexcept {
         return allowed_edge_types.empty() ||
@@ -19,4 +19,4 @@ namespace cpgdb {
                std::ranges::find(allowed_target_node_types, node_type) != allowed_target_node_types.end();
     }
 
-} // namespace cpgdb
+} // namespace polygraph

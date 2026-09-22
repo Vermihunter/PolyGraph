@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 struct Edge;
 struct Node;
@@ -18,4 +18,4 @@ struct Path {
     std::vector<std::unique_ptr<Edge>> edges;
 };
 
-} // namespace cpgdb
+} // namespace polygraph

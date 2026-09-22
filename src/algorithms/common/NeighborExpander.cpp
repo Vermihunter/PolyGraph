@@ -6,7 +6,7 @@
 
 #include <future>
 
-namespace cpgdb {
+namespace polygraph {
     [[nodiscard]] std::vector<MinimalAdjacencyRow> NeighborExpander::expand_layer(const std::vector<NodeRef> &frontier,
                                                                                   const ExpandSpec &spec, int depth,
                                                                                   const BfsOptions &options) const {
@@ -36,9 +36,10 @@ namespace cpgdb {
 
         for (const auto &[backend_id, backend_frontier]: plan.backend_frontiers) {
             auto store = catalog_.store(backend_id);
+            const auto *frontier_ptr = &backend_frontier;
             futures.push_back(
-                    std::async(std::launch::async, [store = std::move(store), backend_frontier, spec, depth, options] {
-                        return store->get_minimal_neighbors_batch(backend_frontier, spec, depth, options);
+                    std::async(std::launch::async, [store = std::move(store), frontier_ptr, spec, depth, options] {
+                        return store->get_minimal_neighbors_batch(*frontier_ptr, spec, depth, options);
                     }));
         }
 
@@ -51,4 +52,41 @@ namespace cpgdb {
         return merged;
     }
 
-} // namespace cpgdb
+    void NeighborExpander::expand_layer_candidates(const std::vector<NodeRef> &frontier, const ExpandSpec &spec,
+                                                   int depth, const BfsOptions &options,
+                                                   const NeighborBatchConsumer &consumer) const {
+        if (!consumer || frontier.empty()) {
+            return;
+        }
+
+        auto plan = catalog_.plan_frontier_expansion(frontier, spec, options);
+        if (!options.allow_partial_acceleration) {
+            throw std::runtime_error("Sequential expansion is not supported");
+        }
+        if (plan.backend_frontiers.empty()) {
+            return;
+        }
+
+        if (plan.backend_frontiers.size() == 1) {
+            const auto &[backend_id, backend_frontier] = *plan.backend_frontiers.begin();
+            catalog_.store(backend_id)->stream_neighbor_candidates(backend_frontier, spec, depth, options, consumer);
+            return;
+        }
+
+        std::vector<std::future<void>> futures;
+        futures.reserve(plan.backend_frontiers.size());
+        for (const auto &[backend_id, backend_frontier]: plan.backend_frontiers) {
+            auto store = catalog_.store(backend_id);
+            const auto *frontier_ptr = &backend_frontier;
+            futures.push_back(std::async(
+                    std::launch::async, [store = std::move(store), frontier_ptr, spec, depth, options, consumer] {
+                        store->stream_neighbor_candidates(*frontier_ptr, spec, depth, options, consumer);
+                    }));
+        }
+
+        for (auto &future: futures) {
+            future.get();
+        }
+    }
+
+} // namespace polygraph

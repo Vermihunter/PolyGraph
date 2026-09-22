@@ -10,7 +10,7 @@
 #include <functional>
 #include <string>
 
-namespace cpgdb::cli {
+namespace polygraph::cli {
 
 /**
  * Visits graph records without requiring the whole data file to be represented by a
@@ -26,4 +26,4 @@ class GraphDataReader {
                          const RecordVisitor& on_relationship);
 };
 
-} // namespace cpgdb::cli
+} // namespace polygraph::cli

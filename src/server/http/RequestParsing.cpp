@@ -7,7 +7,7 @@
 
 #include "server/http/ErrorMapper.hpp"
 
-namespace cpgdb::http::parse {
+namespace polygraph::http::parse {
 
     const Json::Value &jsonBody(const drogon::HttpRequestPtr &request) {
         const auto &json = request->getJsonObject();
@@ -20,4 +20,4 @@ namespace cpgdb::http::parse {
         return *json;
     }
 
-} // namespace cpgdb::http::parse
+} // namespace polygraph::http::parse

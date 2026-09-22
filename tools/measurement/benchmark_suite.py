@@ -39,6 +39,8 @@ class PrepareSpec:
 class DatasetSpec:
     name: str
     domain: Path
+    compose_instance: str | None = None
+    compose_project: str | None = None
     start_uuids_file: Path | None = None
     start_uuids: tuple[str, ...] = ()
     prepare: PrepareSpec | None = None
@@ -152,14 +154,53 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
             )
 
         starts_file = item.get("startUuidsFile")
+        compose_instance = (
+            str(item["composeInstance"]).strip()
+            if item.get("composeInstance")
+            else None
+        )
+        compose_project = (
+            str(item["composeProject"]).strip()
+            if item.get("composeProject")
+            else None
+        )
+        if compose_instance and compose_project:
+            raise ValueError(
+                f"datasets[{index}] cannot define both composeInstance and composeProject"
+            )
+        if compose_instance and not re.fullmatch(
+            r"sf[0-9]+(?:_[0-9]+)?/[a-z0-9][a-z0-9-]*", compose_instance
+        ):
+            raise ValueError(
+                f"datasets[{index}].composeInstance must look like "
+                "'sf0_1/schema-based'"
+            )
+        if compose_project and not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", compose_project):
+            raise ValueError(
+                f"datasets[{index}].composeProject must contain only lowercase "
+                "letters, digits, '-' or '_' and start with a letter or digit"
+            )
         datasets.append(
             DatasetSpec(
                 name=name,
                 domain=_repo_path(str(item["domain"])),
+                compose_instance=compose_instance,
+                compose_project=compose_project,
                 start_uuids_file=_repo_path(str(starts_file)) if starts_file else None,
                 start_uuids=_string_list(item.get("startUuids"), field_name=f"datasets[{index}].startUuids"),
                 prepare=prepare,
             )
+        )
+
+    instance_selection = [dataset.compose_instance is not None for dataset in datasets]
+    project_selection = [dataset.compose_project is not None for dataset in datasets]
+    if any(instance_selection) and not all(instance_selection):
+        raise ValueError(
+            "Either every dataset must define composeInstance or none of them may define it"
+        )
+    if any(project_selection) and not all(project_selection):
+        raise ValueError(
+            "Either every dataset must define composeProject or none of them may define it"
         )
 
     repetitions = int(raw.get("repetitions", 3))
@@ -280,6 +321,25 @@ def _safe_name(value: str) -> str:
     return rendered
 
 
+def _polygraph_event_log_root(dataset_output: Path) -> Path:
+    """Return the directory containing only PolyGraph/C++ event logs.
+
+    Command traces, reference stderr logs, and native-backend measurements live
+    elsewhere under ``logs`` and are not input for event reconstruction.
+    """
+    return dataset_output / "logs" / "events"
+
+
+def _has_polygraph_event_logs(event_log_root: Path) -> bool:
+    """Whether a PolyGraph execution produced at least one non-empty event log."""
+    if not event_log_root.is_dir():
+        return False
+    return any(
+        path.is_file() and path.stat().st_size > 0
+        for path in event_log_root.rglob("*.events.jsonl")
+    )
+
+
 def _read_backend_connection_config(path: Path) -> tuple[Neo4jConfig, ArangoConfig]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     neo = Neo4jConfig()
@@ -326,6 +386,7 @@ def _benchmark_config(config: SuiteConfig, domain: DomainConfig) -> BenchmarkCon
             reference_bfs_script=ROOT / "tools" / "algorithms" / "bfs.py",
             docker_compose=config.docker_compose,
             implementation_full={},
+            source_data=domain.paths.source_data,
         ),
         neo4j=neo,
         arango=arango,
@@ -422,6 +483,55 @@ def _validate_resume_config(suite_output: Path, run_id: str, config: SuiteConfig
         )
 
 
+
+def _compose_command(config: SuiteConfig, project_name: str | None = None) -> list[str | Path]:
+    command: list[str | Path] = ["docker", "compose", "-f", config.docker_compose]
+    if project_name:
+        command.extend(["--project-name", project_name])
+    return command
+
+
+def _instance_command(instance_key: str, action: str, *arguments: str) -> list[str | Path]:
+    scale_factor, distribution = instance_key.split("/", 1)
+    return [
+        sys.executable,
+        ROOT / "tools" / "polygraph.py",
+        "instance",
+        scale_factor,
+        distribution,
+        action,
+        *arguments,
+    ]
+
+
+def _start_services_for_project(
+    config: SuiteConfig,
+    runner: CommandRunner,
+    domain: DomainConfig,
+    *,
+    project_name: str | None,
+    reset_volumes: bool,
+    dry_run: bool,
+) -> None:
+    compose = _compose_command(config, project_name)
+    if reset_volumes:
+        runner.run([*compose, "down", "--volumes", "--remove-orphans"])
+    runner.run([*compose, "up", "-d"])
+    if dry_run:
+        return
+
+    benchmark_config = _benchmark_config(config, domain)
+    wait_http(
+        "http://localhost:7474",
+        timeout_seconds=config.services.timeout_seconds,
+    )
+    wait_http(
+        f"{benchmark_config.arango.base_url.rstrip('/')}/_api/version",
+        timeout_seconds=config.services.timeout_seconds,
+        auth=(benchmark_config.arango.user, benchmark_config.arango.password),
+    )
+
+
 def run_suite(
     config: SuiteConfig,
     *,
@@ -447,7 +557,7 @@ def run_suite(
         if config.scenarios.load_distributed:
             raise ValueError(
                 "--resume requires scenarios.loadDistributed=false so the existing resolved graph and "
-                "database-native IDs are reused safely"
+                "the existing resolved integer IDs are reused safely"
             )
         if config.scenarios.implementation_full or config.scenarios.native:
             raise ValueError(
@@ -502,34 +612,36 @@ def run_suite(
                     )
 
     if config.build.enabled and not skip_build and not resume:
-        runner.run([sys.executable, ROOT / "tools" / "cpgdb.py", "build", "--preset", config.build.preset])
+        runner.run([sys.executable, ROOT / "tools" / "polygraph.py", "build", "--preset", config.build.preset])
 
-    if config.services.start and not skip_services and not resume:
-        compose = ["docker", "compose", "-f", config.docker_compose]
-        if config.services.reset_volumes:
-            runner.run([*compose, "down", "--volumes", "--remove-orphans"])
-        runner.run([*compose, "up", "-d"])
-        if not dry_run:
-            first_domain = load_domain_manifest(config.datasets[0].domain)
-            first_benchmark_config = _benchmark_config(config, first_domain)
-            wait_http(
-                "http://localhost:7474",
-                timeout_seconds=config.services.timeout_seconds,
-            )
-            wait_http(
-                f"{first_benchmark_config.arango.base_url.rstrip('/')}/_api/version",
-                timeout_seconds=config.services.timeout_seconds,
-                auth=(
-                    first_benchmark_config.arango.user,
-                    first_benchmark_config.arango.password,
-                ),
-            )
+    per_dataset_instances = any(dataset.compose_instance for dataset in config.datasets)
+    per_dataset_projects = any(dataset.compose_project for dataset in config.datasets)
+    if (
+        config.services.start
+        and not skip_services
+        and not resume
+        and not per_dataset_instances
+        and not per_dataset_projects
+    ):
+        first_domain = load_domain_manifest(config.datasets[0].domain)
+        _start_services_for_project(
+            config,
+            runner,
+            first_domain,
+            project_name=None,
+            reset_volumes=config.services.reset_volumes,
+            dry_run=dry_run,
+        )
 
     dataset_csvs: list[tuple[str, Path]] = []
     dataset_summaries: list[dict[str, Any]] = []
     comparison_failures = 0
     failed_records = 0
     skipped_completed = 0
+    active_compose_instance: str | None = None
+    initialized_instances: set[str] = set()
+    active_compose_project: str | None = None
+    initialized_projects: set[str] = set()
 
     for dataset in config.datasets:
         if dry_run and not dataset.domain.is_file():
@@ -538,6 +650,54 @@ def run_suite(
             continue
 
         domain = load_domain_manifest(dataset.domain)
+
+        if (
+            config.services.start
+            and not skip_services
+            and not resume
+            and dataset.compose_instance
+            and dataset.compose_instance != active_compose_instance
+        ):
+            if active_compose_instance:
+                runner.run(_instance_command(active_compose_instance, "down"))
+            if (
+                config.services.reset_volumes
+                and dataset.compose_instance not in initialized_instances
+            ):
+                runner.run(_instance_command(dataset.compose_instance, "destroy", "--yes"))
+            runner.run(_instance_command(dataset.compose_instance, "up"))
+            initialized_instances.add(dataset.compose_instance)
+            active_compose_instance = dataset.compose_instance
+
+        if (
+            config.services.start
+            and not skip_services
+            and not resume
+            and dataset.compose_project
+            and dataset.compose_project != active_compose_project
+        ):
+            if active_compose_project:
+                runner.run(
+                    [
+                        *_compose_command(config, active_compose_project),
+                        "down",
+                        "--remove-orphans",
+                    ]
+                )
+            _start_services_for_project(
+                config,
+                runner,
+                domain,
+                project_name=dataset.compose_project,
+                reset_volumes=(
+                    config.services.reset_volumes
+                    and dataset.compose_project not in initialized_projects
+                ),
+                dry_run=dry_run,
+            )
+            initialized_projects.add(dataset.compose_project)
+            active_compose_project = dataset.compose_project
+
         starts = _dataset_starts(dataset, domain, config.start_uuid_count)
         dataset_output = suite_output / "datasets" / _safe_name(dataset.name)
         orchestrator = BfsBenchmarkOrchestrator(
@@ -592,6 +752,8 @@ def run_suite(
                 {
                     "name": dataset.name,
                     "domain": str(dataset.domain),
+                    "composeInstance": dataset.compose_instance,
+                    "composeProject": dataset.compose_project,
                     "startUuids": starts,
                     "measurements": str(csv_path),
                     "events": str(jsonl_path),
@@ -602,16 +764,29 @@ def run_suite(
                 }
             )
 
-            if config.reconstruct_logs and not dry_run:
+
+        # Reconstruction is deliberately outside the ``finally`` block. If loading,
+        # ID resolution, or the C++ BFS fails before producing event logs, the
+        # original benchmark exception must remain visible instead of being masked
+        # by a secondary "No valid logs found" error.
+        if config.reconstruct_logs and not dry_run:
+            event_log_root = _polygraph_event_log_root(dataset_output)
+            if _has_polygraph_event_logs(event_log_root):
                 runner.run(
                     [
                         sys.executable,
                         ROOT / "tools" / "measurement" / "log_reconstruction.py",
-                        dataset_output,
+                        event_log_root,
                         "--out-dir",
                         dataset_output / "log-reconstruction",
                         "--inline-plotly",
                     ]
+                )
+            else:
+                print(
+                    "Skipping event-log reconstruction: no PolyGraph .events.jsonl "
+                    f"files were produced under {event_log_root}",
+                    file=sys.stderr,
                 )
 
     aggregate_csv = _write_aggregate_csv(suite_output / "measurements.csv", dataset_csvs)
@@ -650,7 +825,7 @@ def run_suite(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run the complete CPGDB BFS benchmark suite from one JSON configuration."
+        description="Run the complete PolyGraph BFS benchmark suite from one JSON configuration."
     )
     parser.add_argument("config")
     parser.add_argument("--run-id")

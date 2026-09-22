@@ -3,8 +3,8 @@
  * @brief Shared runtime container for schema, stores, placements, and connections.
  */
 
-#ifndef CPGDB_INFRASTRUCTURE_DATABASE_CONTEXT_HPP
-#define CPGDB_INFRASTRUCTURE_DATABASE_CONTEXT_HPP
+#ifndef POLYGRAPH_INFRASTRUCTURE_DATABASE_CONTEXT_HPP
+#define POLYGRAPH_INFRASTRUCTURE_DATABASE_CONTEXT_HPP
 
 #include "data_access/IGraphStore.hpp"
 #include "data_model/NodeRef.hpp"
@@ -13,12 +13,14 @@
 #include "infrastructure/BackendRegistry.hpp"
 #include "infrastructure/GraphVersion.hpp"
 #include "infrastructure/PlacementCatalog.hpp"
+#include "infrastructure/scheduling/BackendSchedulerRegistry.hpp"
 
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 struct GpuRuntime;
 
@@ -39,10 +41,16 @@ struct DatabaseContext {
     std::shared_ptr<PlacementCatalog> placement_catalog;
     /// Ordered backend IDs represented by compact routing codes in the global ID MSBs.
     std::vector<BackendId> id_routing_backends;
+    /// Server-lifetime admission-control schedulers for remote backends.
+    std::shared_ptr<BackendSchedulerRegistry> backend_schedulers;
     /// Current logical graph version used by coverage/projection freshness checks.
     GraphVersion current_graph_version = 0;
-    /// Optional GPU runtime and projection state.
+    /// GPU runtimes keyed by the device-specific backend id.
+    std::unordered_map<BackendId, std::shared_ptr<GpuRuntime>> gpu_runtimes;
+    /// Compatibility alias for GPU device 0 when configured.
     std::shared_ptr<GpuRuntime> gpu_runtime;
+    /// Optional compatibility resolver from original generated IDs to currently loaded IDs.
+    std::function<GlobalId(GlobalId)> input_id_resolver;
 
     /** @brief Creates a context with initialized schema, registry, and catalog. */
     [[nodiscard]] static std::shared_ptr<DatabaseContext> create_empty();
@@ -59,11 +67,12 @@ struct DatabaseContext {
      *
      * No per-node ID directory is kept in process memory.
      */
+    [[nodiscard]] GlobalId resolve_input_id(const GlobalId& id) const;
     [[nodiscard]] NodeRef node_ref(const GlobalId& id) const;
     /** @brief Returns connection settings for @p id. */
     [[nodiscard]] const BackendConnectionConfig& config_for(BackendId id) const;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_INFRASTRUCTURE_DATABASE_CONTEXT_HPP
+#endif // POLYGRAPH_INFRASTRUCTURE_DATABASE_CONTEXT_HPP

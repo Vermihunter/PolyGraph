@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from collections import deque
 from typing import Any
+from unittest.mock import patch
 
-from tools.graphio.id_codec import BackendLayout, to_signed_storage
+from tools.graphio.id_codec import BackendLayout, canonical_global_id, to_signed_storage
 from tools.graphio.loaders import (
+    ArangoHttpAdapter,
+    build_endpoint_directory,
     BackendConnection,
     EndpointInfo,
     Neo4jHttpAdapter,
     Neo4jQueryError,
 )
 from tools.graphio.model import NodeRecord, RelationshipRecord
+from tools.graphio.writer import GraphJsonLinesWriter
 
 
 def count_response(value: int) -> dict[str, Any]:
@@ -104,26 +110,68 @@ class Neo4jResetTests(unittest.TestCase):
             adapter.reset(batch_size=0)
 
 
-class Neo4jNativeIdLoadTests(unittest.TestCase):
-    def test_real_nodes_use_native_ids_without_uuid_property(self) -> None:
+class Neo4jIntegerIdLoadTests(unittest.TestCase):
+    def test_prepare_creates_local_id_and_proxy_constraints(self) -> None:
+        adapter = RecordingNeo4jAdapter([
+            {"results": [], "errors": []},
+            {"results": [], "errors": []},
+        ])
+
+        adapter.prepare(["Person"], ["KNOWS"])
+
+        self.assertEqual(len(adapter.calls), 2)
+        self.assertIn("POLYGRAPHVertex", adapter.calls[0][0])
+        self.assertIn("n.localId IS UNIQUE", adapter.calls[0][0])
+        self.assertIn("Proxy", adapter.calls[1][0])
+        self.assertIn("n.uuid IS UNIQUE", adapter.calls[1][0])
+
+    def test_real_nodes_keep_stable_payload_local_ids(self) -> None:
         layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
         adapter = RecordingNeo4jAdapter([
-            {"results": [{"data": [{"row": ["123", 7]}]}], "errors": []}
+            {
+                "results": [{"data": [{"row": ["123", 0]}, {"row": ["124", 1]}]}],
+                "errors": [],
+            }
         ])
         mapping = adapter.insert_native_nodes(
-            [NodeRecord(123, "Person", "Neo4J", {"uuid": 999, "name": "Alice"})],
+            [
+                NodeRecord(123, "Person", "Neo4J", {"uuid": 999, "name": "Alice"}),
+                NodeRecord(124, "Person", "Neo4J", {"localId": 999, "name": "Bob"}),
+            ],
             layout,
+            first_local_id=0,
         )
 
         statement, parameters = adapter.calls[0]
-        self.assertIn("id(n) AS native_id", statement)
-        self.assertNotIn("n.uuid", statement)
+        self.assertIn("n.localId = row.local_id", statement)
+        self.assertNotIn("id(n)", statement)
+        self.assertEqual([row["local_id"] for row in parameters["rows"]], [123, 124])
         self.assertNotIn("uuid", parameters["rows"][0]["props"])
-        self.assertEqual(mapping, {123: layout.encode_local(7, "Neo4J")})
+        self.assertNotIn("localId", parameters["rows"][1]["props"])
+        self.assertEqual(
+            mapping,
+            {123: 123, 124: 124},
+        )
+
+    def test_node_local_id_offset_does_not_rewrite_stable_payload(self) -> None:
+        layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
+        adapter = RecordingNeo4jAdapter([
+            {"results": [{"data": [{"row": ["125", 2]}]}], "errors": []}
+        ])
+
+        mapping = adapter.insert_native_nodes(
+            [NodeRecord(125, "Person", "Neo4J", {})],
+            layout,
+            first_local_id=2,
+        )
+
+        self.assertEqual(adapter.calls[0][1]["rows"][0]["local_id"], 125)
+        self.assertEqual(mapping, {125: 125})
 
     def test_proxy_nodes_store_signed_uint64_uuid(self) -> None:
         adapter = RecordingNeo4jAdapter([{"results": [{"data": []}], "errors": []}])
-        remote_id = 0xE123_4567_89AB_CDEF
+        layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
+        remote_id = layout.encode_local(0x1234_5678_9ABC, "ArangoDB", residency_mask=1 << 3)
         adapter.insert_proxy_nodes([
             NodeRecord(
                 remote_id,
@@ -134,10 +182,10 @@ class Neo4jNativeIdLoadTests(unittest.TestCase):
         ])
         statement, parameters = adapter.calls[0]
         self.assertIn("MERGE (n:Proxy", statement)
-        self.assertEqual(parameters["rows"][0]["uuid"], to_signed_storage(remote_id))
+        self.assertEqual(parameters["rows"][0]["uuid"], to_signed_storage(canonical_global_id(remote_id)))
         self.assertNotIn("uuid", parameters["rows"][0]["props"])
 
-    def test_native_relationship_has_no_uuid_and_returns_id_r(self) -> None:
+    def test_native_relationship_has_no_uuid_and_uses_stable_payload_local_id(self) -> None:
         layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
         source = layout.encode_local(3, "Neo4J")
         target = layout.encode_local(4, "Neo4J")
@@ -153,15 +201,18 @@ class Neo4jNativeIdLoadTests(unittest.TestCase):
                 target: EndpointInfo(target, "Person", "Neo4J"),
             },
             layout,
+            first_local_id=9,
         )
         statement, parameters = adapter.calls[0]
-        self.assertIn("id(a) = row.from_id", statement)
+        self.assertIn("MATCH (a:POLYGRAPHVertex {localId: row.from_id})", statement)
         self.assertNotIn("row.from_proxy", statement)
         self.assertNotIn(" OR ", statement)
-        self.assertIn("id(r) AS native_id", statement)
+        self.assertIn("SET r.localId = row.local_id", statement)
         self.assertIn("REMOVE r.uuid", statement)
+        self.assertNotIn("RETURN", statement)
+        self.assertEqual(parameters["rows"][0]["local_id"], 55)
         self.assertNotIn("uuid", parameters["rows"][0]["props"])
-        self.assertEqual(mapping[relationship], layout.encode_local(9, "Neo4J"))
+        self.assertEqual(mapping[relationship], relationship)
 
     def test_proxy_endpoint_uses_unique_proxy_uuid_seek_without_or_predicate(self) -> None:
         layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
@@ -182,9 +233,76 @@ class Neo4jNativeIdLoadTests(unittest.TestCase):
         )
         statement, _ = adapter.calls[0]
         self.assertIn("MATCH (a:Proxy {uuid: row.from_id})", statement)
-        self.assertIn("MATCH (b) WHERE id(b) = row.to_id", statement)
+        self.assertIn("MATCH (b:POLYGRAPHVertex {localId: row.to_id})", statement)
         self.assertNotIn("row.from_proxy", statement)
         self.assertNotIn(" OR ", statement)
+
+
+class ArangoBulkImportTests(unittest.TestCase):
+    def test_document_import_uses_jsonl_and_persistent_session(self) -> None:
+        connection = BackendConnection(
+            source="ArangoDB",
+            endpoint="http://localhost:8529/_db/university/_api/cursor",
+            database="university",
+            username="root",
+            password="password",
+        )
+        adapter = ArangoHttpAdapter(connection, import_workers=1)
+        documents = [{"_key": "1", "value": "a"}, {"_key": "2", "value": "b"}]
+
+        with patch("tools.graphio.loaders._request_json", return_value={"errors": 0}) as request:
+            adapter._import_batch("Person", documents)
+
+        kwargs = request.call_args.kwargs
+        self.assertIsNone(kwargs.get("payload"))
+        self.assertEqual(
+            kwargs["raw_body"],
+            '{"_key":"1","value":"a"}\n{"_key":"2","value":"b"}\n',
+        )
+        self.assertIn("type=documents", request.call_args.args[1])
+        self.assertIs(kwargs["session"], adapter._session())
+
+    def test_large_single_collection_is_split_across_import_workers(self) -> None:
+        connection = BackendConnection(
+            "ArangoDB", "http://localhost:8529", "university", "root", "password"
+        )
+        adapter = ArangoHttpAdapter(connection, import_workers=4)
+        documents = [{"_key": str(index)} for index in range(4_000)]
+
+        with patch.object(adapter, "_import_batch") as import_batch:
+            adapter._import_grouped({"Person": documents})
+
+        self.assertEqual(import_batch.call_count, 4)
+        self.assertEqual(
+            sum(len(call.args[1]) for call in import_batch.call_args_list),
+            len(documents),
+        )
+        self.assertTrue(all(call.args[0] == "Person" for call in import_batch.call_args_list))
+
+    def test_rejects_non_positive_import_workers(self) -> None:
+        connection = BackendConnection("ArangoDB", "http://localhost:8529", "university", "root", "password")
+        with self.assertRaisesRegex(ValueError, "import_workers must be positive"):
+            ArangoHttpAdapter(connection, import_workers=0)
+
+
+class DiskBackedEndpointDirectoryTests(unittest.TestCase):
+    def test_cache_bits_do_not_change_endpoint_lookup_identity(self) -> None:
+        layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
+        canonical = layout.encode_local(42, "Neo4J")
+        decorated = layout.encode_local(42, "Neo4J", residency_mask=1 << 3)
+        with tempfile.TemporaryDirectory() as temporary:
+            graph = Path(temporary) / "graph.jsonl"
+            with GraphJsonLinesWriter(graph, metadata=layout.metadata()) as writer:
+                writer.write_node(NodeRecord(decorated, "Person", "Neo4J", {}))
+            directory = build_endpoint_directory(graph, layout)
+            try:
+                self.assertEqual(directory[canonical].type, "Person")
+                self.assertEqual(directory[decorated].global_id, canonical)
+            finally:
+                index_path = directory.path
+                directory.close()
+                index_path.unlink(missing_ok=True)
+
 
 
 if __name__ == "__main__":

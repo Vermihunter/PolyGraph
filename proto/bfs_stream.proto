@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package cpgdb.grpc.v1;
+package polygraph.grpc.v1;
 
 service TraversalService {
   rpc StreamBfs(BfsStreamRequest) returns (stream BfsLayer);

@@ -1,16 +1,17 @@
 include(cmake/Model.cmake)
+include(cmake/Observability.cmake)
 include(cmake/Core.cmake)
 include(cmake/Serialization.cmake)
 
-if(CPGDB_BUILD_BACKENDS)
+if(POLYGRAPH_BUILD_BACKENDS)
     include(cmake/Backends.cmake)
 endif()
 
-if(CPGDB_BUILD_RUNTIME)
+if(POLYGRAPH_BUILD_RUNTIME)
     include(cmake/Runtime.cmake)
 endif()
 
-if(CPGDB_BUILD_HTTP OR CPGDB_BUILD_GRPC)
+if(POLYGRAPH_BUILD_HTTP OR POLYGRAPH_BUILD_GRPC)
     include(cmake/Services.cmake)
 endif()
 

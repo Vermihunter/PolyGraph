@@ -14,7 +14,7 @@ from tools.graphio import open_graph_reader
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Select reproducible BFS source vertices from a CPGDB graph file.")
+    parser = argparse.ArgumentParser(description="Select reproducible BFS source vertices from a PolyGraph graph file.")
     parser.add_argument("--graph", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--node-type", default="Person")

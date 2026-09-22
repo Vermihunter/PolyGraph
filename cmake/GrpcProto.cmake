@@ -1,9 +1,9 @@
 include_guard(GLOBAL)
 
-function(cpgdb_add_grpc_proto target)
+function(polygraph_add_grpc_proto target)
     cmake_parse_arguments(ARG "" "PROTO" "" ${ARGN})
     if(NOT ARG_PROTO)
-        message(FATAL_ERROR "cpgdb_add_grpc_proto(${target}) requires PROTO")
+        message(FATAL_ERROR "polygraph_add_grpc_proto(${target}) requires PROTO")
     endif()
 
     get_filename_component(proto_file "${ARG_PROTO}" ABSOLUTE)

@@ -17,13 +17,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.event_log_average import AVERAGE_DIR_NAME, analyze_log_tree
+from tools.event_log_average import AVERAGE_DIR_NAME, analyze_log_tree, normalize_event
 
 
 STRUCTURAL_EVENT_FIELDS = {
     "event",
+    # Current logger schema.
+    "sequence",
+    "elapsed_ns",
+    "timestamp_unix_ns",
+    # Legacy and normalized aliases.
     "seq",
     "steady_ns",
+    "steady_time_ns",
+    "monotonic_ns",
+    "timestamp_ns",
+    "_timing_field",
     "thread_id",
     "time",
     "timestamp",
@@ -333,28 +342,12 @@ def average_execution_entries(average_analysis: dict | None) -> list[tuple[Path,
     return entries
 
 
-def load_average_artifacts(execution_file: Path) -> tuple[dict, pd.DataFrame, Path | None]:
-    average_dir = execution_file.parent
-    summary_path = average_dir / "summary.json"
-    events_path = average_dir / "events.csv"
-    report_path = average_dir / "report.html"
-
-    summary = {}
-    if summary_path.is_file():
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
-
-    events = pd.DataFrame()
-    if events_path.is_file() and events_path.stat().st_size > 0:
-        events = pd.read_csv(events_path)
-
-    return summary, events, report_path if report_path.is_file() else None
-
-
 # ============================================================
 # Loading
 # ============================================================
 
 def load_jsonl(path: Path) -> pd.DataFrame:
+    """Load current or legacy event JSONL into the normalized dashboard schema."""
     rows = []
 
     with path.open("r", encoding="utf-8") as f:
@@ -365,9 +358,12 @@ def load_jsonl(path: Path) -> pd.DataFrame:
                 continue
 
             try:
-                rows.append(json.loads(line))
+                raw_event = json.loads(line)
             except json.JSONDecodeError as e:
                 raise ValueError(f"Invalid JSON on line {line_no}: {e}") from e
+            if not isinstance(raw_event, dict):
+                raise ValueError(f"Invalid event on line {line_no}: expected an object")
+            rows.append(normalize_event(raw_event, path=path, line_number=line_no))
 
     if not rows:
         raise ValueError(f"No events found in {path}")
@@ -378,7 +374,7 @@ def load_jsonl(path: Path) -> pd.DataFrame:
     missing = required - set(df.columns)
 
     if missing:
-        raise ValueError(f"Missing required columns: {missing}")
+        raise ValueError(f"Missing required columns after normalization: {missing}")
 
     df = df.sort_values("seq").reset_index(drop=True)
     return df
@@ -585,60 +581,6 @@ def make_hover_text(row) -> str:
     return "<br>".join(parts)
 
 
-def build_attributes_html(run: dict) -> str:
-    """Render every dynamic span attribute as a searchable long-form table."""
-    spans = run["spans"]
-    rows: list[str] = []
-    attribute_names: set[str] = set()
-
-    for _, span in spans.iterrows():
-        attributes = span.get("attributes")
-        if not isinstance(attributes, dict):
-            continue
-        for key, value in sorted(attributes.items(), key=lambda item: _attribute_sort_key(item[0])):
-            attribute_names.add(key)
-            rows.append(
-                "<tr>"
-                f"<td>{html.escape(str(span['name']))}</td>"
-                f"<td>{float(span['start_ms']):.3f}</td>"
-                f"<td>{float(span['duration_ms']):.3f}</td>"
-                f"<td>{int(span.get('thread_index', span['thread_id']))}</td>"
-                f"<td>{html.escape(str(key))}</td>"
-                f"<td><code>{html.escape(format_attribute_value(value))}</code></td>"
-                "</tr>"
-            )
-
-    if not rows:
-        return unavailable_view("This run has no custom event attributes.")
-
-    table_id = f"attributes_{run['safe_id']}"
-    return f"""
-    <div class="attributes-view">
-      <div class="attributes-heading">
-        <div>
-          <h2>Span attributes</h2>
-          <p>{len(attribute_names)} distinct fields across {len(rows)} attribute values.</p>
-        </div>
-        <input
-          class="attribute-filter"
-          type="search"
-          placeholder="Filter event, attribute, or value…"
-          oninput="filterAttributeTable('{table_id}', this.value)"
-        />
-      </div>
-      <div class="attribute-table-wrap">
-        <table class="attribute-table" id="{table_id}">
-          <thead><tr>
-            <th>Event</th><th>Start ms</th><th>Duration ms</th>
-            <th>Thread</th><th>Attribute</th><th>Value</th>
-          </tr></thead>
-          <tbody>{''.join(rows)}</tbody>
-        </table>
-      </div>
-    </div>
-    """
-
-
 def display_thread_index(row) -> int:
     value = row.get("thread_index", row["thread_id"])
     return int(value)
@@ -646,20 +588,6 @@ def display_thread_index(row) -> int:
 
 def make_lane_by_thread(row) -> str:
     return f"thread {display_thread_index(row)} / lane {int(row['overlap_lane'])}"
-
-
-def make_lane_by_thread_and_event(row) -> str:
-    return (
-        f"thread {display_thread_index(row)} / {row['name']} "
-        f"/ lane {int(row['overlap_lane'])}"
-    )
-
-
-def make_lane_by_depth(row) -> str:
-    if pd.notna(row.get("depth")):
-        return f"depth {int(row['depth'])} / lane {int(row['overlap_lane'])}"
-
-    return f"no depth / lane {int(row['overlap_lane'])}"
 
 
 # ============================================================
@@ -732,311 +660,6 @@ def build_timeline_figure(
     return fig
 
 
-def build_event_summary_figure(spans: pd.DataFrame) -> go.Figure:
-    summary = (
-        spans
-        .groupby("name", as_index=False)
-        .agg(
-            total_ms=("duration_ms", "sum"),
-            mean_ms=("duration_ms", "mean"),
-            max_ms=("duration_ms", "max"),
-            count=("duration_ms", "count"),
-        )
-        .sort_values("total_ms", ascending=True)
-    )
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Bar(
-        x=summary["total_ms"],
-        y=summary["name"],
-        orientation="h",
-        customdata=summary[["mean_ms", "max_ms", "count"]],
-        hovertemplate=(
-            "<b>%{y}</b><br>"
-            "total: %{x:.3f} ms<br>"
-            "mean: %{customdata[0]:.3f} ms<br>"
-            "max: %{customdata[1]:.3f} ms<br>"
-            "count: %{customdata[2]}"
-            "<extra></extra>"
-        ),
-    ))
-
-    fig.update_layout(
-        title="Total Time by Event Type",
-        xaxis_title="Total time [ms]",
-        yaxis_title="Event type",
-        height=max(450, 120 + 45 * len(summary)),
-        margin={
-            "l": 230,
-            "r": 40,
-            "t": 80,
-            "b": 60,
-        },
-    )
-
-    return fig
-
-
-def build_depth_summary_figure(spans: pd.DataFrame) -> go.Figure | None:
-    df = spans[pd.notna(spans["depth"])].copy()
-
-    if df.empty:
-        return None
-
-    df["depth"] = df["depth"].astype(int)
-
-    summary = (
-        df
-        .groupby(["depth", "name"], as_index=False)
-        .agg(total_ms=("duration_ms", "sum"))
-        .sort_values(["depth", "name"])
-    )
-
-    fig = go.Figure()
-
-    for event_name, group in summary.groupby("name", sort=False):
-        fig.add_trace(go.Bar(
-            x=group["depth"],
-            y=group["total_ms"],
-            name=event_name,
-            hovertemplate=(
-                "<b>%{fullData.name}</b><br>"
-                "depth: %{x}<br>"
-                "total: %{y:.3f} ms"
-                "<extra></extra>"
-            ),
-        ))
-
-    fig.update_layout(
-        title="Time by BFS Depth",
-        xaxis_title="BFS depth",
-        yaxis_title="Total time [ms]",
-        barmode="stack",
-        height=550,
-    )
-
-    return fig
-
-
-def build_size_vs_duration_figure(spans: pd.DataFrame) -> go.Figure | None:
-    rows = []
-
-    for _, row in spans.iterrows():
-        if pd.notna(row.get("row_size")):
-            rows.append({
-                "name": row["name"],
-                "size_kind": "row_size",
-                "size": row["row_size"],
-                "duration_ms": row["duration_ms"],
-                "depth": row.get("depth"),
-            })
-
-        if pd.notna(row.get("frontier_size")):
-            rows.append({
-                "name": row["name"],
-                "size_kind": "frontier_size",
-                "size": row["frontier_size"],
-                "duration_ms": row["duration_ms"],
-                "depth": row.get("depth"),
-            })
-
-    if not rows:
-        return None
-
-    df = pd.DataFrame(rows)
-
-    fig = go.Figure()
-
-    for label, group in df.groupby(["name", "size_kind"], sort=False):
-        event_name, size_kind = label
-
-        fig.add_trace(go.Scatter(
-            x=group["size"],
-            y=group["duration_ms"],
-            mode="markers",
-            name=f"{event_name} / {size_kind}",
-            customdata=group[["depth"]],
-            hovertemplate=(
-                "<b>%{fullData.name}</b><br>"
-                "size: %{x}<br>"
-                "duration: %{y:.3f} ms<br>"
-                "depth: %{customdata[0]}"
-                "<extra></extra>"
-            ),
-        ))
-
-    fig.update_layout(
-        title="Input Size vs Duration",
-        xaxis_title="row_size / frontier_size",
-        yaxis_title="Duration [ms]",
-        height=600,
-    )
-
-    return fig
-
-
-def build_average_event_figure(events: pd.DataFrame, title: str) -> go.Figure | None:
-    required = {
-        "event",
-        "avg_total_ms_per_run",
-        "p95_total_ms_per_run",
-        "stddev_total_ms_per_run",
-    }
-    if events.empty or not required.issubset(events.columns):
-        return None
-
-    top = (
-        events
-        .sort_values("avg_total_ms_per_run", ascending=False)
-        .head(30)
-        .sort_values("avg_total_ms_per_run", ascending=True)
-    )
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=top["avg_total_ms_per_run"],
-        y=top["event"],
-        orientation="h",
-        name="Average total / execution",
-        error_x={
-            "type": "data",
-            "array": top["stddev_total_ms_per_run"],
-            "visible": True,
-        },
-        customdata=top[[
-            "avg_count_per_run",
-            "avg_span_ms",
-            "presence_pct",
-            "inclusive_share_pct",
-        ]],
-        hovertemplate=(
-            "<b>%{y}</b><br>"
-            "average total: %{x:.4f} ms<br>"
-            "average count: %{customdata[0]:.2f}<br>"
-            "average span: %{customdata[1]:.4f} ms<br>"
-            "presence: %{customdata[2]:.1f}%<br>"
-            "inclusive share: %{customdata[3]:.2f}%"
-            "<extra></extra>"
-        ),
-    ))
-    fig.add_trace(go.Scatter(
-        x=top["p95_total_ms_per_run"],
-        y=top["event"],
-        mode="markers",
-        name="P95 total / execution",
-        marker={"size": 9, "symbol": "diamond"},
-        hovertemplate=(
-            "<b>%{y}</b><br>"
-            "P95 total: %{x:.4f} ms"
-            "<extra></extra>"
-        ),
-    ))
-    fig.update_layout(
-        title=title,
-        xaxis_title="Inclusive time per execution [ms]",
-        yaxis_title="Event type",
-        height=max(620, 150 + 32 * len(top)),
-        margin={"l": 300, "r": 50, "t": 85, "b": 65},
-        legend={"orientation": "h", "y": 1.07, "x": 0},
-    )
-    return fig
-
-
-def build_average_profile_html(run: dict) -> str:
-    if not run.get("is_average"):
-        return unavailable_view(
-            "This view is available for generated Average executions. "
-            "Choose an Average entry in the Run selector."
-        )
-
-    summary = run.get("average_summary") or {}
-    events = run.get("average_events")
-    if not isinstance(events, pd.DataFrame):
-        events = pd.DataFrame()
-
-    def metric(name: str, default=0):
-        value = summary.get(name, default)
-        return value if value is not None else default
-
-    report = run.get("average_report")
-    report_href = run.get("average_report_href")
-    report_link = (
-        f'<a class="average-report-link" href="{html.escape(str(report_href))}">'
-        "Open the standalone average report</a>"
-        if isinstance(report, Path) and report.is_file() and report_href
-        else ""
-    )
-
-    cards = f"""
-    <div class="average-cards">
-      <div class="average-card"><span>Executions</span><strong>{int(metric('validRuns'))}</strong></div>
-      <div class="average-card"><span>Average window</span><strong>{float(metric('averageWindowMs')):.3f} ms</strong></div>
-      <div class="average-card"><span>P95 window</span><strong>{float(metric('p95WindowMs')):.3f} ms</strong></div>
-      <div class="average-card"><span>Std. deviation</span><strong>{float(metric('stddevWindowMs')):.3f} ms</strong></div>
-      <div class="average-card"><span>Event types</span><strong>{int(metric('eventTypeCount'))}</strong></div>
-      <div class="average-card"><span>Source spans</span><strong>{int(metric('spanCount')):,}</strong></div>
-    </div>
-    """
-
-    chart = build_average_event_figure(
-        events,
-        title=f"Average and P95 Event Time — {run['label']}",
-    )
-    chart_html = (
-        figure_to_div(chart, div_id=f"{run['safe_id']}_average_event_chart")
-        if chart is not None
-        else unavailable_view("The average event table is missing or empty.")
-    )
-
-    rows = []
-    if not events.empty:
-        ordered = events.sort_values("avg_total_ms_per_run", ascending=False)
-        for _, row in ordered.iterrows():
-            rows.append(f"""
-            <tr>
-              <td>{html.escape(str(row['event']))}</td>
-              <td>{float(row['avg_total_ms_per_run']):.4f}</td>
-              <td>{float(row['p95_total_ms_per_run']):.4f}</td>
-              <td>{float(row['stddev_total_ms_per_run']):.4f}</td>
-              <td>{float(row['avg_count_per_run']):.2f}</td>
-              <td>{float(row['avg_span_ms']):.4f}</td>
-              <td>{float(row['presence_pct']):.1f}%</td>
-              <td>{float(row['inclusive_share_pct']):.2f}%</td>
-            </tr>
-            """)
-
-    table_html = (
-        f"""
-        <div class="average-table-wrap">
-          <table class="average-table">
-            <thead><tr>
-              <th>Event</th><th>Avg total/run ms</th><th>P95 ms</th>
-              <th>Stddev ms</th><th>Avg count/run</th><th>Avg span ms</th>
-              <th>Presence</th><th>Inclusive share</th>
-            </tr></thead>
-            <tbody>{''.join(rows)}</tbody>
-          </table>
-        </div>
-        """
-        if rows
-        else unavailable_view("No average event rows were generated.")
-    )
-
-    return f"""
-    <div class="average-profile">
-      <div class="average-profile-heading">
-        <div><h2>Average execution profile</h2><p>Inclusive event timing averaged across repeated executions.</p></div>
-        {report_link}
-      </div>
-      {cards}
-      <div class="average-chart">{chart_html}</div>
-      <h3>Complete event timing table</h3>
-      {table_html}
-    </div>
-    """
-
-
 def build_run_overview_html(run: dict) -> str:
     spans = run["spans"]
     events = run["events"]
@@ -1050,27 +673,28 @@ def build_run_overview_html(run: dict) -> str:
     unclosed_count = spans.attrs.get("unclosed_count", 0)
     unmatched_end_count = spans.attrs.get("unmatched_end_count", 0)
 
-    top = (
+    ranked = (
         spans
         .groupby("name", as_index=False)
         .agg(total_ms=("duration_ms", "sum"), count=("duration_ms", "count"))
         .sort_values("total_ms", ascending=False)
-        .head(10)
+        .reset_index(drop=True)
     )
 
     rows = "\n".join(
         f"""
-        <tr>
+        <tr data-overview-event-row data-rank="{rank + 1}" data-event-name="{html.escape(str(r['name']))}"{' hidden' if rank >= 10 else ''}>
+          <td>{rank + 1}</td>
           <td>{html.escape(str(r["name"]))}</td>
           <td>{r["total_ms"]:.3f}</td>
           <td>{int(r["count"])}</td>
         </tr>
         """
-        for _, r in top.iterrows()
+        for rank, (_, r) in enumerate(ranked.iterrows())
     )
 
     return f"""
-    <div class="overview-card">
+    <div class="overview-card" data-overview-card data-overview-expanded="false">
       <h2>Run overview</h2>
 
       <table class="meta-table">
@@ -1084,19 +708,444 @@ def build_run_overview_html(run: dict) -> str:
         <tr><th>Unmatched ends</th><td>{unmatched_end_count}</td></tr>
       </table>
 
-      <h3>Top event types by total time</h3>
+      <div class="overview-event-heading">
+        <div>
+          <h3>Event types by total time</h3>
+          <span data-overview-status>Showing top {min(10, len(ranked))} of {len(ranked)}</span>
+        </div>
+        <div class="overview-event-actions">
+          <input type="search" placeholder="Find event type..." aria-label="Find event type" data-overview-search />
+          <button type="button" data-overview-toggle>Show all {len(ranked)}</button>
+        </div>
+      </div>
 
-      <table class="meta-table">
-        <tr>
-          <th>Event type</th>
-          <th>Total ms</th>
-          <th>Count</th>
-        </tr>
-        {rows}
+      <table class="meta-table overview-event-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Event type</th>
+            <th>Total ms</th>
+            <th>Count</th>
+          </tr>
+        </thead>
+        <tbody>{rows}</tbody>
       </table>
     </div>
     """
 
+
+def _merged_interval_duration_ms(intervals: list[tuple[float, float]]) -> float:
+    """Return wall-clock coverage of possibly nested/overlapping span intervals."""
+    if not intervals:
+        return 0.0
+    ordered = sorted(intervals)
+    current_start, current_end = ordered[0]
+    total = 0.0
+    for start, end in ordered[1:]:
+        if start <= current_end:
+            current_end = max(current_end, end)
+            continue
+        total += current_end - current_start
+        current_start, current_end = start, end
+    return total + (current_end - current_start)
+
+
+def _comparison_source_kind(run: dict) -> str:
+    """Classify an input log for comparison defaults.
+
+    The HTTP benchmark emits both per-request event files and one long-lived
+    ``server.events.jsonl``. The latter spans server startup and many requests, so
+    treating it as another BFS repetition badly distorts cross-configuration
+    distributions. It remains available, but is disabled by default in the UI.
+    """
+    if bool(run.get("is_average", False)):
+        return "average"
+
+    relative = Path(str(run.get("relative_path", run.get("label", ""))))
+    parts = tuple(part.lower() for part in relative.parts)
+    name = relative.name.lower()
+    if name == "server.events.jsonl":
+        return "server"
+    if "requests" in parts and name.endswith(".events.jsonl"):
+        return "request"
+    if name.endswith(".events.jsonl"):
+        return "event"
+    return "other"
+
+
+def _comparison_group_name(run: dict) -> str:
+    """Return the benchmark/run configuration represented by one event file.
+
+    For cache benchmarks this turns paths such as
+    ``08-no-cache/events/requests/r03.events.jsonl`` into ``08-no-cache``.
+    When the dashboard input itself is one run directory, the absolute log path
+    supplies the component immediately before ``events``.
+    """
+    explicit = str(run.get("comparison_group", "")).strip()
+    if explicit:
+        return explicit
+
+    candidates = [Path(str(run.get("relative_path", "")))]
+    log_file = run.get("log_file")
+    if log_file:
+        candidates.append(Path(log_file))
+
+    for candidate in candidates:
+        parts = candidate.parts
+        lowered = [part.lower() for part in parts]
+        if "events" in lowered:
+            index = len(lowered) - 1 - lowered[::-1].index("events")
+            if index > 0:
+                return parts[index - 1]
+
+    label = str(run.get("label", "")).strip()
+    if label.startswith("Average — "):
+        label = label[len("Average — "):].strip()
+    if label:
+        normalized = label.replace("\\", "/")
+        return normalized.split("/", 1)[0]
+    return "run"
+
+
+def _comparison_metric_options(
+        families: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+) -> tuple[list[dict[str, str]], str]:
+    options: list[dict[str, str]] = []
+    family_names = {str(item["name"]) for item in families}
+    event_names = {str(item["name"]) for item in events}
+
+    for name in sorted(family_names, key=lambda value: value.lower()):
+        options.append({
+            "key": f"family:{name}",
+            "kind": "family",
+            "name": name,
+            "label": comparison_family_label(name),
+        })
+    for name in sorted(event_names, key=lambda value: value.lower()):
+        options.append({
+            "key": f"event:{name}",
+            "kind": "event",
+            "name": name,
+            "label": name,
+        })
+
+    preferred = (
+        "event:full_bfs",
+        "family:full_bfs",
+        "event:bfs",
+        "family:bfs",
+    )
+    keys = {option["key"] for option in options}
+    default_metric = next((key for key in preferred if key in keys), options[0]["key"] if options else "")
+    return options, default_metric
+
+
+def comparison_family_label(name: str) -> str:
+    labels = {
+        "full_bfs": "Total BFS",
+        "bfs": "BFS",
+        "neo4j": "Neo4j",
+        "arango": "ArangoDB",
+        "cugraph": "GPU / cuGraph",
+        "gpu": "GPU",
+        "redis": "Redis",
+        "mmap": "MMAP",
+        "postgresql": "PostgreSQL",
+        "backend": "Backend scheduler",
+    }
+    return labels.get(name, name)
+
+
+def build_comparison_metadata(runs: list[dict]) -> dict[str, Any]:
+    """Build per-sample metrics grouped by benchmark/run configuration.
+
+    A *sample* is one JSONL execution (normally one request/repetition). The UI
+    aggregates these samples by configuration, so a box represents e.g.
+    ``08-no-cache`` rather than an event family or a raw JSONL filename.
+
+    Durations remain interval unions rather than naive sums. This avoids double
+    counting nested instrumentation inside one event family.
+    """
+    family_totals: dict[str, float] = defaultdict(float)
+    family_counts: dict[str, int] = defaultdict(int)
+    event_totals: dict[str, float] = defaultdict(float)
+    event_counts: dict[str, int] = defaultdict(int)
+    run_rows: list[dict[str, Any]] = []
+
+    for run in runs:
+        spans = run["spans"]
+        family_intervals: dict[str, list[tuple[float, float]]] = defaultdict(list)
+        event_intervals: dict[str, list[tuple[float, float]]] = defaultdict(list)
+        event_occurrences: dict[str, int] = defaultdict(int)
+        family_occurrences: dict[str, int] = defaultdict(int)
+
+        for _, span in spans.iterrows():
+            event_name = str(span["name"])
+            family = event_name_prefix(event_name)
+            interval = (float(span["start_ms"]), float(span["end_ms"]))
+            family_intervals[family].append(interval)
+            event_intervals[event_name].append(interval)
+            family_occurrences[family] += 1
+            event_occurrences[event_name] += 1
+
+        groups = {
+            family: _merged_interval_duration_ms(intervals)
+            for family, intervals in family_intervals.items()
+        }
+        events = {
+            event_name: _merged_interval_duration_ms(intervals)
+            for event_name, intervals in event_intervals.items()
+        }
+
+        for family, duration in groups.items():
+            family_totals[family] += duration
+            family_counts[family] += family_occurrences[family]
+        for event_name, duration in events.items():
+            event_totals[event_name] += duration
+            event_counts[event_name] += event_occurrences[event_name]
+
+        run_rows.append({
+            "id": str(run["safe_id"]),
+            "label": str(run["label"]),
+            "group": _comparison_group_name(run),
+            "sourceKind": _comparison_source_kind(run),
+            "isAverage": bool(run.get("is_average", False)),
+            "groups": groups,
+            "events": events,
+        })
+
+    families = [
+        {
+            "name": name,
+            "label": comparison_family_label(name),
+            "runCount": sum(1 for run in run_rows if name in run["groups"]),
+            "spanCount": family_counts[name],
+            "totalMs": family_totals[name],
+        }
+        for name in sorted(family_totals, key=lambda name: (-family_totals[name], name.lower()))
+    ]
+    events = [
+        {
+            "name": name,
+            "family": event_name_prefix(name),
+            "runCount": sum(1 for run in run_rows if name in run["events"]),
+            "spanCount": event_counts[name],
+            "totalMs": event_totals[name],
+        }
+        for name in sorted(event_totals, key=lambda name: (-event_totals[name], name.lower()))
+    ]
+
+    group_names = sorted({run["group"] for run in run_rows}, key=lambda value: value.lower())
+    groups = []
+    for name in group_names:
+        samples = [run for run in run_rows if run["group"] == name]
+        groups.append({
+            "name": name,
+            "sampleCount": len(samples),
+            "defaultSampleCount": sum(
+                run["sourceKind"] not in {"server", "average"}
+                for run in samples
+            ),
+        })
+
+    source_labels = {
+        "request": "Per-request event logs",
+        "event": "Other .events.jsonl logs",
+        "server": "server.events.jsonl",
+        "average": "Generated average executions",
+        "other": "Other JSONL logs",
+    }
+    source_order = ("request", "event", "other", "server", "average")
+    sources = [
+        {
+            "name": source,
+            "label": source_labels[source],
+            "count": sum(run["sourceKind"] == source for run in run_rows),
+            "defaultEnabled": source not in {"server", "average"},
+        }
+        for source in source_order
+        if any(run["sourceKind"] == source for run in run_rows)
+    ]
+
+    metrics, default_metric = _comparison_metric_options(families, events)
+    return {
+        "runs": run_rows,
+        "runGroups": groups,
+        "sources": sources,
+        "families": families,
+        "events": events,
+        "metrics": metrics,
+        "defaultMetric": default_metric,
+    }
+
+
+def build_comparison_view(runs: list[dict]) -> str:
+    metadata = build_comparison_metadata(runs)
+
+    group_controls = []
+    for index, group in enumerate(metadata["runGroups"]):
+        group_controls.append(
+            f"""<label class="comparison-check-row" for="comparison_group_{index}">
+                 <input id="comparison_group_{index}" type="checkbox" data-comparison-group
+                        value="{html.escape(group['name'])}" checked />
+                 <span>{html.escape(group['name'])}</span><small>{int(group['defaultSampleCount'])} samples</small>
+               </label>"""
+        )
+
+    source_controls = []
+    for index, source in enumerate(metadata["sources"]):
+        source_controls.append(
+            f"""<label class="comparison-check-row" for="comparison_source_{index}">
+                 <input id="comparison_source_{index}" type="checkbox" data-comparison-source
+                        value="{html.escape(source['name'])}" {'checked' if source['defaultEnabled'] else ''} />
+                 <span>{html.escape(source['label'])}</span><small>{int(source['count'])}</small>
+               </label>"""
+        )
+
+    default_backend_families = {
+        "neo4j", "arango", "cugraph", "gpu", "redis", "mmap", "postgresql", "backend"
+    }
+    available_default_backends = {
+        family["name"] for family in metadata["families"]
+        if family["name"] in default_backend_families
+    }
+    if not available_default_backends:
+        available_default_backends = {
+            family["name"] for family in metadata["families"][: min(5, len(metadata["families"]))]
+        }
+
+    family_controls = []
+    for index, family in enumerate(metadata["families"]):
+        family_controls.append(
+            f"""<label class="comparison-check-row" for="comparison_family_{index}">
+                 <input id="comparison_family_{index}" type="checkbox" data-comparison-family
+                        value="{html.escape(family['name'])}" {'checked' if family['name'] in available_default_backends else ''} />
+                 <span>{html.escape(str(family['label']))}</span><small>{int(family['runCount'])} samples</small>
+               </label>"""
+        )
+
+    # Event detail is opt-in. A small top set is preselected so enabling the panel
+    # produces something useful without creating an unreadable 20-trace legend.
+    event_controls = []
+    for index, event in enumerate(metadata["events"]):
+        event_controls.append(
+            f"""<label class="comparison-check-row" for="comparison_event_{index}" data-comparison-event-row
+                       data-event-search="{html.escape(event['name'].lower())}">
+                 <input id="comparison_event_{index}" type="checkbox" data-comparison-event
+                        value="{html.escape(event['name'])}" {'checked' if index < 6 else ''} />
+                 <span>{html.escape(event['name'])}</span><small>{float(event['totalMs']):.1f} ms</small>
+               </label>"""
+        )
+
+    family_metric_options = "".join(
+        f'<option value="{html.escape(option["key"])}" '
+        f'{"selected" if option["key"] == metadata["defaultMetric"] else ""}>'
+        f'{html.escape(option["label"])}</option>'
+        for option in metadata["metrics"]
+        if option["kind"] == "family"
+    )
+    event_metric_options = "".join(
+        f'<option value="{html.escape(option["key"])}" '
+        f'{"selected" if option["key"] == metadata["defaultMetric"] else ""}>'
+        f'{html.escape(option["label"])}</option>'
+        for option in metadata["metrics"]
+        if option["kind"] == "event"
+    )
+
+    return f"""
+    <div class="comparison-workspace" data-comparison-workspace>
+      <div class="comparison-intro">
+        <div>
+          <h2>Compare run configurations</h2>
+          <p>Each distribution represents one benchmark configuration (for example <code>08-no-cache</code>) across its repetitions/requests. Choose one BFS/event metric for the main comparison, then optionally add backend and event-detail panels.</p>
+        </div>
+        <div class="comparison-view-switches" aria-label="Comparison charts">
+          <label><input type="checkbox" data-comparison-chart-toggle value="boxplot" checked /> Distribution + summary</label>
+          <label><input type="checkbox" data-comparison-chart-toggle value="families" checked /> Backend breakdown</label>
+          <label><input type="checkbox" data-comparison-chart-toggle value="events" /> Event detail</label>
+        </div>
+      </div>
+
+      <div class="comparison-layout">
+        <aside class="comparison-filters">
+          <section class="comparison-primary-filter">
+            <label class="comparison-select-label">
+              <strong>Primary metric</strong>
+              <span>One metric; one box per run configuration.</span>
+              <select data-comparison-primary-metric>
+                <optgroup label="Event families">{family_metric_options}</optgroup>
+                <optgroup label="Individual events">{event_metric_options}</optgroup>
+              </select>
+            </label>
+            <div class="comparison-inline-selects">
+              <label>Run order
+                <select data-comparison-sort>
+                  <option value="name">Configured/name</option>
+                  <option value="median">Fastest median</option>
+                </select>
+              </label>
+              <label>Y scale
+                <select data-comparison-scale>
+                  <option value="linear">Linear</option>
+                  <option value="log">Logarithmic</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section>
+            <div class="comparison-filter-heading"><strong>Run configurations</strong><div><button type="button" data-comparison-groups="all">All</button><button type="button" data-comparison-groups="none">None</button></div></div>
+            <div class="comparison-check-list comparison-run-list">{''.join(group_controls)}</div>
+          </section>
+
+          <section>
+            <div class="comparison-filter-heading"><strong>Sample sources</strong></div>
+            <p class="comparison-filter-note"><code>server.events.jsonl</code> is intentionally off by default because it covers server lifetime/startup, not one BFS repetition.</p>
+            <div class="comparison-check-list">{''.join(source_controls)}</div>
+          </section>
+
+          <section>
+            <div class="comparison-filter-heading"><strong>Backend/event families</strong><div><button type="button" data-comparison-families="runtime">Runtime defaults</button><button type="button" data-comparison-families="all">All</button><button type="button" data-comparison-families="none">None</button></div></div>
+            <p class="comparison-filter-note">Controls the optional backend breakdown only. Startup/load families remain available but are not selected automatically.</p>
+            <div class="comparison-check-list">{''.join(family_controls)}</div>
+          </section>
+
+          <section>
+            <div class="comparison-filter-heading"><strong>Individual events</strong><div><button type="button" data-comparison-events="top">Top 6</button><button type="button" data-comparison-events="all">All</button><button type="button" data-comparison-events="none">None</button></div></div>
+            <input class="comparison-event-search" type="search" placeholder="Filter event names..." data-comparison-event-search />
+            <div class="comparison-check-list comparison-event-list">{''.join(event_controls)}</div>
+          </section>
+        </aside>
+
+        <div class="comparison-charts">
+          <div class="comparison-status" data-comparison-status></div>
+          <section class="comparison-chart-card" data-comparison-chart="boxplot">
+            <div class="comparison-chart-heading">
+              <div><h3><span data-comparison-primary-label>Selected metric</span> by run configuration</h3><p>Every box contains that metric from the selected repetitions/request logs of one configuration. Lower is faster.</p></div>
+            </div>
+            <div id="comparison_boxplot" class="comparison-plot comparison-primary-plot"></div>
+            <div class="comparison-summary-wrap">
+              <table class="comparison-summary-table">
+                <thead><tr><th>Run configuration</th><th>n</th><th>Median</th><th>IQR</th><th>Min</th><th>Max</th><th>vs best</th></tr></thead>
+                <tbody data-comparison-summary-body></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="comparison-chart-card" data-comparison-chart="families">
+            <div class="comparison-chart-heading"><div><h3>Backend execution time by run configuration</h3><p>Bars are medians across the same selected samples; whiskers show the interquartile range. Toggle Neo4j, ArangoDB, GPU/cuGraph, Redis and other families at left.</p></div></div>
+            <div id="comparison_families" class="comparison-plot"></div>
+          </section>
+          <section class="comparison-chart-card" data-comparison-chart="events" hidden>
+            <div class="comparison-chart-heading"><div><h3>Selected event time by run configuration</h3><p>Individual event medians + IQR, aggregated by configuration instead of plotting every raw JSONL filename.</p></div></div>
+            <div id="comparison_events" class="comparison-plot"></div>
+          </section>
+        </div>
+      </div>
+
+      <script type="application/json" id="comparison_metadata">{safe_json_for_html(metadata)}</script>
+    </div>
+    """
 
 # ============================================================
 # Dashboard generation
@@ -1104,14 +1153,8 @@ def build_run_overview_html(run: dict) -> str:
 
 VIEW_OPTIONS = [
     ("overview", "Overview"),
-    ("attributes", "Attributes"),
     ("timeline_thread", "Timeline: by thread"),
-    ("timeline_thread_event", "Timeline: by thread + event"),
-    ("timeline_depth", "Timeline: by BFS depth"),
-    ("summary_event", "Summary: event type"),
-    ("summary_depth", "Summary: BFS depth"),
-    ("size_duration", "Scatter: size vs duration"),
-    ("average_profile", "Average: timing profile"),
+    ("comparison", "Compare runs"),
 ]
 
 
@@ -1125,15 +1168,6 @@ def figure_to_div(fig: go.Figure, div_id: str) -> str:
             "displaylogo": False,
         },
     )
-
-
-def unavailable_view(message: str) -> str:
-    return f"""
-    <div class="empty-view">
-      <h2>Unavailable view</h2>
-      <p>{html.escape(message)}</p>
-    </div>
-    """
 
 
 def build_timeline_thread_view(run: dict) -> str:
@@ -1292,54 +1326,10 @@ def build_dashboard(
 
         view_html = {
             "overview": build_run_overview_html(run),
-            "attributes": build_attributes_html(run),
             "timeline_thread": build_timeline_thread_view(run),
-            "timeline_thread_event": figure_to_div(
-                build_timeline_figure(
-                    spans,
-                    title=f"Execution Timeline by Thread and Event Type — {run['label']}",
-                    group_cols=("thread_id", "name"),
-                    lane_fn=make_lane_by_thread_and_event,
-                ),
-                div_id=f"{run_id}_timeline_thread_event",
-            ),
-            "summary_event": figure_to_div(
-                build_event_summary_figure(spans),
-                div_id=f"{run_id}_summary_event",
-            ),
-            "average_profile": build_average_profile_html(run),
         }
 
-        depth_timeline_fig = None
-        if "depth" in spans.columns and spans["depth"].notna().any():
-            depth_timeline_fig = build_timeline_figure(
-                spans,
-                title=f"Execution Timeline by BFS Depth — {run['label']}",
-                group_cols=("depth",),
-                lane_fn=make_lane_by_depth,
-            )
-
-        view_html["timeline_depth"] = (
-            figure_to_div(depth_timeline_fig, div_id=f"{run_id}_timeline_depth")
-            if depth_timeline_fig is not None
-            else unavailable_view("This run has no depth information.")
-        )
-
-        depth_summary_fig = build_depth_summary_figure(spans)
-        view_html["summary_depth"] = (
-            figure_to_div(depth_summary_fig, div_id=f"{run_id}_summary_depth")
-            if depth_summary_fig is not None
-            else unavailable_view("This run has no depth information.")
-        )
-
-        size_fig = build_size_vs_duration_figure(spans)
-        view_html["size_duration"] = (
-            figure_to_div(size_fig, div_id=f"{run_id}_size_duration")
-            if size_fig is not None
-            else unavailable_view("This run has no row_size or frontier_size information.")
-        )
-
-        for view_id, _ in VIEW_OPTIONS:
+        for view_id in ("overview", "timeline_thread"):
             panels.append(f"""
             <section
               class="chart-panel"
@@ -1349,6 +1339,12 @@ def build_dashboard(
               {view_html[view_id]}
             </section>
             """)
+
+    panels.append(f"""
+    <section class="chart-panel comparison-panel" data-view="comparison">
+      {build_comparison_view(runs)}
+    </section>
+    """)
 
     panels_html = "\n".join(panels)
 
@@ -1427,8 +1423,7 @@ def build_dashboard(
         display: block;
       }
 
-      .overview-card,
-      .empty-view {
+      .overview-card {
         background: white;
         color: #111827;
         border-radius: 12px;
@@ -1436,8 +1431,7 @@ def build_dashboard(
       }
 
       .overview-card h2,
-      .overview-card h3,
-      .empty-view h2 {
+      .overview-card h3 {
         margin-top: 0;
       }
 
@@ -1464,8 +1458,7 @@ def build_dashboard(
         font-size: 13px;
       }
 
-      .average-index-link,
-      .average-report-link {
+      .average-index-link {
         display: inline-flex;
         align-items: center;
         min-height: 38px;
@@ -1477,14 +1470,7 @@ def build_dashboard(
         color: white;
       }
 
-      .average-profile {
-        background: #f8fafc;
-        color: #111827;
-        border-radius: 12px;
-        padding: 22px;
-      }
-
-      .average-profile-heading {
+.average-profile-heading {
         display: flex;
         justify-content: space-between;
         align-items: start;
@@ -1492,27 +1478,14 @@ def build_dashboard(
         flex-wrap: wrap;
       }
 
-      .average-profile-heading h2,
-      .average-profile-heading p {
-        margin-top: 0;
-      }
-
-      .average-cards {
+.average-cards {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
         gap: 12px;
         margin: 18px 0;
       }
 
-      .average-card {
-        padding: 15px;
-        border: 1px solid #dbe3ef;
-        border-radius: 12px;
-        background: white;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
-      }
-
-      .average-card span {
+.average-card span {
         display: block;
         color: #64748b;
         font-size: 12px;
@@ -1520,53 +1493,25 @@ def build_dashboard(
         letter-spacing: 0.06em;
       }
 
-      .average-card strong {
-        display: block;
-        margin-top: 7px;
-        font-size: 21px;
-      }
-
-      .average-chart {
+.average-chart {
         overflow-x: auto;
         background: white;
         border-radius: 12px;
         border: 1px solid #e2e8f0;
       }
 
-      .average-table-wrap {
-        max-height: 680px;
-        overflow: auto;
-        border: 1px solid #dbe3ef;
-        border-radius: 12px;
-        background: white;
-      }
-
-      .average-table {
+.average-table {
         width: 100%;
         border-collapse: collapse;
         font-size: 13px;
       }
 
-      .average-table th,
-      .average-table td {
-        padding: 9px 11px;
-        border-bottom: 1px solid #e5e7eb;
-        text-align: right;
-        white-space: nowrap;
-      }
-
-      .average-table th:first-child,
+.average-table th:first-child,
       .average-table td:first-child {
         text-align: left;
       }
 
-      .average-table thead {
-        position: sticky;
-        top: 0;
-        background: #eef2f7;
-      }
-
-      .timeline-filtered-view {
+.timeline-filtered-view {
         background: #f8fafc;
         color: #111827;
         border-radius: 12px;
@@ -1835,14 +1780,7 @@ def build_dashboard(
         background: white;
       }
 
-      .attributes-view {
-        background: #f8fafc;
-        color: #111827;
-        border-radius: 12px;
-        padding: 22px;
-      }
-
-      .attributes-heading {
+.attributes-heading {
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -1851,12 +1789,7 @@ def build_dashboard(
         margin-bottom: 16px;
       }
 
-      .attributes-heading h2,
-      .attributes-heading p {
-        margin-top: 0;
-      }
-
-      .attribute-filter {
+.attribute-filter {
         min-width: min(420px, 100%);
         padding: 10px 12px;
         border: 1px solid #cbd5e1;
@@ -1865,39 +1798,204 @@ def build_dashboard(
         color: #111827;
       }
 
-      .attribute-table-wrap {
-        max-height: 760px;
-        overflow: auto;
-        border: 1px solid #dbe3ef;
-        border-radius: 12px;
-        background: white;
-      }
-
-      .attribute-table {
+.attribute-table {
         width: 100%;
         border-collapse: collapse;
         font-size: 13px;
       }
 
-      .attribute-table th,
-      .attribute-table td {
-        padding: 9px 11px;
-        border-bottom: 1px solid #e5e7eb;
-        text-align: left;
-        vertical-align: top;
-      }
-
-      .attribute-table thead {
+.attribute-table thead {
         position: sticky;
         top: 0;
         background: #eef2f7;
       }
 
-      .attribute-table code {
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
+
+      .overview-event-heading {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin: 24px 0 10px;
       }
-    </style>
+
+      .overview-event-heading h3 { margin: 0; }
+      .overview-event-heading span { display: block; margin-top: 4px; color: #64748b; font-size: 12px; }
+      .overview-event-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      .overview-event-actions input {
+        min-width: 240px;
+        padding: 8px 10px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        color: #111827;
+        background: white;
+      }
+      .overview-event-actions button,
+      .comparison-filter-heading button {
+        padding: 7px 10px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        background: #f8fafc;
+        color: #0f172a;
+        cursor: pointer;
+        font-weight: 650;
+      }
+      .overview-event-table tr[hidden] { display: none; }
+
+      .comparison-panel { background: #f8fafc; color: #0f172a; padding: 0; overflow: visible; }
+      .comparison-workspace { min-width: 0; }
+      .comparison-intro {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 18px;
+        flex-wrap: wrap;
+        padding: 20px;
+        border-bottom: 1px solid #dbe3ef;
+        background: white;
+      }
+      .comparison-intro h2 { margin: 0 0 6px; }
+      .comparison-intro p { margin: 0; max-width: 900px; color: #64748b; font-size: 13px; line-height: 1.45; }
+      .comparison-intro code,
+      .comparison-filter-note code { padding: 1px 4px; border-radius: 4px; background: #eef2f7; color: #334155; }
+      .comparison-view-switches { display: flex; gap: 8px; flex-wrap: wrap; }
+      .comparison-view-switches label {
+        display: inline-flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 7px;
+        min-height: 36px;
+        padding: 7px 10px;
+        border: 1px solid #cbd5e1;
+        border-radius: 999px;
+        background: #f8fafc;
+        color: #0f172a;
+        cursor: pointer;
+        font-weight: 650;
+      }
+      .comparison-view-switches label:has(input:checked) { border-color: #60a5fa; background: #dbeafe; }
+      .comparison-view-switches input,
+      .comparison-check-row input { accent-color: #2563eb; }
+
+      .comparison-layout {
+        display: grid;
+        grid-template-columns: minmax(290px, 350px) minmax(0, 1fr);
+        gap: 16px;
+        padding: 16px;
+      }
+      .comparison-filters { display: grid; align-content: start; gap: 12px; min-width: 0; }
+      .comparison-filters section {
+        min-width: 0;
+        padding: 12px;
+        border: 1px solid #dbe3ef;
+        border-radius: 12px;
+        background: white;
+      }
+      .comparison-primary-filter { display: grid; gap: 12px; }
+      .comparison-select-label { display: grid; gap: 5px; color: #334155; }
+      .comparison-select-label span,
+      .comparison-filter-note { margin: 0; color: #64748b; font-size: 11px; line-height: 1.4; }
+      .comparison-select-label select,
+      .comparison-inline-selects select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px 9px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        background: white;
+        color: #0f172a;
+      }
+      .comparison-inline-selects { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .comparison-inline-selects label { display: grid; gap: 4px; color: #64748b; font-size: 11px; }
+      .comparison-filter-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 9px;
+      }
+      .comparison-filter-heading > div { display: flex; gap: 5px; flex-wrap: wrap; }
+      .comparison-filter-heading button { padding: 5px 7px; font-size: 11px; }
+      .comparison-check-list {
+        display: grid;
+        gap: 3px;
+        max-height: 245px;
+        overflow: auto;
+        padding-right: 3px;
+      }
+      .comparison-run-list { max-height: 300px; }
+      .comparison-event-list { max-height: 330px; }
+      .comparison-check-row {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 7px;
+        padding: 5px 6px;
+        border-radius: 7px;
+        color: #334155;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .comparison-check-row:hover { background: #f1f5f9; }
+      .comparison-check-row span { min-width: 0; overflow-wrap: anywhere; }
+      .comparison-check-row small { color: #94a3b8; font-size: 10px; white-space: nowrap; }
+      .comparison-event-search {
+        width: 100%;
+        box-sizing: border-box;
+        margin: 8px 0;
+        padding: 8px 9px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        background: white;
+        color: #111827;
+      }
+      .comparison-charts { display: grid; gap: 14px; min-width: 0; align-content: start; }
+      .comparison-status {
+        padding: 10px 12px;
+        border: 1px solid #bfdbfe;
+        border-radius: 10px;
+        background: #eff6ff;
+        color: #1e3a8a;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .comparison-chart-card {
+        min-width: 0;
+        border: 1px solid #dbe3ef;
+        border-radius: 12px;
+        background: white;
+        overflow: hidden;
+      }
+      .comparison-chart-card[hidden] { display: none; }
+      .comparison-chart-heading { padding: 16px 18px 0; }
+      .comparison-chart-heading h3 { margin: 0; }
+      .comparison-chart-heading p { margin: 4px 0 0; color: #64748b; font-size: 12px; line-height: 1.4; }
+      .comparison-plot { min-height: 430px; }
+      .comparison-primary-plot { min-height: 470px; }
+      .comparison-summary-wrap { overflow-x: auto; padding: 0 18px 18px; }
+      .comparison-summary-table { width: 100%; min-width: 690px; border-collapse: collapse; font-size: 12px; }
+      .comparison-summary-table th,
+      .comparison-summary-table td { padding: 8px 9px; border-bottom: 1px solid #e2e8f0; text-align: right; white-space: nowrap; }
+      .comparison-summary-table th:first-child,
+      .comparison-summary-table td:first-child { text-align: left; }
+      .comparison-summary-table thead th { color: #64748b; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+      .comparison-summary-table tr[data-best="true"] td:first-child { font-weight: 800; color: #166534; }
+      .comparison-summary-table .comparison-no-data { text-align: center; color: #94a3b8; padding: 18px; }
+
+      @media (max-width: 1050px) {
+        .comparison-layout { grid-template-columns: 1fr; }
+        .comparison-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .comparison-primary-filter { grid-column: 1 / -1; }
+        .comparison-check-list { max-height: 210px; }
+      }
+      @media (max-width: 680px) {
+        .comparison-filters { grid-template-columns: 1fr; }
+        .comparison-primary-filter { grid-column: auto; }
+        .comparison-inline-selects { grid-template-columns: 1fr; }
+      }
+
+</style>
     """
 
     js = """
@@ -2454,17 +2552,461 @@ def build_dashboard(
         applyTimelineFilters(panel);
       }
 
+      function updateOverviewEventRows(card) {
+        const expanded = card.dataset.overviewExpanded === "true";
+        const search = (card.querySelector("[data-overview-search]")?.value || "").trim().toLowerCase();
+        const rows = Array.from(card.querySelectorAll("[data-overview-event-row]"));
+        let visible = 0;
+        rows.forEach(row => {
+          const matchesSearch = !search || (row.dataset.eventName || "").toLowerCase().includes(search);
+          const matchesLimit = expanded || Number(row.dataset.rank) <= 10 || Boolean(search);
+          row.hidden = !(matchesSearch && matchesLimit);
+          if (!row.hidden) visible += 1;
+        });
+        const status = card.querySelector("[data-overview-status]");
+        if (status) {
+          status.textContent = search
+            ? `${visible} matching event types of ${rows.length}`
+            : expanded
+              ? `Showing all ${rows.length} event types`
+              : `Showing top ${Math.min(10, rows.length)} of ${rows.length}`;
+        }
+        const toggle = card.querySelector("[data-overview-toggle]");
+        if (toggle) toggle.textContent = expanded ? "Show top 10" : `Show all ${rows.length}`;
+      }
+
+      function initializeOverviewCard(card) {
+        if (card.dataset.overviewInitialized === "true") return;
+        card.dataset.overviewInitialized = "true";
+        card.querySelector("[data-overview-search]")?.addEventListener("input", () => updateOverviewEventRows(card));
+        card.querySelector("[data-overview-toggle]")?.addEventListener("click", () => {
+          card.dataset.overviewExpanded = card.dataset.overviewExpanded === "true" ? "false" : "true";
+          updateOverviewEventRows(card);
+        });
+        updateOverviewEventRows(card);
+      }
+
+      const comparisonState = { initialized: false, metadata: null };
+
+      function comparisonFamilyLabel(name) {
+        const labels = {
+          full_bfs: "Total BFS",
+          bfs: "BFS",
+          neo4j: "Neo4j",
+          arango: "ArangoDB",
+          cugraph: "GPU / cuGraph",
+          gpu: "GPU",
+          redis: "Redis",
+          mmap: "MMAP",
+          postgresql: "PostgreSQL",
+          backend: "Backend scheduler",
+        };
+        return labels[name] || name;
+      }
+
+      function checkedComparisonValues(selector) {
+        return new Set(
+          Array.from(document.querySelectorAll(selector))
+            .filter(input => input.checked)
+            .map(input => input.value)
+        );
+      }
+
+      function comparisonMetricDefinition(key) {
+        if (!comparisonState.metadata) return null;
+        return comparisonState.metadata.metrics.find(metric => metric.key === key) || null;
+      }
+
+      function comparisonMetricValue(run, key) {
+        const separator = key.indexOf(":");
+        if (separator < 0) return null;
+        const kind = key.slice(0, separator);
+        const name = key.slice(separator + 1);
+        const container = kind === "family" ? run.groups : run.events;
+        if (!container || !Object.prototype.hasOwnProperty.call(container, name)) return null;
+        const value = Number(container[name]);
+        return Number.isFinite(value) ? value : null;
+      }
+
+      function comparisonQuantile(sortedValues, probability) {
+        if (!sortedValues.length) return null;
+        if (sortedValues.length === 1) return sortedValues[0];
+        const position = (sortedValues.length - 1) * probability;
+        const lower = Math.floor(position);
+        const upper = Math.ceil(position);
+        if (lower === upper) return sortedValues[lower];
+        const fraction = position - lower;
+        return sortedValues[lower] + (sortedValues[upper] - sortedValues[lower]) * fraction;
+      }
+
+      function comparisonStats(values) {
+        const sorted = values.filter(Number.isFinite).slice().sort((a, b) => a - b);
+        if (!sorted.length) return null;
+        return {
+          n: sorted.length,
+          min: sorted[0],
+          q1: comparisonQuantile(sorted, 0.25),
+          median: comparisonQuantile(sorted, 0.5),
+          q3: comparisonQuantile(sorted, 0.75),
+          max: sorted[sorted.length - 1],
+        };
+      }
+
+      function comparisonFormatMs(value) {
+        if (!Number.isFinite(value)) return "—";
+        if (Math.abs(value) >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 1 }) + " ms";
+        return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 3 }) + " ms";
+      }
+
+      function comparisonSelectedSamples() {
+        const metadata = comparisonState.metadata;
+        const groups = checkedComparisonValues("[data-comparison-group]");
+        const sources = checkedComparisonValues("[data-comparison-source]");
+        return metadata.runs.filter(run => groups.has(run.group) && sources.has(run.sourceKind));
+      }
+
+      function comparisonStatsForGroup(samples, group, metricKey) {
+        return comparisonStats(
+          samples
+            .filter(run => run.group === group)
+            .map(run => comparisonMetricValue(run, metricKey))
+            .filter(Number.isFinite)
+        );
+      }
+
+      function comparisonOrderedGroups(samples, metricKey) {
+        const selected = checkedComparisonValues("[data-comparison-group]");
+        const definitions = comparisonState.metadata.runGroups.filter(group => selected.has(group.name));
+        const sortMode = document.querySelector("[data-comparison-sort]")?.value || "name";
+        if (sortMode !== "median") return definitions.map(group => group.name);
+        return definitions
+          .map((group, index) => ({
+            name: group.name,
+            index,
+            stats: comparisonStatsForGroup(samples, group.name, metricKey),
+          }))
+          .sort((left, right) => {
+            const a = left.stats?.median;
+            const b = right.stats?.median;
+            if (!Number.isFinite(a) && !Number.isFinite(b)) return left.index - right.index;
+            if (!Number.isFinite(a)) return 1;
+            if (!Number.isFinite(b)) return -1;
+            return a - b || left.index - right.index;
+          })
+          .map(group => group.name);
+      }
+
+      function comparisonPlotLayout(yTitle, groupCount, traceCount = 0) {
+        const logarithmic = document.querySelector("[data-comparison-scale]")?.value === "log";
+        const manyTraces = traceCount > 4;
+        return {
+          paper_bgcolor: "white",
+          plot_bgcolor: "white",
+          font: { color: "#111827", size: 12 },
+          margin: {
+            l: 78,
+            r: manyTraces ? 185 : 28,
+            t: manyTraces ? 30 : (traceCount ? 78 : 28),
+            b: groupCount > 8 ? 105 : 72,
+          },
+          xaxis: {
+            title: "Run configuration",
+            tickangle: groupCount > 8 ? -24 : 0,
+            automargin: true,
+            tickfont: { size: 11 },
+            categoryorder: "array",
+          },
+          yaxis: {
+            title: yTitle,
+            type: logarithmic ? "log" : "linear",
+            rangemode: logarithmic ? undefined : "tozero",
+            automargin: true,
+            tickformat: "~s",
+            gridcolor: "#e5e7eb",
+            zerolinecolor: "#cbd5e1",
+          },
+          legend: manyTraces
+            ? { orientation: "v", x: 1.01, xanchor: "left", y: 1, yanchor: "top", font: { size: 11 } }
+            : { orientation: "h", x: 0, y: 1.13, xanchor: "left", yanchor: "bottom", font: { size: 11 } },
+          hovermode: "closest",
+          bargap: 0.16,
+          bargroupgap: 0.06,
+        };
+      }
+
+      function comparisonEmptyPlot(id, message) {
+        const graph = document.getElementById(id);
+        if (!graph) return;
+        Plotly.react(graph, [], {
+          paper_bgcolor: "white",
+          plot_bgcolor: "white",
+          xaxis: { visible: false },
+          yaxis: { visible: false },
+          annotations: [{
+            text: message,
+            showarrow: false,
+            font: { color: "#64748b", size: 14 },
+          }],
+          margin: { l: 30, r: 30, t: 30, b: 30 },
+        }, { responsive: true, displaylogo: false });
+      }
+
+      function renderComparisonSummary(groupOrder, samples, metricKey) {
+        const body = document.querySelector("[data-comparison-summary-body]");
+        if (!body) return;
+        body.replaceChildren();
+        const rows = groupOrder
+          .map(group => ({ group, stats: comparisonStatsForGroup(samples, group, metricKey) }))
+          .filter(row => row.stats);
+        if (!rows.length) {
+          const row = document.createElement("tr");
+          const cell = document.createElement("td");
+          cell.colSpan = 7;
+          cell.className = "comparison-no-data";
+          cell.textContent = "No samples contain the selected metric.";
+          row.appendChild(cell);
+          body.appendChild(row);
+          return;
+        }
+        const best = Math.min(...rows.map(row => row.stats.median));
+        rows.forEach(({ group, stats }) => {
+          const row = document.createElement("tr");
+          row.dataset.best = stats.median === best ? "true" : "false";
+          const delta = best > 0 ? ((stats.median / best) - 1) * 100 : 0;
+          const cells = [
+            group,
+            String(stats.n),
+            comparisonFormatMs(stats.median),
+            comparisonFormatMs(stats.q3 - stats.q1),
+            comparisonFormatMs(stats.min),
+            comparisonFormatMs(stats.max),
+            stats.median === best ? "best" : `+${delta.toFixed(1)}%`,
+          ];
+          cells.forEach(value => {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.appendChild(cell);
+          });
+          body.appendChild(row);
+        });
+      }
+
+      function comparisonAggregateTrace(name, label, groupOrder, samples, kind) {
+        const medians = [];
+        const plus = [];
+        const minus = [];
+        const customdata = [];
+        groupOrder.forEach(group => {
+          const values = samples
+            .filter(run => run.group === group)
+            .map(run => {
+              const container = kind === "family" ? run.groups : run.events;
+              if (!container || !Object.prototype.hasOwnProperty.call(container, name)) return null;
+              const value = Number(container[name]);
+              return Number.isFinite(value) ? value : null;
+            })
+            .filter(Number.isFinite);
+          const stats = comparisonStats(values);
+          medians.push(stats ? stats.median : null);
+          plus.push(stats ? stats.q3 - stats.median : 0);
+          minus.push(stats ? stats.median - stats.q1 : 0);
+          customdata.push(stats ? [stats.n, stats.q1, stats.q3] : [0, null, null]);
+        });
+        return {
+          type: "bar",
+          name: label,
+          x: groupOrder,
+          y: medians,
+          customdata,
+          error_y: {
+            type: "data",
+            symmetric: false,
+            array: plus,
+            arrayminus: minus,
+            visible: true,
+            thickness: 1.2,
+            width: 3,
+          },
+          hovertemplate:
+            "<b>%{x}</b><br>" + label +
+            ": %{y:.3f} ms<br>IQR: %{customdata[1]:.3f}–%{customdata[2]:.3f} ms" +
+            "<br>n=%{customdata[0]}<extra></extra>",
+        };
+      }
+
+      function renderComparison() {
+        if (!comparisonState.metadata) return;
+        const metadata = comparisonState.metadata;
+        const enabledCharts = checkedComparisonValues("[data-comparison-chart-toggle]");
+        const selectedFamilies = checkedComparisonValues("[data-comparison-family]");
+        const selectedEvents = checkedComparisonValues("[data-comparison-event]");
+        const metricSelect = document.querySelector("[data-comparison-primary-metric]");
+        const metricKey = metricSelect?.value || metadata.defaultMetric;
+        const metric = comparisonMetricDefinition(metricKey);
+        const samples = comparisonSelectedSamples();
+        const groupOrder = comparisonOrderedGroups(samples, metricKey);
+
+        document.querySelectorAll("[data-comparison-chart]").forEach(card => {
+          card.hidden = !enabledCharts.has(card.dataset.comparisonChart);
+        });
+        document.querySelectorAll("[data-comparison-primary-label]").forEach(node => {
+          node.textContent = metric?.label || "Selected metric";
+        });
+
+        const status = document.querySelector("[data-comparison-status]");
+        const serverEnabled = checkedComparisonValues("[data-comparison-source]").has("server");
+        if (status) {
+          status.textContent = `${groupOrder.length} run configurations · ${samples.length} samples · ${metric?.label || "no metric"}` +
+            (serverEnabled ? " · server.events.jsonl included" : " · server.events.jsonl excluded");
+        }
+
+        if (!groupOrder.length || !samples.length || !metricKey) {
+          comparisonEmptyPlot("comparison_boxplot", "Select at least one run configuration and sample source.");
+          comparisonEmptyPlot("comparison_families", "Select at least one run configuration and sample source.");
+          comparisonEmptyPlot("comparison_events", "Select at least one run configuration and sample source.");
+          renderComparisonSummary([], [], metricKey);
+          return;
+        }
+
+        const boxTraces = groupOrder.map(group => {
+          const groupSamples = samples.filter(run => run.group === group);
+          const values = [];
+          const labels = [];
+          groupSamples.forEach(run => {
+            const value = comparisonMetricValue(run, metricKey);
+            if (Number.isFinite(value)) {
+              values.push(value);
+              labels.push(run.label);
+            }
+          });
+          return {
+            type: "box",
+            name: group,
+            y: values,
+            text: labels,
+            quartilemethod: "linear",
+            boxpoints: values.length <= 40 ? "all" : "outliers",
+            jitter: 0.24,
+            pointpos: 0,
+            marker: { size: 5, opacity: 0.55 },
+            line: { width: 1.5 },
+            hovertemplate:
+              `<b>${group}</b><br>${metric?.label || "metric"}: %{y:.3f} ms` +
+              "<br>%{text}<extra></extra>",
+          };
+        }).filter(trace => trace.y.length);
+
+        if (!boxTraces.length) {
+          comparisonEmptyPlot("comparison_boxplot", "The selected samples do not contain this metric.");
+        } else {
+          const layout = comparisonPlotLayout("Execution time [ms]", groupOrder.length, 0);
+          layout.showlegend = false;
+          layout.xaxis.categoryarray = groupOrder;
+          Plotly.react("comparison_boxplot", boxTraces, layout, { responsive: true, displaylogo: false });
+        }
+        renderComparisonSummary(groupOrder, samples, metricKey);
+
+        const familyOrder = metadata.families
+          .map(family => family.name)
+          .filter(name => selectedFamilies.has(name));
+        if (!familyOrder.length) {
+          comparisonEmptyPlot("comparison_families", "Select backend/event families at left.");
+        } else {
+          const familyTraces = familyOrder.map(family =>
+            comparisonAggregateTrace(family, comparisonFamilyLabel(family), groupOrder, samples, "family")
+          );
+          const layout = comparisonPlotLayout("Median active wall time [ms]", groupOrder.length, familyTraces.length);
+          layout.barmode = "group";
+          layout.xaxis.categoryarray = groupOrder;
+          Plotly.react("comparison_families", familyTraces, layout, { responsive: true, displaylogo: false });
+        }
+
+        const eventOrder = metadata.events
+          .map(event => event.name)
+          .filter(name => selectedEvents.has(name));
+        if (!eventOrder.length) {
+          comparisonEmptyPlot("comparison_events", "Select individual events at left.");
+        } else {
+          const eventTraces = eventOrder.map(eventName =>
+            comparisonAggregateTrace(eventName, eventName, groupOrder, samples, "event")
+          );
+          const layout = comparisonPlotLayout("Median active wall time [ms]", groupOrder.length, eventTraces.length);
+          layout.barmode = "group";
+          layout.xaxis.categoryarray = groupOrder;
+          Plotly.react("comparison_events", eventTraces, layout, { responsive: true, displaylogo: false });
+        }
+      }
+
+      function setComparisonChecks(selector, predicate) {
+        document.querySelectorAll(selector).forEach((input, index) => {
+          input.checked = Boolean(predicate(input, index));
+        });
+        renderComparison();
+      }
+
+      function initializeComparison() {
+        if (comparisonState.initialized) return;
+        const metadataElement = document.getElementById("comparison_metadata");
+        if (!metadataElement) return;
+        comparisonState.initialized = true;
+        comparisonState.metadata = JSON.parse(metadataElement.textContent);
+
+        document.querySelectorAll(
+          "[data-comparison-group], [data-comparison-source], [data-comparison-family], " +
+          "[data-comparison-event], [data-comparison-chart-toggle], [data-comparison-primary-metric], " +
+          "[data-comparison-sort], [data-comparison-scale]"
+        ).forEach(input => input.addEventListener("change", renderComparison));
+
+        document.querySelectorAll("[data-comparison-groups]").forEach(button => {
+          button.addEventListener("click", () => {
+            setComparisonChecks("[data-comparison-group]", () => button.dataset.comparisonGroups === "all");
+          });
+        });
+        document.querySelectorAll("[data-comparison-families]").forEach(button => {
+          button.addEventListener("click", () => {
+            const action = button.dataset.comparisonFamilies;
+            const runtime = new Set(["neo4j", "arango", "cugraph", "gpu", "redis", "mmap", "postgresql", "backend"]);
+            setComparisonChecks(
+              "[data-comparison-family]",
+              input => action === "all" || (action === "runtime" && runtime.has(input.value))
+            );
+          });
+        });
+        document.querySelectorAll("[data-comparison-events]").forEach(button => {
+          button.addEventListener("click", () => {
+            const action = button.dataset.comparisonEvents;
+            setComparisonChecks(
+              "[data-comparison-event]",
+              (_input, index) => action === "all" || (action === "top" && index < 6)
+            );
+          });
+        });
+        document.querySelector("[data-comparison-event-search]")?.addEventListener("input", event => {
+          const query = event.target.value.trim().toLowerCase();
+          document.querySelectorAll("[data-comparison-event-row]").forEach(row => {
+            row.hidden = Boolean(query) && !(row.dataset.eventSearch || "").includes(query);
+          });
+        });
+        renderComparison();
+      }
+
       function updateDashboard() {
-        const run = document.getElementById("runSelect").value;
+        const runSelect = document.getElementById("runSelect");
+        const run = runSelect.value;
         const view = document.getElementById("viewSelect").value;
+        const comparing = view === "comparison";
 
         document.querySelectorAll(".chart-panel").forEach(panel => {
-          const active =
-            panel.dataset.run === run &&
-            panel.dataset.view === view;
-
+          const active = comparing
+            ? panel.dataset.view === "comparison"
+            : panel.dataset.run === run && panel.dataset.view === view;
           panel.classList.toggle("active", active);
         });
+
+        const runControl = document.getElementById("runControl");
+        if (runControl) runControl.hidden = comparing;
+        runSelect.disabled = comparing;
+        if (comparing) renderComparison();
 
         setTimeout(() => {
           window.dispatchEvent(new Event("resize"));
@@ -2473,6 +3015,8 @@ def build_dashboard(
 
       document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll("[data-timeline-filter]").forEach(initializeTimelineFilter);
+        document.querySelectorAll("[data-overview-card]").forEach(initializeOverviewCard);
+        initializeComparison();
         document.getElementById("runSelect").addEventListener("change", updateDashboard);
         document.getElementById("viewSelect").addEventListener("change", updateDashboard);
         updateDashboard();
@@ -2495,7 +3039,7 @@ def build_dashboard(
         <h1>C++ Event Log Dashboard</h1>
 
         <div class="controls">
-          <label>
+          <label id="runControl">
             Run
             <select id="runSelect">
               {run_options}
@@ -2535,6 +3079,20 @@ def build_dashboard(
 # ============================================================
 
 def main():
+    # Extended research/Prometheus modes live in a small orchestration module so
+    # the already-large reconstruction/dashboard implementation remains focused.
+    extended_flags = {
+        "--metrics-config",
+        "--refresh-metrics",
+        "--split-by-run-type",
+        "--compare-only",
+        "--with-compare",
+        "--include-server-in-compare",
+    }
+    if any(argument.split("=", 1)[0] in extended_flags for argument in sys.argv[1:]):
+        from tools.measurement.log_reconstruction_plus import main as extended_main
+        return extended_main(sys.argv[1:])
+
     parser = argparse.ArgumentParser(
         description="Generate a dashboard for C++ JSONL event logs."
     )
@@ -2616,12 +3174,10 @@ def main():
             if is_average:
                 run_id = "average__" + make_run_id(log_file.parent, args.out_dir)
                 label = label_override or f"Average — {log_file.parent.name}"
-                summary, average_events, report = load_average_artifacts(log_file)
             else:
                 run_id = make_run_id(log_file, root)
                 rel = log_file.relative_to(root) if log_file.is_relative_to(root) else log_file
                 label = str(rel)
-                summary, average_events, report = {}, pd.DataFrame(), None
 
             safe_id = make_safe_html_id(run_id)
             rel = log_file.relative_to(root) if log_file.is_relative_to(root) else log_file
@@ -2631,12 +3187,6 @@ def main():
                 columns=["start_event", "end_event", "attributes"],
                 errors="ignore",
             ).to_csv(spans_csv, index=False)
-            report_href = (
-                report.relative_to(args.out_dir).as_posix()
-                if isinstance(report, Path) and report.is_file()
-                else None
-            )
-
             run = {
                 "id": run_id,
                 "safe_id": safe_id,
@@ -2647,10 +3197,6 @@ def main():
                 "spans": spans,
                 "spans_csv": spans_csv,
                 "is_average": is_average,
-                "average_summary": summary,
-                "average_events": average_events,
-                "average_report": report,
-                "average_report_href": report_href,
             }
             (average_runs if is_average else raw_runs).append(run)
             kind = "average" if is_average else "run"

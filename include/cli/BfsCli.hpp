@@ -16,7 +16,7 @@
 
 #include <iosfwd>
 
-namespace cpgdb::cli {
+namespace polygraph::cli {
 
 void add_runtime_arguments(CommandLine& program);
 void add_bfs_arguments(CommandLine& program);
@@ -28,4 +28,4 @@ void add_bfs_arguments(CommandLine& program);
 [[nodiscard]] BfsOptions parse_bfs_options(const CommandLine& args);
 void write_bfs_distances_csv(std::ostream& output, const BfsResult& result);
 
-} // namespace cpgdb::cli
+} // namespace polygraph::cli

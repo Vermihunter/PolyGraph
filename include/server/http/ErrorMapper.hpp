@@ -12,7 +12,7 @@
 #include <string>
 #include <string_view>
 
-namespace cpgdb::http {
+namespace polygraph::http {
 
 enum class ErrorCode { BadRequest, ValidationError, NotFound, InternalError };
 
@@ -38,4 +38,4 @@ class BadRequest final : public HttpError {
 [[nodiscard]] drogon::HttpResponsePtr mapExceptionToResponse(const std::exception& exception);
 [[nodiscard]] drogon::HttpResponsePtr mapUnknownExceptionToResponse();
 
-} // namespace cpgdb::http
+} // namespace polygraph::http

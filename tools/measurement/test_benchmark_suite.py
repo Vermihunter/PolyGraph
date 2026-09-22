@@ -5,7 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.measurement.benchmark_suite import _resume_config_mismatches, load_suite_config
+from tools.measurement.benchmark_suite import (
+    _polygraph_event_log_root,
+    _has_polygraph_event_logs,
+    _resume_config_mismatches,
+    load_suite_config,
+)
 from tools.graphio.model import NodeRecord, RelationshipRecord
 from tools.measurement.graph_bench.config import BenchmarkConfig, BfsConfig, PathConfig
 from tools.measurement.graph_bench.orchestrator import BfsBenchmarkOrchestrator
@@ -34,8 +39,16 @@ class BenchmarkSuiteConfigTests(unittest.TestCase):
                             "backendRetryDelayMs": 75,
                         },
                         "datasets": [
-                            {"name": "schema-based", "domain": "schema/domain.json"},
-                            {"name": "hash-based", "domain": "hash/domain.json"},
+                            {
+                                "name": "schema-based",
+                                "domain": "schema/domain.json",
+                                "composeInstance": "sf0_1/schema-based",
+                            },
+                            {
+                                "name": "hash-based",
+                                "domain": "hash/domain.json",
+                                "composeInstance": "sf0_1/hash-based",
+                            },
                         ],
                         "scenarios": {
                             "distributed": True,
@@ -51,6 +64,10 @@ class BenchmarkSuiteConfigTests(unittest.TestCase):
         self.assertEqual(config.repetitions, 2)
         self.assertEqual(config.start_uuid_count, 5)
         self.assertEqual([dataset.name for dataset in config.datasets], ["schema-based", "hash-based"])
+        self.assertEqual(
+            [dataset.compose_instance for dataset in config.datasets],
+            ["sf0_1/schema-based", "sf0_1/hash-based"],
+        )
         self.assertEqual(config.scenarios.implementation_full, ("Neo4J", "ArangoDB", "GPU"))
         self.assertEqual(config.scenarios.native, ("Neo4J", "ArangoDB"))
         self.assertTrue(config.scenarios.load_distributed)
@@ -59,6 +76,27 @@ class BenchmarkSuiteConfigTests(unittest.TestCase):
         self.assertEqual(config.bfs.arango_max_concurrent_requests, 5)
         self.assertEqual(config.bfs.backend_request_retries, 4)
         self.assertEqual(config.bfs.backend_retry_delay_ms, 75)
+
+    def test_compose_instance_must_be_defined_for_every_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "suite.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "datasets": [
+                            {
+                                "name": "schema",
+                                "domain": "schema/domain.json",
+                                "composeInstance": "sf0_1/schema-based",
+                            },
+                            {"name": "hash", "domain": "hash/domain.json"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "every dataset"):
+                load_suite_config(path)
 
     def test_neighbor_batch_size_must_be_positive(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -139,6 +177,42 @@ class BenchmarkSuiteConfigTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "maxConcurrentArangoRequests"):
                 load_suite_config(path)
+
+    def test_event_log_discovery_ignores_command_and_native_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            dataset_output = Path(temporary)
+            commands = dataset_output / "logs" / "commands.jsonl"
+            commands.parent.mkdir(parents=True)
+            commands.write_text('{"command": ["python3", "bfs.py"]}\n', encoding="utf-8")
+
+            native_log = dataset_output / "logs" / "native" / "neo4j.jsonl"
+            native_log.parent.mkdir(parents=True)
+            native_log.write_text('{"seconds": 1.0}\n', encoding="utf-8")
+
+            event_root = _polygraph_event_log_root(dataset_output)
+            self.assertEqual(event_root, dataset_output / "logs" / "events")
+            self.assertFalse(_has_polygraph_event_logs(event_root))
+
+    def test_event_log_discovery_requires_non_empty_polygraph_event_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            event_root = _polygraph_event_log_root(Path(temporary))
+            event_file = (
+                event_root
+                / "run"
+                / "distributed"
+                / "graph_db_distributed"
+                / "42"
+                / "rep001.events.jsonl"
+            )
+            event_file.parent.mkdir(parents=True)
+            event_file.touch()
+            self.assertFalse(_has_polygraph_event_logs(event_root))
+
+            event_file.write_text(
+                '{"event":"bfs","seq":1,"steady_ns":1,"thread_id":1}\n',
+                encoding="utf-8",
+            )
+            self.assertTrue(_has_polygraph_event_logs(event_root))
 
     def test_existing_distributed_data_can_skip_loader(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

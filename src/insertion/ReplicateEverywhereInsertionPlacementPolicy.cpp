@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace cpgdb::insertion {
+namespace polygraph::insertion {
 
     ReplicateEverywhereInsertionPlacementPolicy::ReplicateEverywhereInsertionPlacementPolicy(
             std::shared_ptr<const IHomeBackendSelector> home_selector, std::vector<BackendId> replica_backends) :
@@ -54,4 +54,4 @@ namespace cpgdb::insertion {
         return result;
     }
 
-} // namespace cpgdb::insertion
+} // namespace polygraph::insertion

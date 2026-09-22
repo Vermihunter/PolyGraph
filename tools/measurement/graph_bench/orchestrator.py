@@ -364,6 +364,7 @@ class BfsBenchmarkOrchestrator:
         backend_config: Path,
         start_uuid: str,
         system: str,
+        output_csv: Path | None = None,
     ) -> list[str | Path]:
         event_log_file = (
             self.logs_dir
@@ -375,17 +376,30 @@ class BfsBenchmarkOrchestrator:
             / f"rep{repetition:03d}.events.jsonl"
         )
         event_log_file.parent.mkdir(parents=True, exist_ok=True)
+        application_log_file = (
+            self.logs_dir
+            / "application"
+            / safe_file_part(run_id)
+            / safe_file_part(scenario)
+            / safe_file_part(system)
+            / safe_file_part(start_uuid)
+            / f"rep{repetition:03d}.log"
+        )
+        application_log_file.parent.mkdir(parents=True, exist_ok=True)
 
         cmd: list[str | Path] = [
             self.config.paths.graph_db_binary,
             "--logical-graph-schema", schema,
             "--data", data,
-            "--log-file", event_log_file,
+            "--event-file", event_log_file,
+            "--log-file", application_log_file,
             "--backend-config", backend_config,
             "--start-uuid", start_uuid,
             "--max-depth", str(self.config.bfs.max_depth),
             "--direction", self.config.bfs.direction,
         ]
+        if output_csv is not None:
+            cmd += ["--output-file", output_csv]
         if self.config.bfs.neighbor_batch_size is not None:
             cmd += ["--neighbor-batch-size", str(self.config.bfs.neighbor_batch_size)]
         cmd += [
@@ -493,8 +507,16 @@ class BfsBenchmarkOrchestrator:
                         backend_config=backend_config,
                         start_uuid=start_uuid,
                         system=system,
+                        output_csv=out,
                     ),
-                    stdout_path=out,
+                    stdout_path=(
+                        self.logs_dir
+                        / "stdout"
+                        / safe_file_part(scenario)
+                        / safe_file_part(system)
+                        / safe_file_part(start_uuid)
+                        / f"rep{repetition:03d}.log"
+                    ),
                     stderr_path=(
                         self.logs_dir
                         / "stderr"
@@ -503,7 +525,7 @@ class BfsBenchmarkOrchestrator:
                         / safe_file_part(start_uuid)
                         / f"rep{repetition:03d}.log"
                     ),
-                    env={"CPGDB_PROFILE": "1", "CPGDB_PROFILE_LAYERS": "1"},
+                    env={"POLYGRAPH_PROFILE": "1", "POLYGRAPH_PROFILE_LAYERS": "1"},
                 )
                 if not self.runner.dry_run:
                     record.vertex_count = len(read_bfs_csv(out))
@@ -552,7 +574,7 @@ class BfsBenchmarkOrchestrator:
             loaded = False
             loaded_graph = LoadedGraph(data_path, {})
             for rep in range(1, repetitions + 1):
-                if backend in {"Neo4J", "ArangoDB"} and (reload_each_repetition or not loaded):
+                if backend in {"Neo4J", "ArangoDB", "PostgreSQL"} and (reload_each_repetition or not loaded):
                     loaded_graph = self._run_loader(
                         data_path, backend_config, "implementation_full", f"graph_db_{backend}", rep
                     )
@@ -593,10 +615,14 @@ class BfsBenchmarkOrchestrator:
         )
         loaded = not load_before_run
         loaded_graph = LoadedGraph(self.config.paths.data, {})
+        # A domain manifest may point ``data`` at a previously resolved graph.
+        # Resetting Neo4j from that file is invalid because the old-to-localId
+        # sidecar must be regenerated from the unresolved source graph.
+        loader_input = self.config.paths.source_data or self.config.paths.data
         for rep in range(1, repetitions + 1):
             if load_before_run and (reload_each_repetition or not loaded):
                 loaded_graph = self._run_loader(
-                    self.config.paths.data, backend_config, "distributed", "graph_db_distributed", rep
+                    loader_input, backend_config, "distributed", "graph_db_distributed", rep
                 )
                 loaded = True
             for original_start_id in start_uuids:

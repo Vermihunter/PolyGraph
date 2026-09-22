@@ -7,19 +7,19 @@
 // Created by akos on 29. 3. 2026.
 //
 
-#ifndef CPGDB_PROPERTY_HPP
-#define CPGDB_PROPERTY_HPP
+#ifndef POLYGRAPH_PROPERTY_HPP
+#define POLYGRAPH_PROPERTY_HPP
 
 #include "PropertyType.hpp"
 
 #include <string>
 
-namespace cpgdb::domain {
+namespace polygraph::domain {
 struct Property {
     std::string name;
     PropertyType type;
     bool indexed = false;
 };
-} // namespace cpgdb::domain
+} // namespace polygraph::domain
 
-#endif // CPGDB_PROPERTY_HPP
+#endif // POLYGRAPH_PROPERTY_HPP

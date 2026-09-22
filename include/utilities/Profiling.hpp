@@ -3,8 +3,8 @@
  * @brief Declarations for profiling in the utility module.
  */
 
-#ifndef CPGDB_UTILITIES_PROFILING_HPP
-#define CPGDB_UTILITIES_PROFILING_HPP
+#ifndef POLYGRAPH_UTILITIES_PROFILING_HPP
+#define POLYGRAPH_UTILITIES_PROFILING_HPP
 
 #include <chrono>
 #include <cstdint>
@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace cpgdb::prof {
+namespace polygraph::prof {
 
 class Profiler {
   public:
@@ -48,27 +48,27 @@ class Scope {
     bool active_ = true;
 };
 
-} // namespace cpgdb::prof
+} // namespace polygraph::prof
 
 #if defined(__GNUC__) || defined(__clang__)
-#define CPGDB_FUNCTION_NAME __PRETTY_FUNCTION__
+#define POLYGRAPH_FUNCTION_NAME __PRETTY_FUNCTION__
 #elif defined(_MSC_VER)
-#define CPGDB_FUNCTION_NAME __FUNCSIG__
+#define POLYGRAPH_FUNCTION_NAME __FUNCSIG__
 #else
-#define CPGDB_FUNCTION_NAME __func__
+#define POLYGRAPH_FUNCTION_NAME __func__
 #endif
 
-#ifdef CPGDB_ENABLE_PROFILING
-#define CPGDB_PROFILE_SCOPE(name) ::cpgdb::prof::Scope cpgdb_prof_scope_##__LINE__(name)
-#define CPGDB_PROFILE_FUNCTION()                                                                   \
-    ::cpgdb::prof::Scope cpgdb_prof_scope_##__LINE__(CPGDB_FUNCTION_NAME)
+#ifdef POLYGRAPH_ENABLE_PROFILING
+#define POLYGRAPH_PROFILE_SCOPE(name) ::polygraph::prof::Scope polygraph_prof_scope_##__LINE__(name)
+#define POLYGRAPH_PROFILE_FUNCTION()                                                                   \
+    ::polygraph::prof::Scope polygraph_prof_scope_##__LINE__(POLYGRAPH_FUNCTION_NAME)
 #else
-#define CPGDB_PROFILE_SCOPE(name)                                                                  \
+#define POLYGRAPH_PROFILE_SCOPE(name)                                                                  \
     do {                                                                                           \
     } while (false)
-#define CPGDB_PROFILE_FUNCTION()                                                                   \
+#define POLYGRAPH_PROFILE_FUNCTION()                                                                   \
     do {                                                                                           \
     } while (false)
 #endif
 
-#endif // CPGDB_UTILITIES_PROFILING_HPP
+#endif // POLYGRAPH_UTILITIES_PROFILING_HPP

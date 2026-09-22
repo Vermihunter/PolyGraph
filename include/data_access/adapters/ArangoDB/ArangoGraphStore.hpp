@@ -3,8 +3,8 @@
  * @brief Declarations for arango graph store in the graph-store access module.
  */
 
-#ifndef CPGDB_DATA_ACCESS_ARANGO_GRAPH_STORE_HPP
-#define CPGDB_DATA_ACCESS_ARANGO_GRAPH_STORE_HPP
+#ifndef POLYGRAPH_DATA_ACCESS_ARANGO_GRAPH_STORE_HPP
+#define POLYGRAPH_DATA_ACCESS_ARANGO_GRAPH_STORE_HPP
 
 #include "data_access/IGraphStore.hpp"
 #include "query/QueryVisitor.hpp"
@@ -13,7 +13,7 @@
 #include <span>
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 class ArangoGraphStore final : public IGraphStore {
   public:
@@ -30,6 +30,9 @@ class ArangoGraphStore final : public IGraphStore {
         const ExpandSpec& spec,
         int depth,
         const BfsOptions& options) override;
+    void stream_neighbor_candidates(
+        std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth, const BfsOptions& options,
+        const NeighborBatchConsumer& consumer) override;
 
   private:
     [[nodiscard]] static NodeRef node_to_ref(const Node& node);
@@ -40,6 +43,6 @@ class ArangoGraphStore final : public IGraphStore {
     std::shared_ptr<QueryVisitor> visitor_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_DATA_ACCESS_ARANGO_GRAPH_STORE_HPP
+#endif // POLYGRAPH_DATA_ACCESS_ARANGO_GRAPH_STORE_HPP

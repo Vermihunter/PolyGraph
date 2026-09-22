@@ -10,9 +10,9 @@
 
 #include <grpcpp/grpcpp.h>
 
-namespace cpgdb::server::grpc_api {
+namespace polygraph::server::grpc_api {
 
-namespace pb = ::cpgdb::grpc::v1;
+namespace pb = ::polygraph::grpc::v1;
 
 class GrpcTraversalService final : public pb::TraversalService::Service {
   public:
@@ -26,4 +26,4 @@ class GrpcTraversalService final : public pb::TraversalService::Service {
     services::TraversalService& traversal_service_;
 };
 
-} // namespace cpgdb::server::grpc_api
+} // namespace polygraph::server::grpc_api

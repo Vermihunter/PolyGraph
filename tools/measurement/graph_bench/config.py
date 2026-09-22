@@ -25,6 +25,14 @@ class ArangoConfig:
 
 
 @dataclass(frozen=True)
+class PostgreSqlConfig:
+    endpoint: str = "127.0.0.1:5432"
+    database: str = "polygraph"
+    user: str = "polygraph"
+    password: str = "polygraph"
+
+
+@dataclass(frozen=True)
 class BfsConfig:
     max_depth: int = 7
     direction: str = "undirected"
@@ -77,12 +85,18 @@ class PathConfig:
     # Per-backend graph_db full-placement scenarios.
     implementation_full: dict[str, ImplementationBackendPaths] = field(default_factory=dict)
 
+    # Unresolved graph used whenever the loader recreates Neo4j and must assign
+    # a fresh contiguous localId mapping. ``data`` remains the currently active
+    # graph used by references and already-loaded scenarios.
+    source_data: Optional[Path] = None
+
 
 @dataclass(frozen=True)
 class BenchmarkConfig:
     paths: PathConfig
     neo4j: Neo4jConfig = field(default_factory=Neo4jConfig)
     arango: ArangoConfig = field(default_factory=ArangoConfig)
+    postgresql: PostgreSqlConfig = field(default_factory=PostgreSqlConfig)
     bfs: BfsConfig = field(default_factory=BfsConfig)
     batch_size: int = 10000
 
@@ -128,6 +142,11 @@ def _default_implementation_paths(base: Path) -> dict[str, ImplementationBackend
             data=None,
             backend_config=resolve_path("config/backends.gpu.json", base=base),
         ),
+        "PostgreSQL": ImplementationBackendPaths(
+            schema=None,
+            data=None,
+            backend_config=resolve_path("config/backends/backends.postgresql.json", base=base),
+        ),
     }
 
 
@@ -164,6 +183,9 @@ def _load_implementation_paths(root: dict[str, Any], defaults: dict[str, Impleme
         "arango": "ArangoDB",
         "arangodb": "ArangoDB",
         "ArangoDB": "ArangoDB",
+        "postgres": "PostgreSQL",
+        "postgresql": "PostgreSQL",
+        "PostgreSQL": "PostgreSQL",
         "gpu": "GPU",
         "cugraph": "GPU",
         "GPU": "GPU",
@@ -189,6 +211,7 @@ def _load_implementation_paths(root: dict[str, Any], defaults: dict[str, Impleme
     shortcuts = {
         "Neo4J": ["neo4j", "neo"],
         "ArangoDB": ["arango", "arangodb"],
+        "PostgreSQL": ["postgres", "postgresql"],
         "GPU": ["gpu", "cugraph"],
     }
     for backend, names in shortcuts.items():
@@ -229,10 +252,12 @@ def load_config(path: str | Path | None = None) -> BenchmarkConfig:
         reference_bfs_script=resolve_path(paths_raw.get("reference_bfs_script", defaults.reference_bfs_script), base=base),
         docker_compose=_path(paths_raw.get("docker_compose", defaults.docker_compose), base),
         implementation_full=_load_implementation_paths(root, defaults.implementation_full, base),
+        source_data=_path(paths_raw.get("source_data"), base),
     )
 
     neo = _section(root, "neo4j")
     arango = _section(root, "arango")
+    postgresql = _section(root, "postgresql")
     bfs = _section(root, "bfs")
 
     return BenchmarkConfig(
@@ -248,6 +273,12 @@ def load_config(path: str | Path | None = None) -> BenchmarkConfig:
             user=arango.get("user", ArangoConfig.user),
             password=arango.get("password", ArangoConfig.password),
             database=arango.get("database", ArangoConfig.database),
+        ),
+        postgresql=PostgreSqlConfig(
+            endpoint=postgresql.get("endpoint", PostgreSqlConfig.endpoint),
+            database=postgresql.get("database", PostgreSqlConfig.database),
+            user=postgresql.get("user", PostgreSqlConfig.user),
+            password=postgresql.get("password", PostgreSqlConfig.password),
         ),
         bfs=BfsConfig(
             max_depth=int(bfs.get("max_depth", BfsConfig.max_depth)),

@@ -17,6 +17,12 @@ from tools.graphio.domain import (
 )
 from tools.graphio.id_codec import (
     BackendLayout,
+    LOCATION_ARANGO,
+    LOCATION_BITS,
+    LOCATION_NEO4J,
+    LOCATION_POSTGRESQL,
+    gpu_location_bit,
+    location_mask,
     deterministic_routed_entity_uuid,
     parse_global_id,
     read_native_node_id_map,
@@ -27,24 +33,23 @@ from tools.graphio.reader import open_graph_reader
 
 
 class GpuUuidRoutingTests(unittest.TestCase):
-    def test_dynamic_bit_count(self) -> None:
-        self.assertEqual(BackendLayout(("Neo4J",)).bit_count, 0)
-        self.assertEqual(BackendLayout(("Neo4J", "ArangoDB")).bit_count, 1)
-        self.assertEqual(BackendLayout(("Neo4J", "ArangoDB", "GPU")).bit_count, 2)
-        self.assertEqual(BackendLayout(("Neo4J", "ArangoDB", "Memgraph", "GPU")).bit_count, 2)
+    def test_location_mask_has_fixed_width(self) -> None:
+        self.assertEqual(BackendLayout(("Neo4J",)).bit_count, LOCATION_BITS)
+        self.assertEqual(BackendLayout(("Neo4J", "ArangoDB")).bit_count, LOCATION_BITS)
+        self.assertEqual(BackendLayout(("Neo4J", "ArangoDB", "GPU")).bit_count, LOCATION_BITS)
+        self.assertEqual(BackendLayout(("Neo4J", "ArangoDB", "Memgraph", "GPU")).bit_count, LOCATION_BITS)
 
 
     def test_metadata_declares_uint64_msb_layout(self) -> None:
         layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
-        self.assertEqual(
-            layout.metadata(),
-            {
-                "idRouting": ["Neo4J", "ArangoDB", "GPU"],
-                "idRoutingBits": 2,
-                "idRoutingPosition": "msb",
-                "idType": "uint64",
-            },
-        )
+        metadata = layout.metadata()
+        self.assertEqual(metadata["idRouting"], ["Neo4J", "ArangoDB", "GPU"])
+        self.assertEqual(metadata["idRoutingBits"], 16)
+        self.assertEqual(metadata["idLocationEncoding"], "bitmask-msb-v1")
+        self.assertEqual(metadata["idPayloadBits"], 48)
+        self.assertEqual(metadata["idRoutingPosition"], "msb")
+        self.assertEqual(metadata["idType"], "uint64")
+        self.assertEqual(metadata["idLocations"]["GPUBase"], 5)
 
     def test_signed_database_storage_round_trip_preserves_all_bits(self) -> None:
         value = 0xE123_4567_89AB_CDEF
@@ -63,10 +68,10 @@ class GpuUuidRoutingTests(unittest.TestCase):
             )
             self.assertEqual(read_native_node_id_map(path), {10: 1000, 11: 1001})
             records = [json.loads(line) for line in path.read_text().splitlines()]
-        self.assertEqual(records[0]["format"], "cpgdb.native-id-map")
+        self.assertEqual(records[0]["format"], "polygraph.native-id-map")
         self.assertEqual(records[-1]["record"], "relationship")
 
-    def test_three_backend_codes_are_00_01_10(self) -> None:
+    def test_three_backend_owner_bits_are_stable(self) -> None:
         layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
         base = 0x38_9D_56_CE_57_3B_F1_9C
         neo = layout.encode(base, "Neo4J")
@@ -77,9 +82,32 @@ class GpuUuidRoutingTests(unittest.TestCase):
         self.assertEqual(layout.decode_code(gpu), 2)
         self.assertEqual(layout.local_id(neo), layout.local_id(arango))
         self.assertEqual(layout.local_id(arango), layout.local_id(gpu))
-        self.assertEqual(neo >> layout.payload_bits, 0)
-        self.assertEqual(arango >> layout.payload_bits, 1)
-        self.assertEqual(gpu >> layout.payload_bits, 2)
+        self.assertEqual(location_mask(neo), LOCATION_NEO4J)
+        self.assertEqual(location_mask(arango), LOCATION_ARANGO)
+        self.assertEqual(location_mask(gpu), gpu_location_bit(0))
+
+    def test_postgresql_owner_bit_round_trip(self) -> None:
+        layout = BackendLayout(("Neo4J", "PostgreSQL", "GPU"))
+        value = layout.encode_local(0x1234_5678_9ABC, "PostgreSQL")
+        self.assertEqual(layout.decode_source(value), "PostgreSQL")
+        self.assertEqual(location_mask(value), LOCATION_POSTGRESQL)
+        self.assertLess(to_signed_storage(value), 0)
+        self.assertEqual(parse_global_id(to_signed_storage(value)), value)
+
+    def test_postgresql_backend_config_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "backends.json"
+            write_backend_config_for_sources(
+                ("Neo4J", "PostgreSQL", "GPU"),
+                output,
+                arango_database="unused",
+            )
+            config = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(config["idRouting"], ["Neo4J", "PostgreSQL", "GPU"])
+        postgres = next(entry for entry in config["backends"] if entry["id"] == "PostgreSQL")
+        self.assertTrue(postgres["enabled"])
+        self.assertEqual(postgres["kind"], "PostgreSQL")
+        self.assertEqual(postgres["connection"]["endpoint"], "127.0.0.1:5432")
 
     def test_three_backend_generator_never_emits_unused_code(self) -> None:
         layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
@@ -155,7 +183,7 @@ class GpuUuidRoutingTests(unittest.TestCase):
             metadata = reader.metadata()
             self.assertEqual(metadata["idRoutingStrategy"], "schema-type-placement-v1")
             self.assertEqual(metadata["idRouting"], ["Neo4J", "ArangoDB", "GPU"])
-            self.assertEqual(metadata["idRoutingBits"], 2)
+            self.assertEqual(metadata["idRoutingBits"], 16)
 
             expected_node_sources = {
                 "University": "Neo4J",
@@ -210,7 +238,7 @@ class GpuUuidRoutingTests(unittest.TestCase):
 
             reader = open_graph_reader(graph_path)
             metadata = reader.metadata()
-            self.assertEqual(metadata["idRoutingBits"], 2)
+            self.assertEqual(metadata["idRoutingBits"], 16)
             self.assertEqual(metadata["idRouting"], ["Neo4J", "ArangoDB", "GPU"])
             self.assertEqual(metadata["idRoutingStrategy"], "identity-hash-v1")
 
@@ -225,7 +253,7 @@ class GpuUuidRoutingTests(unittest.TestCase):
                 for entry in backend_config["backends"]
                 if entry.get("enabled", True)
             }
-            self.assertEqual(enabled, {"Neo4J", "ArangoDB", "GPU"})
+            self.assertEqual(enabled, {"Neo4J", "ArangoDB", "GPU:0"})
 
     def test_legacy_input_is_migrated_with_schema_placement(self) -> None:
         schema = {

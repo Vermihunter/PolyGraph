@@ -5,8 +5,8 @@
 
 #include "data_model/Value.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 
     bool Value::is_null() const noexcept { return std::holds_alternative<std::monostate>(data); }
 
-} // namespace cpgdb
+} // namespace polygraph

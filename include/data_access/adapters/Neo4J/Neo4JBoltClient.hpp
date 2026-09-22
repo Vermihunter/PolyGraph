@@ -3,15 +3,15 @@
  * @brief Declarations for neo4 jbolt client in the graph-store access module.
  */
 
-#ifndef CPGDB_DATA_ACCESS_NEO4J_BOLT_CLIENT_HPP
-#define CPGDB_DATA_ACCESS_NEO4J_BOLT_CLIENT_HPP
+#ifndef POLYGRAPH_DATA_ACCESS_NEO4J_BOLT_CLIENT_HPP
+#define POLYGRAPH_DATA_ACCESS_NEO4J_BOLT_CLIENT_HPP
 
 #include "utilities/json.hpp"
 
 #include <memory>
 #include <string>
 
-namespace cpgdb {
+namespace polygraph {
 
 class Neo4JBoltClient {
   public:
@@ -31,6 +31,6 @@ class Neo4JBoltClient {
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_DATA_ACCESS_NEO4J_BOLT_CLIENT_HPP
+#endif // POLYGRAPH_DATA_ACCESS_NEO4J_BOLT_CLIENT_HPP

@@ -9,7 +9,7 @@
 
 #include <utility>
 
-namespace cpgdb::http {
+namespace polygraph::http {
     namespace {
 
         nlohmann::json make_error_body(const ErrorCode code, const std::string_view message) {
@@ -67,4 +67,4 @@ namespace cpgdb::http {
         return json_error(drogon::k500InternalServerError, ErrorCode::InternalError, "Unknown internal server error");
     }
 
-} // namespace cpgdb::http
+} // namespace polygraph::http

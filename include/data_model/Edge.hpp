@@ -12,7 +12,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace cpgdb {
+namespace polygraph {
 
 struct Value;
 
@@ -24,4 +24,4 @@ struct Edge {
     std::unordered_map<std::string, std::unique_ptr<Value>> properties;
 };
 
-} // namespace cpgdb
+} // namespace polygraph

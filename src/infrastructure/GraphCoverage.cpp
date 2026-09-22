@@ -7,7 +7,7 @@
 
 #include <algorithm>
 
-namespace cpgdb {
+namespace polygraph {
 
     bool GraphCoverage::covers_node_type(TypeId type) const noexcept {
         return covers_all_node_types || node_types.contains(type);
@@ -40,4 +40,4 @@ namespace cpgdb {
         return complete_for_requested_subgraph && covers_expand_spec(source, spec);
     }
 
-} // namespace cpgdb
+} // namespace polygraph

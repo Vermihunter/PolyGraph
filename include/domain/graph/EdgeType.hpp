@@ -7,14 +7,14 @@
 // Created by akos on 29. 3. 2026.
 //
 
-#ifndef CPGDB_EDGE_HPP
-#define CPGDB_EDGE_HPP
+#ifndef POLYGRAPH_EDGE_HPP
+#define POLYGRAPH_EDGE_HPP
 
 #include "../../infrastructure/BackendKind.hpp"
 #include "Direction.hpp"
 #include "NodeType.hpp"
 
-namespace cpgdb::domain {
+namespace polygraph::domain {
 struct EdgeType {
     TypeId type;
     TypeId from;
@@ -24,6 +24,6 @@ struct EdgeType {
     std::string name;
     std::vector<Property> properties;
 };
-} // namespace cpgdb::domain
+} // namespace polygraph::domain
 
-#endif // CPGDB_EDGE_HPP
+#endif // POLYGRAPH_EDGE_HPP

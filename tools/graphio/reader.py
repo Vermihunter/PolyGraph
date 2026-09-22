@@ -81,14 +81,21 @@ class JsonLinesGraphReader(GraphReader):
         result: dict = {}
         for value in self._records():
             if self._kind(value) != "metadata":
-                continue
+                # PolyGraph JSONL writers place metadata first.  Stopping here
+                # avoids an accidental full-file scan just to read the routing
+                # layout on multi-hundred-GB prepared graphs.
+                break
             payload = {key: item for key, item in value.items() if key != "kind"}
             result.update(payload)
         return result
 
     def iter_nodes(self) -> Iterator[NodeRecord]:
+        ordered = self.metadata().get("recordOrder") == "nodes-then-relationships"
         for value in self._records():
-            if self._kind(value) == "node":
+            kind = self._kind(value)
+            if ordered and kind in {"relationship", "edge"}:
+                break
+            if kind == "node":
                 payload = {k: v for k, v in value.items() if k != "kind"}
                 yield NodeRecord.from_dict(payload)
 

@@ -6,14 +6,17 @@ import unittest
 from pathlib import Path
 
 from tools.measurement.log_reconstruction import (
+    VIEW_OPTIONS,
     attribute_filter_token,
+    build_comparison_metadata,
+    build_dashboard,
+    build_run_overview_html,
     build_timeline_filter_metadata,
     build_timeline_figure,
     build_timeline_thread_view,
     load_jsonl,
     make_hover_text,
     make_lane_by_thread,
-    make_lane_by_thread_and_event,
     pair_spans,
 )
 
@@ -149,10 +152,6 @@ class LogReconstructionTimelineFilterTests(unittest.TestCase):
             make_lane_by_thread({**spans.iloc[0].to_dict(), "overlap_lane": 0}),
             "thread 0 / lane 0",
         )
-        self.assertEqual(
-            make_lane_by_thread_and_event({**spans.iloc[2].to_dict(), "overlap_lane": 0}),
-            "thread 1 / arango.query / lane 0",
-        )
         hover = make_hover_text({**spans.iloc[2].to_dict(), "overlap_lane": 0})
         self.assertIn("thread: 1", hover)
         self.assertNotIn("thread: 2", hover)
@@ -162,6 +161,127 @@ class LogReconstructionTimelineFilterTests(unittest.TestCase):
         self.assertIn("ArrayBuffer.isView(value)", source)
         self.assertIn("timelineTracePointCount(trace)", source)
         self.assertNotIn("Array.isArray(trace.x) ? trace.x.length : 0", source)
+
+    def test_dashboard_exposes_comparison_workspace(self) -> None:
+        self.assertEqual(
+            VIEW_OPTIONS,
+            [
+                ("overview", "Overview"),
+                ("timeline_thread", "Timeline: by thread"),
+                ("comparison", "Compare runs"),
+            ],
+        )
+
+    def test_dashboard_renders_comparison_workspace_and_average_index_link(self) -> None:
+        temporary, spans = self._make_spans()
+        self.addCleanup(temporary.cleanup)
+
+        with tempfile.TemporaryDirectory() as output_directory:
+            output_root = Path(output_directory)
+            average_index = output_root / "average_index.html"
+            average_index.write_text("<html>average</html>", encoding="utf-8")
+            dashboard = output_root / "dashboard.html"
+            build_dashboard(
+                runs=[{
+                    "safe_id": "run_one",
+                    "label": "Run one",
+                    "relative_path": Path("logs/1.jsonl"),
+                    "events": load_jsonl(Path(temporary.name) / "events.jsonl"),
+                    "spans": spans,
+                }],
+                output_html=dashboard,
+                average_index=average_index,
+            )
+            rendered = dashboard.read_text(encoding="utf-8")
+
+        self.assertIn('value="overview">Overview</option>', rendered)
+        self.assertIn('value="timeline_thread">Timeline: by thread</option>', rendered)
+        self.assertIn('value="comparison">Compare runs</option>', rendered)
+        self.assertIn('data-comparison-chart="boxplot"', rendered)
+        self.assertIn('data-comparison-chart="families"', rendered)
+        self.assertIn('data-comparison-chart="events"', rendered)
+        self.assertIn('data-comparison-group', rendered)
+        self.assertIn('data-comparison-source', rendered)
+        self.assertIn('data-comparison-primary-metric', rendered)
+        self.assertIn('server.events.jsonl', rendered)
+        self.assertIn('data-comparison-family', rendered)
+        self.assertIn('data-comparison-event', rendered)
+        self.assertNotIn('Timeline: by thread + event', rendered)
+        self.assertNotIn('Summary: event type', rendered)
+        self.assertNotIn('Average: timing profile', rendered)
+        self.assertIn('href="average_index.html"', rendered)
+        self.assertIn('Open average report index', rendered)
+
+
+
+    def test_comparison_groups_request_samples_by_run_configuration_and_excludes_server_by_default(self) -> None:
+        temporary, spans = self._make_spans()
+        self.addCleanup(temporary.cleanup)
+
+        runs = [
+            {
+                "safe_id": "request_one",
+                "label": "08-no-cache/events/requests/r1.events.jsonl",
+                "relative_path": Path("08-no-cache/events/requests/r1.events.jsonl"),
+                "spans": spans,
+                "is_average": False,
+            },
+            {
+                "safe_id": "request_two",
+                "label": "08-no-cache/events/requests/r2.events.jsonl",
+                "relative_path": Path("08-no-cache/events/requests/r2.events.jsonl"),
+                "spans": spans,
+                "is_average": False,
+            },
+            {
+                "safe_id": "server",
+                "label": "08-no-cache/events/server.events.jsonl",
+                "relative_path": Path("08-no-cache/events/server.events.jsonl"),
+                "spans": spans,
+                "is_average": False,
+            },
+        ]
+        metadata = build_comparison_metadata(runs)
+        self.assertEqual([group["name"] for group in metadata["runGroups"]], ["08-no-cache"])
+        self.assertEqual(metadata["runGroups"][0]["defaultSampleCount"], 2)
+        sources = {source["name"]: source for source in metadata["sources"]}
+        self.assertTrue(sources["request"]["defaultEnabled"])
+        self.assertFalse(sources["server"]["defaultEnabled"])
+        self.assertEqual(metadata["runs"][0]["group"], "08-no-cache")
+        self.assertEqual(metadata["runs"][2]["sourceKind"], "server")
+
+    def test_comparison_family_duration_uses_interval_union(self) -> None:
+        temporary, spans = self._make_spans()
+        self.addCleanup(temporary.cleanup)
+
+        run = {
+            "safe_id": "run_one",
+            "label": "Run one",
+            "spans": spans,
+            "is_average": False,
+        }
+        metadata = build_comparison_metadata([run])
+        run_metrics = metadata["runs"][0]
+
+        # neo4j.query is [0, 0.001] ms and neo4j.parse is [0.0011, 0.0019] ms,
+        # so the family wall-clock coverage is their union rather than an arbitrary
+        # nested/instrumentation sum.
+        self.assertAlmostEqual(run_metrics["groups"]["neo4j"], 0.0018)
+        self.assertAlmostEqual(run_metrics["events"]["neo4j.query"], 0.001)
+
+    def test_overview_contains_all_event_rows_but_defaults_to_top_ten(self) -> None:
+        temporary, spans = self._make_spans()
+        self.addCleanup(temporary.cleanup)
+        run = {
+            "relative_path": Path("logs/1.jsonl"),
+            "events": load_jsonl(Path(temporary.name) / "events.jsonl"),
+            "spans": spans,
+        }
+        rendered = build_run_overview_html(run)
+        self.assertIn('data-overview-expanded="false"', rendered)
+        self.assertIn('data-overview-toggle', rendered)
+        self.assertIn('data-overview-search', rendered)
+        self.assertIn('data-overview-event-row', rendered)
 
     def test_timeline_points_carry_attribute_json_for_browser_filtering(self) -> None:
         temporary, spans = self._make_spans()

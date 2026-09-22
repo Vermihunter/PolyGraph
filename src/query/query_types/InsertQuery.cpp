@@ -9,7 +9,7 @@
 
 #include <utility>
 
-namespace cpgdb {
+namespace polygraph {
 
     InsertQuery::InsertQuery(insertion::InsertionItem item) : item_(std::move(item)) {}
 
@@ -19,4 +19,4 @@ namespace cpgdb {
 
     query_t InsertQuery::clone() const { return std::make_unique<InsertQuery>(*this); }
 
-} // namespace cpgdb
+} // namespace polygraph

@@ -16,8 +16,8 @@ OUTPUT="${OUTPUT:-graph_run/bfs-res.csv}"
 LOG="${LOG:-run-log.txt}"
 
 # Extra env vars, useful for profiling.
-CPGDB_PROFILE="${CPGDB_PROFILE:-0}"
-CPGDB_PROFILE_LAYERS="${CPGDB_PROFILE_LAYERS:-0}"
+POLYGRAPH_PROFILE="${POLYGRAPH_PROFILE:-0}"
+POLYGRAPH_PROFILE_LAYERS="${POLYGRAPH_PROFILE_LAYERS:-0}"
 # ----------------------------------------
 
 
@@ -50,8 +50,8 @@ for i in $(seq 1 "$RUNS"); do
 
   start_ns=$(date +%s%N)
 
-  CPGDB_PROFILE="$CPGDB_PROFILE" \
-  CPGDB_PROFILE_LAYERS="$CPGDB_PROFILE_LAYERS" \
+  POLYGRAPH_PROFILE="$POLYGRAPH_PROFILE" \
+  POLYGRAPH_PROFILE_LAYERS="$POLYGRAPH_PROFILE_LAYERS" \
   "$BIN" \
     -lgs "$LGS" \
     --data "$DATA" \

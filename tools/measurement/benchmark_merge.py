@@ -349,7 +349,7 @@ def merge_benchmark_results(
                 check=True,
             )
         elif reconstruct_logs:
-            print(f"Skipping log reconstruction for {dataset_name}: no CPGDB event logs")
+            print(f"Skipping log reconstruction for {dataset_name}: no PolyGraph event logs")
 
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         failed = int(summary.get("failed_count", 0))
@@ -408,7 +408,7 @@ def merge_benchmark_results(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Merge partial CPGDB benchmark result directories without rerunning them."
+        description="Merge partial PolyGraph benchmark result directories without rerunning them."
     )
     parser.add_argument(
         "--dataset",
@@ -437,7 +437,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--reconstruct-logs",
         action="store_true",
-        help="Regenerate log reconstruction only for datasets containing CPGDB event logs.",
+        help="Regenerate log reconstruction only for datasets containing PolyGraph event logs.",
     )
     args = parser.parse_args(argv)
 

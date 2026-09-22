@@ -7,7 +7,7 @@
 
 #include <algorithm>
 
-namespace cpgdb {
+namespace polygraph {
 
     bool Placement::can_expand_from(const NodeRef &source, const ExpandSpec &spec) const {
         const bool matches_forward_side = source_node_types.empty() || source_node_types.contains(source.type);
@@ -34,4 +34,4 @@ namespace cpgdb {
         */
     }
 
-} // namespace cpgdb
+} // namespace polygraph

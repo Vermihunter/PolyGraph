@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import heapq
 import html
 import json
 import math
@@ -10,15 +11,24 @@ import statistics
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 
 AVERAGE_DIR_NAME = "Average"
+OUTPUT_FORMAT_VERSION = 2
 
 STRUCTURAL_EVENT_FIELDS = {
     "event",
+    # Current logger schema.
+    "sequence",
+    "elapsed_ns",
+    "timestamp_unix_ns",
+    # Legacy and normalized aliases.
     "seq",
     "steady_ns",
+    "steady_time_ns",
+    "monotonic_ns",
+    "timestamp_ns",
     "thread_id",
     "time",
     "timestamp",
@@ -29,6 +39,135 @@ STRUCTURAL_EVENT_FIELDS = {
 }
 
 ATTRIBUTE_CONTAINER_FIELDS = {"attributes", "fields"}
+
+# Events are assigned a global sequence before concurrent threads append them to
+# the JSONL file. Writes can therefore arrive a little out of order. Keep a small
+# heap rather than materializing and sorting the complete trace.
+DEFAULT_EVENT_REORDER_WINDOW = 4096
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _first_integer(event: dict[str, Any], keys: Sequence[str]) -> tuple[int | None, str | None]:
+    for key in keys:
+        if key not in event:
+            continue
+        value = _coerce_int(event.get(key))
+        if value is not None:
+            return value, key
+    return None, None
+
+
+def normalize_event(
+    event: dict[str, Any],
+    *,
+    path: Path | None = None,
+    line_number: int | None = None,
+) -> dict[str, Any]:
+    """Normalize current and legacy logger fields to ``seq``/``steady_ns``.
+
+    Current PolyGraph traces use ``sequence`` plus ``elapsed_ns`` and may also carry
+    ``timestamp_unix_ns``. Older traces used ``seq`` and ``steady_ns``. Keeping
+    both aliases lets the dashboard and average-report generator share one input
+    contract without rewriting the source JSONL files.
+    """
+    location = ""
+    if path is not None:
+        location = str(path)
+        if line_number is not None:
+            location += f":{line_number}"
+        location += ": "
+
+    sequence, _ = _first_integer(event, ("sequence", "seq"))
+    if sequence is None:
+        raise ValueError(
+            f"{location}event must contain an integer 'sequence' (or legacy 'seq')"
+        )
+
+    elapsed_ns, timing_field = _first_integer(
+        event,
+        (
+            "elapsed_ns",
+            "steady_ns",
+            "steady_time_ns",
+            "monotonic_ns",
+            "timestamp_unix_ns",
+            "timestamp_ns",
+        ),
+    )
+    if elapsed_ns is None:
+        raise ValueError(
+            f"{location}event must contain an integer timing field; expected one of "
+            "elapsed_ns, steady_ns, steady_time_ns, monotonic_ns, "
+            "timestamp_unix_ns, timestamp_ns"
+        )
+
+    normalized = dict(event)
+    normalized["sequence"] = sequence
+    normalized["seq"] = sequence
+    normalized["steady_ns"] = elapsed_ns
+    normalized["_timing_field"] = timing_field
+    return normalized
+
+
+def iter_ordered_jsonl_events(
+    path: Path,
+    *,
+    reorder_window: int = DEFAULT_EVENT_REORDER_WINDOW,
+) -> Iterator[tuple[int, dict[str, Any]]]:
+    """Yield normalized JSONL events in global sequence order.
+
+    ``reorder_window`` is the maximum number of recently read events retained to
+    absorb concurrent write reordering. A late event beyond that window is
+    reported explicitly instead of silently reconstructing incorrect spans.
+    """
+    if reorder_window < 1:
+        raise ValueError("reorder_window must be at least 1")
+
+    pending: list[tuple[int, int, int, dict[str, Any]]] = []
+    arrival_index = 0
+    last_emitted_seq: int | None = None
+
+    def emit_next() -> tuple[int, dict[str, Any]]:
+        nonlocal last_emitted_seq
+        seq, _, line_number, event = heapq.heappop(pending)
+        if last_emitted_seq is not None and seq < last_emitted_seq:
+            raise ValueError(
+                f"{path}:{line_number}: event sequence {seq} arrived more than "
+                f"{reorder_window} events late (already emitted {last_emitted_seq}). "
+                "Increase DEFAULT_EVENT_REORDER_WINDOW for unusually delayed logs."
+            )
+        last_emitted_seq = seq
+        return line_number, event
+
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                raw_event = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{line_number}: invalid JSON: {exc}") from exc
+            if not isinstance(raw_event, dict):
+                raise ValueError(f"{path}:{line_number}: event must be a JSON object")
+
+            event = normalize_event(raw_event, path=path, line_number=line_number)
+            seq = int(event["seq"])
+            heapq.heappush(pending, (seq, arrival_index, line_number, event))
+            arrival_index += 1
+            if len(pending) > reorder_window:
+                yield emit_next()
+
+    while pending:
+        yield emit_next()
 
 
 @dataclass(frozen=True)
@@ -129,28 +268,13 @@ def _aggregate_span_attributes(spans: Sequence[Span]) -> dict[str, Any]:
 
 
 def load_run(path: Path) -> RunProfile:
-    events: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                value = json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"{path}:{line_number}: invalid JSON: {exc}") from exc
-            if not isinstance(value, dict):
-                raise ValueError(f"{path}:{line_number}: event must be a JSON object")
-            events.append(value)
-
-    if not events:
-        raise ValueError(f"No events found in {path}")
-
-    events.sort(key=lambda item: int(item.get("seq", 0)))
+    """Load a log and pair spans while tolerating concurrent write reordering."""
     stacks: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     raw_spans: list[tuple[str, int, int, str, dict[str, Any]]] = []
+    event_count = 0
 
-    for event in events:
+    for _, event in iter_ordered_jsonl_events(path):
+        event_count += 1
         event_name = str(event.get("event", ""))
         if not event_name:
             continue
@@ -164,22 +288,29 @@ def load_run(path: Path) -> RunProfile:
         if not event_name.endswith(".end") or not stacks[key]:
             continue
 
-        start = stacks[key].pop()
+        start_event = stacks[key].pop()
         try:
-            start_ns = int(start["steady_ns"])
+            start_ns = int(start_event["steady_ns"])
             end_ns = int(event["steady_ns"])
         except (KeyError, TypeError, ValueError):
             continue
         if end_ns < start_ns:
             continue
 
-        merged = dict(start)
+        merged = dict(start_event)
         merged.update(event)
-        raw_spans.append((base_name, start_ns, end_ns, thread_id, merged))
+        compact_fields = _extract_span_attributes(merged)
+        depth = _numeric_depth(merged.get("depth"))
+        if depth is not None:
+            compact_fields["depth"] = depth
+        raw_spans.append((base_name, start_ns, end_ns, thread_id, compact_fields))
 
+    if event_count == 0:
+        raise ValueError(f"No events found in {path}")
     if not raw_spans:
         raise ValueError(f"No .start/.end spans could be reconstructed from {path}")
 
+    raw_spans.sort(key=lambda item: (item[1], item[2], item[0]))
     origin_ns = min(start_ns for _, start_ns, _, _, _ in raw_spans)
     spans = tuple(
         Span(
@@ -190,9 +321,7 @@ def load_run(path: Path) -> RunProfile:
             depth=_numeric_depth(fields.get("depth")),
             fields=fields,
         )
-        for name, start_ns, end_ns, thread_id, fields in sorted(
-            raw_spans, key=lambda item: (item[1], item[2], item[0])
-        )
+        for name, start_ns, end_ns, thread_id, fields in raw_spans
     )
     window_ms = max(span.end_ms for span in spans) - min(span.start_ms for span in spans)
     return RunProfile(path=path, spans=spans, window_ms=window_ms)
@@ -222,17 +351,24 @@ def _stdev(values: Sequence[float]) -> float:
 
 
 def summarize_events(runs: Sequence[RunProfile]) -> list[dict[str, Any]]:
-    names = sorted({span.name for run in runs for span in run.spans})
-    rows: list[dict[str, Any]] = []
+    durations_by_run: list[dict[str, list[float]]] = []
+    names: set[str] = set()
+    for run in runs:
+        grouped: dict[str, list[float]] = defaultdict(list)
+        for span in run.spans:
+            grouped[span.name].append(span.duration_ms)
+        durations_by_run.append(grouped)
+        names.update(grouped)
 
-    for name in names:
+    rows: list[dict[str, Any]] = []
+    for name in sorted(names):
         totals_per_run: list[float] = []
         counts_per_run: list[int] = []
         span_durations: list[float] = []
         present_runs = 0
 
-        for run in runs:
-            selected = [span.duration_ms for span in run.spans if span.name == name]
+        for grouped in durations_by_run:
+            selected = grouped.get(name, ())
             totals_per_run.append(sum(selected))
             counts_per_run.append(len(selected))
             span_durations.extend(selected)
@@ -382,7 +518,7 @@ def write_average_jsonl(path: Path, timeline: Sequence[dict[str, Any]], run_coun
         for sequence, event in enumerate(synthetic):
             event = dict(event)
             event.pop("_sort_end", None)
-            event["seq"] = sequence
+            event["sequence"] = sequence
             handle.write(json.dumps(event, separators=(",", ":")) + "\n")
 
 
@@ -489,7 +625,7 @@ main{{max-width:1500px;margin:auto;padding:34px}}h1{{font-size:clamp(2rem,4vw,3.
 </style>
 </head>
 <body><main>
-<div class="eyebrow">CPGDB averaged event profile</div>
+<div class="eyebrow">PolyGraph averaged event profile</div>
 <h1>{html.escape(title)}</h1>
 <p>Source: <code>{html.escape(source_label)}</code>. Timings are reconstructed from matching <code>.start</code>/<code>.end</code> events. Event totals are inclusive and may overlap.</p>
 <div class="cards">
@@ -509,7 +645,38 @@ const table=document.getElementById('eventTable');const filter=document.getEleme
 </script></body></html>"""
 
 
+def _cached_group_summary(
+        log_files: Sequence[Path],
+        output_dir: Path,
+) -> dict[str, Any] | None:
+    required = [
+        output_dir / "summary.json",
+        output_dir / "events.csv",
+        output_dir / "timeline.csv",
+        output_dir / "execution.jsonl",
+        output_dir / "report.html",
+    ]
+    if not log_files or not all(path.is_file() for path in required):
+        return None
+    newest_source = max(path.stat().st_mtime_ns for path in log_files)
+    oldest_output = min(path.stat().st_mtime_ns for path in required)
+    if oldest_output < newest_source:
+        return None
+    try:
+        summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if summary.get("formatVersion") != OUTPUT_FORMAT_VERSION:
+        return None
+    summary["cached"] = True
+    return summary
+
+
 def analyze_group(log_files: Sequence[Path], output_dir: Path, *, title: str, source_label: str) -> dict[str, Any]:
+    cached = _cached_group_summary(log_files, output_dir)
+    if cached is not None:
+        return cached
+
     runs: list[RunProfile] = []
     errors: list[dict[str, str]] = []
     for log_file in log_files:
@@ -518,8 +685,9 @@ def analyze_group(log_files: Sequence[Path], output_dir: Path, *, title: str, so
         except Exception as exc:  # noqa: BLE001 - report malformed logs without hiding valid ones
             errors.append({"log": str(log_file), "error": str(exc)})
 
-    if len(runs) < 2:
+    if not runs:
         return {
+            "formatVersion": OUTPUT_FORMAT_VERSION,
             "generated": False,
             "title": title,
             "validRuns": len(runs),
@@ -547,7 +715,9 @@ def analyze_group(log_files: Sequence[Path], output_dir: Path, *, title: str, so
     )
 
     summary = {
+        "formatVersion": OUTPUT_FORMAT_VERSION,
         "generated": True,
+        "mode": "average" if len(runs) > 1 else "single-run",
         "title": title,
         "source": source_label,
         "validRuns": len(runs),
@@ -582,7 +752,7 @@ def discover_direct_log_groups(log_root: Path) -> list[tuple[Path, list[Path]]]:
             for path in directory.glob("*.jsonl")
             if path.is_file() and path.name != "execution.jsonl"
         )
-        if len(logs) > 1:
+        if logs:
             groups.append((directory, logs))
     return groups
 
@@ -610,7 +780,13 @@ def build_index_html(output_root: Path, summaries: Sequence[tuple[str, Path, dic
         """
         for label, path, summary in valid
     )
-    return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CPGDB average executions</title><style>body{{margin:0;background:#07111f;color:#eaf3ff;font-family:system-ui,sans-serif}}main{{max-width:1100px;margin:auto;padding:42px}}h1{{font-size:3rem;margin:.2em 0}}p,span{{color:#90a7c6}}.group{{display:grid;grid-template-columns:minmax(220px,1fr) 2fr 110px;gap:18px;align-items:center;text-decoration:none;color:inherit;padding:18px 20px;margin:12px 0;border-radius:15px;background:#10213a;border:1px solid #29405f}}.group:hover{{transform:translateY(-1px);border-color:#6c9de2}}.group strong,.group span{{display:block}}.group span{{font-size:.82rem;margin-top:4px}}.mini{{height:12px;background:#071321;border-radius:99px;overflow:hidden}}.mini i{{display:block;height:100%;background:linear-gradient(90deg,#53d39b,#75a7ff);border-radius:99px}}b{{text-align:right}}@media(max-width:700px){{.group{{grid-template-columns:1fr}}b{{text-align:left}}}}</style></head><body><main><div style="color:#83adf0;text-transform:uppercase;letter-spacing:.15em;font-size:.75rem;font-weight:700">CPGDB measurements</div><h1>Average executions</h1><p>Open a group to inspect its event table, average timing bars, and synthetic average timeline.</p>{cards}</main></body></html>"""
+    content = cards or """
+        <div class="empty">
+          <strong>No valid execution profiles were generated.</strong>
+          <span>Check the reconstruction output for malformed or unsupported JSONL logs.</span>
+        </div>
+    """
+    return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PolyGraph average executions</title><style>body{{margin:0;background:#07111f;color:#eaf3ff;font-family:system-ui,sans-serif}}main{{max-width:1100px;margin:auto;padding:42px}}h1{{font-size:3rem;margin:.2em 0}}p,span{{color:#90a7c6}}.group{{display:grid;grid-template-columns:minmax(220px,1fr) 2fr 110px;gap:18px;align-items:center;text-decoration:none;color:inherit;padding:18px 20px;margin:12px 0;border-radius:15px;background:#10213a;border:1px solid #29405f}}.group:hover{{transform:translateY(-1px);border-color:#6c9de2}}.group strong,.group span,.empty strong,.empty span{{display:block}}.group span,.empty span{{font-size:.82rem;margin-top:4px}}.mini{{height:12px;background:#071321;border-radius:99px;overflow:hidden}}.mini i{{display:block;height:100%;background:linear-gradient(90deg,#53d39b,#75a7ff);border-radius:99px}}b{{text-align:right}}.empty{{padding:22px;border-radius:15px;background:#10213a;border:1px solid #29405f}}@media(max-width:700px){{.group{{grid-template-columns:1fr}}b{{text-align:left}}}}</style></head><body><main><div style="color:#83adf0;text-transform:uppercase;letter-spacing:.15em;font-size:.75rem;font-weight:700">PolyGraph measurements</div><h1>Average executions</h1><p>Open a group to inspect its event table, average timing bars, and synthetic average timeline.</p>{content}</main></body></html>"""
 
 
 def _safe_relative_output(relative: Path) -> Path:
@@ -646,7 +822,7 @@ def analyze_log_tree(log_root: Path, *, output_root: Path | None = None) -> dict
         summary = analyze_group(
             log_files,
             output_dir,
-            title=f"Average execution — {label}",
+            title=f"{'Average execution' if len(log_files) > 1 else 'Execution'} — {label}",
             source_label=str(relative),
         )
         summaries.append((label, output_dir, summary))
@@ -708,7 +884,7 @@ def analyze_log_tree(log_root: Path, *, output_root: Path | None = None) -> dict
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Average CPGDB event logs per log directory and globally, then generate "
+            "Average PolyGraph event logs per log directory and globally, then generate "
             "CSV tables, synthetic average JSONL executions, and standalone HTML visualizations."
         )
     )

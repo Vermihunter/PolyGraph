@@ -3,13 +3,13 @@
  * @brief Declarations for get vertex by id query in the query dispatch module.
  */
 
-#ifndef CPGDB_QUERY_GET_VERTEX_BY_ID_QUERY_HPP
-#define CPGDB_QUERY_GET_VERTEX_BY_ID_QUERY_HPP
+#ifndef POLYGRAPH_QUERY_GET_VERTEX_BY_ID_QUERY_HPP
+#define POLYGRAPH_QUERY_GET_VERTEX_BY_ID_QUERY_HPP
 
 #include "data_model/Node.hpp"
 #include "query/Query.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 
 class GetVertexByIdQuery final : public Query {
   public:
@@ -22,6 +22,6 @@ class GetVertexByIdQuery final : public Query {
     Node& node_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_QUERY_GET_VERTEX_BY_ID_QUERY_HPP
+#endif // POLYGRAPH_QUERY_GET_VERTEX_BY_ID_QUERY_HPP

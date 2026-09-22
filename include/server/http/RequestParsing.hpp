@@ -8,8 +8,8 @@
 #include <drogon/HttpRequest.h>
 #include <json/value.h>
 
-namespace cpgdb::http::parse {
+namespace polygraph::http::parse {
 
 [[nodiscard]] const Json::Value& jsonBody(const drogon::HttpRequestPtr& request);
 
-} // namespace cpgdb::http::parse
+} // namespace polygraph::http::parse

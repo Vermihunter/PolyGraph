@@ -10,7 +10,7 @@
 
 #include <memory>
 
-namespace cpgdb {
+namespace polygraph {
 
 struct Query;
 /// Owning pointer to a polymorphic query object.
@@ -33,6 +33,6 @@ struct Query {
     virtual query_t clone() const = 0;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
 #endif // QUERY_HPP

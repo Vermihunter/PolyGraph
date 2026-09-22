@@ -2,11 +2,12 @@
 // Created by akos on 11. 7. 2026.
 //
 
-#ifndef CPGDB_NEIGHBOREXPANDER_HPP
-#define CPGDB_NEIGHBOREXPANDER_HPP
+#ifndef POLYGRAPH_NEIGHBOREXPANDER_HPP
+#define POLYGRAPH_NEIGHBOREXPANDER_HPP
 #include "infrastructure/PlacementCatalog.hpp"
+#include "data_access/NeighborBatchConsumer.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 class NeighborExpander {
 
   public:
@@ -19,6 +20,13 @@ class NeighborExpander {
                  int depth,
                  const BfsOptions& options) const;
 
+    /** @brief Streams candidate neighbor IDs without materializing complete adjacency rows. */
+    void expand_layer_candidates(const std::vector<NodeRef>& frontier,
+                                 const ExpandSpec& spec,
+                                 int depth,
+                                 const BfsOptions& options,
+                                 const NeighborBatchConsumer& consumer) const;
+
   private:
     [[nodiscard]] std::vector<MinimalAdjacencyRow> expand_layer_parallel(
         const PlacementCatalog::LayerExpansionPlan& plan,
@@ -29,6 +37,6 @@ class NeighborExpander {
   private:
     const PlacementCatalog& catalog_;
 };
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_NEIGHBOREXPANDER_HPP
+#endif // POLYGRAPH_NEIGHBOREXPANDER_HPP

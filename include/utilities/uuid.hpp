@@ -6,8 +6,8 @@
  * no longer depends on Boost.UUID; every identifier is a std::uint64_t.
  */
 
-#ifndef CPGDB_UUID_HPP
-#define CPGDB_UUID_HPP
+#ifndef POLYGRAPH_UUID_HPP
+#define POLYGRAPH_UUID_HPP
 
 #include "data_model/EntityId.hpp"
 
@@ -19,7 +19,7 @@
 #include <string_view>
 #include <system_error>
 
-namespace cpgdb {
+namespace polygraph {
 
 // Backwards-compatible type name for older call sites.
 using uuid = GlobalId;
@@ -59,6 +59,6 @@ using uuid = GlobalId;
     return std::bit_cast<GlobalId>(id);
 }
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_UUID_HPP
+#endif // POLYGRAPH_UUID_HPP

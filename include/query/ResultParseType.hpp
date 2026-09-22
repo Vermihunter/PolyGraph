@@ -5,8 +5,8 @@
 
 #pragma once
 
-namespace cpgdb {
+namespace polygraph {
 
 enum class ResultParseType { Node, Relationship, AdjacencyRow };
 
-} // namespace cpgdb
+} // namespace polygraph

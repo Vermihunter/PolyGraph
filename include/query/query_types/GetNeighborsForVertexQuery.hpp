@@ -3,13 +3,13 @@
  * @brief Declarations for get neighbors for vertex query in the query dispatch module.
  */
 
-#ifndef CPGDB_QUERY_GET_NEIGHBORS_FOR_VERTEX_QUERY_HPP
-#define CPGDB_QUERY_GET_NEIGHBORS_FOR_VERTEX_QUERY_HPP
+#ifndef POLYGRAPH_QUERY_GET_NEIGHBORS_FOR_VERTEX_QUERY_HPP
+#define POLYGRAPH_QUERY_GET_NEIGHBORS_FOR_VERTEX_QUERY_HPP
 
 #include "data_model/Node.hpp"
 #include "query/Query.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 
 class GetNeighborsForVertexQuery final : public Query {
   public:
@@ -22,6 +22,6 @@ class GetNeighborsForVertexQuery final : public Query {
     Node& node_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_QUERY_GET_NEIGHBORS_FOR_VERTEX_QUERY_HPP
+#endif // POLYGRAPH_QUERY_GET_NEIGHBORS_FOR_VERTEX_QUERY_HPP

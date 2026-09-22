@@ -9,7 +9,11 @@ build/
 *.log
 *.jsonl
 
-
+/logs/*.log
+/logs/*.jsonl
+/build/
+/observability/.env
+*.heap
 
 tools/my-venv/
 .idea/

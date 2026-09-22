@@ -3,15 +3,15 @@
  * @brief Backend-neutral batch query for immutable node and edge insertions.
  */
 
-#ifndef CPGDB_QUERY_QUERY_TYPES_INSERT_BATCH_QUERY_HPP
-#define CPGDB_QUERY_QUERY_TYPES_INSERT_BATCH_QUERY_HPP
+#ifndef POLYGRAPH_QUERY_QUERY_TYPES_INSERT_BATCH_QUERY_HPP
+#define POLYGRAPH_QUERY_QUERY_TYPES_INSERT_BATCH_QUERY_HPP
 
 #include "insertion/InsertionItem.hpp"
 #include "query/Query.hpp"
 
 #include <vector>
 
-namespace cpgdb {
+namespace polygraph {
 
 /** @brief Visitor-dispatched write query containing a backend-grouped insertion batch. */
 class InsertBatchQuery final : public Query {
@@ -32,6 +32,6 @@ class InsertBatchQuery final : public Query {
     std::vector<insertion::InsertionItem> items_;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_QUERY_QUERY_TYPES_INSERT_BATCH_QUERY_HPP
+#endif // POLYGRAPH_QUERY_QUERY_TYPES_INSERT_BATCH_QUERY_HPP

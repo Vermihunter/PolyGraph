@@ -8,18 +8,26 @@
 #include <stdexcept>
 #include <utility>
 
-namespace cpgdb {
+namespace polygraph {
 
     CurlHttpClient::CurlHttpClient(std::string auth) : curl_(curl_easy_init()), auth_(std::move(auth)) {
         if (!curl_) {
             throw std::runtime_error("curl_easy_init() failed");
         }
 
-        headers_ = curl_slist_append(nullptr, "Content-Type: application/json");
-        if (!headers_) {
-            cleanup();
-            throw std::runtime_error("curl_slist_append() failed");
-        }
+        const auto append_header = [this](const char *header) {
+            curl_slist *updated = curl_slist_append(headers_, header);
+            if (!updated) {
+                cleanup();
+                throw std::runtime_error("curl_slist_append() failed");
+            }
+            headers_ = updated;
+        };
+
+        append_header("Content-Type: application/json");
+        append_header("Accept: application/json");
+        // Avoid an extra 100-continue handshake for the many small AQL POST bodies.
+        append_header("Expect:");
     }
 
     CurlHttpClient::CurlHttpClient(CurlHttpClient &&other) noexcept :
@@ -77,6 +85,11 @@ namespace cpgdb {
         curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &response);
         curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, headers_);
         curl_easy_setopt(curl_, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(curl_, CURLOPT_TCP_KEEPALIVE, 1L);
+        curl_easy_setopt(curl_, CURLOPT_TCP_NODELAY, 1L);
+        // Ask the server for compressed JSON when supported. libcurl transparently
+        // decompresses it before invoking write_callback().
+        curl_easy_setopt(curl_, CURLOPT_ACCEPT_ENCODING, "");
 
         if (!auth_.empty()) {
             curl_easy_setopt(curl_, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
@@ -121,4 +134,4 @@ namespace cpgdb {
         return CurlHttpClient(auth).put(url, body);
     }
 
-} // namespace cpgdb
+} // namespace polygraph

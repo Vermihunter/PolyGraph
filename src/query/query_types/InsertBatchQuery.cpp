@@ -9,7 +9,7 @@
 
 #include <utility>
 
-namespace cpgdb {
+namespace polygraph {
 
     InsertBatchQuery::InsertBatchQuery(std::vector<insertion::InsertionItem> items) : items_(std::move(items)) {}
 
@@ -23,4 +23,4 @@ namespace cpgdb {
 
     query_t InsertBatchQuery::clone() const { return std::make_unique<InsertBatchQuery>(*this); }
 
-} // namespace cpgdb
+} // namespace polygraph

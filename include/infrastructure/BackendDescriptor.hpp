@@ -7,14 +7,14 @@
 // Created by akos on 5. 5. 2026.
 //
 
-#ifndef CPGDB_BACKENDDESCRIPTOR_HPP
-#define CPGDB_BACKENDDESCRIPTOR_HPP
+#ifndef POLYGRAPH_BACKENDDESCRIPTOR_HPP
+#define POLYGRAPH_BACKENDDESCRIPTOR_HPP
 #include "BackendCapabilities.hpp"
 #include "BackendId.hpp"
 #include "BackendKind.hpp"
 #include "GraphCoverage.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 /**
  * Metadata about one logical backend: id, kind, capabilities, coverage, priority
  */
@@ -36,6 +36,6 @@ struct BackendDescriptor {
     std::string name;
 };
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_BACKENDDESCRIPTOR_HPP
+#endif // POLYGRAPH_BACKENDDESCRIPTOR_HPP

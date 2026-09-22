@@ -7,14 +7,14 @@
 // Created by akos on 7. 5. 2026.
 //
 
-#ifndef CPGDB_GRAPHVERSION_HPP
-#define CPGDB_GRAPHVERSION_HPP
+#ifndef POLYGRAPH_GRAPHVERSION_HPP
+#define POLYGRAPH_GRAPHVERSION_HPP
 
 #include <cstdint>
 
-namespace cpgdb {
+namespace polygraph {
 using GraphVersion = std::uint64_t;
 
-} // namespace cpgdb
+} // namespace polygraph
 
-#endif // CPGDB_GRAPHVERSION_HPP
+#endif // POLYGRAPH_GRAPHVERSION_HPP

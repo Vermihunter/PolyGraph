@@ -1,90 +1,61 @@
-# Build guide {#build_guide}
+# Building PolyGraph
 
-## Required CPU dependencies
+PolyGraph uses CMake presets with Ninja.
 
-- CMake 3.26 or newer
-- Ninja
-- a C++23 compiler (GCC 13+, Clang 17+, or a compatible MSVC release)
-- Boost headers
-- libcurl when database adapters are enabled
-- clang-format and clang-tidy when their gates are enabled
-- GoogleTest when tests are enabled, unless CMake is allowed to fetch it
+## Recommended wrapper
 
-## Optional dependencies
+```bash
+python3 tools/polygraph.py build --preset cpu-bfs
+python3 tools/polygraph.py build --preset gpu-bfs
+```
 
-| Component | Dependencies |
+## Direct CMake
+
+```bash
+cmake --preset cpu-bfs
+cmake --build --preset cpu-bfs
+```
+
+GPU:
+
+```bash
+cmake --preset gpu-bfs
+cmake --build --preset gpu-bfs
+```
+
+## Presets
+
+| Preset | Purpose |
 |---|---|
-| GPU | CUDA Toolkit, RAFT, RMM, cuGraph |
-| HTTP | Drogon and JsonCpp |
-| gRPC | Protobuf, protoc, gRPC, grpc_cpp_plugin |
-| Documentation | Doxygen and Graphviz |
+| `cpu-core` | core library + tests, no backends/BFS |
+| `cpu-bfs` | release CPU BFS CLI/benchmark |
+| `cpu-bfs-debug` | debug CPU BFS |
+| `gpu-bfs` | release CUDA/cuGraph BFS |
+| `gpu-bfs-debug` | debug CUDA/cuGraph BFS |
+| `http-server` | Drogon server |
+| `http-server-observability` | Drogon + metrics/jemalloc |
+| `grpc-server` | gRPC frontend |
+| `full-cpu` | all CPU applications/tests |
+| `docs` | Doxygen target |
 
-## Primary presets
+The GPU presets in `CMakePresets.json` contain environment-specific CUDA/RAPIDS paths. Adjust `POLYGRAPH_DEPENDENCY_PREFIX` and `CMAKE_CUDA_COMPILER` for another machine.
 
-```bash
-cmake --list-presets
-```
+## PostgreSQL client dependency
 
-- `cpu-core`: debug core libraries and unit tests, without database adapters.
-- `cpu-bfs`: release BFS CLI, Neo4j/ArangoDB adapters, and tests.
-- `cpu-bfs-debug`: debug BFS CLI and backend adapters.
-- `gpu-bfs`: release BFS CLI with CUDA/cuGraph support.
-- `http-server`: CPU HTTP server with Drogon.
-- `grpc-server`: CPU gRPC streaming server.
-- `full-cpu`: BFS CLI plus both server frontends.
-- `docs`: configure only the Doxygen documentation target.
-
-Every configure preset has a build preset with the same name. Test-capable
-presets also have matching test presets.
-
-## Static-analysis tools
-
-The default build requires clang-format and clang-tidy. When several LLVM
-versions are installed, pass exact paths:
+Backend builds include the PostgreSQL adapter and require the official libpq development package. On Ubuntu:
 
 ```bash
-cmake --preset cpu-core \
-  -DCPGDB_CLANG_FORMAT_EXECUTABLE=/usr/bin/clang-format-21 \
-  -DCPGDB_CLANG_TIDY_EXECUTABLE=/usr/bin/clang-tidy-21
+sudo apt install libpq-dev
 ```
 
-For a dependency investigation only, the gates may be disabled explicitly:
+CMake discovers it with `find_package(PostgreSQL)` and links `PostgreSQL::PostgreSQL`. The Python loader separately uses psycopg 3 from `tools/requirements.txt`.
 
-```bash
-cmake --preset cpu-core \
-  -DCPGDB_ENABLE_CLANG_FORMAT=OFF \
-  -DCPGDB_ENABLE_CLANG_TIDY=OFF
-```
+## Dependency fetching
 
-## Offline builds
+By default presets enable `POLYGRAPH_FETCH_DEPENDENCIES`. First configuration therefore needs network access for missing FetchContent dependencies. In an offline build environment, preinstall/provide those dependencies or point CMake at an existing dependency prefix.
 
-Presets do not fetch application dependencies. GoogleTest fetching is enabled by
-default. For a completely offline build, install GoogleTest or provide its CMake
-package and configure with:
+## Quality checks
 
-```bash
--DCPGDB_FETCH_TEST_DEPENDENCIES=OFF
-```
+Presets enable compile-command export and can enable clang-format/clang-tidy. Disable them temporarily during diagnosis with CMake cache overrides, but CI/development builds should run the configured checks.
 
-## GPU configuration
-
-The GPU preset expects package configuration files for RAFT, RMM, and cuGraph.
-A typical RAPIDS Conda environment can be supplied through `CMAKE_PREFIX_PATH`:
-
-```bash
-cmake --preset gpu-bfs \
-  -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-  -DCMAKE_CUDA_ARCHITECTURES=86
-```
-
-The `cpgdb_gpu_dependencies` interface target ensures that any target receiving
-`CPGDB_ENABLE_GPU` also inherits RAFT, RMM, cuGraph, and CUDA include/link data.
-
-## Documentation
-
-```bash
-cmake --preset docs
-cmake --build --preset docs
-```
-
-Open `build/docs/docs/generated/html/index.html` after generation.
+See [STATIC_ANALYSIS.md](STATIC_ANALYSIS.md) and [TESTING.md](TESTING.md).

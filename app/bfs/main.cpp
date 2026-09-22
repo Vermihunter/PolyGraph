@@ -1,105 +1,85 @@
 /**
- * @file src/bfs/main.cpp
- * @brief Implementation for main in the BFS executable module.
+ * @file app/bfs/main.cpp
+ * @brief Command-line BFS application entry point.
  */
-
-//
-// Created by akos on 7. 5. 2026.
-//
 
 #include "algorithms/bfs/BfsExecutor.hpp"
 #include "cli/BfsCli.hpp"
 #include "cli/Cli.hpp"
 #include "cli/CurlGlobalGuard.hpp"
-#include "cli/GraphRuntimeBuilder.hpp"
+#include "events/EventSetup.hpp"
+#include "events/Events.hpp"
+#include "logging/Log.hpp"
 #include "logging/LoggingSetup.hpp"
 #include "utilities/Profiling.hpp"
-#include "utilities/logging.hpp"
 
 #include <exception>
+#include <fstream>
 #include <iostream>
+#include <stdexcept>
 
-#include "logging/sinks/JsonEventSerializer.hpp"
-#include "logging/sinks/SpdlogEventSink.hpp"
-#include "logging/sinks/TextEventSerializer.hpp"
-
-#include <spdlog/sinks/basic_file_sink.h>
-#include <spdlog/sinks/stdout_color_sinks.h>
-
-void add_jsonl_sink(
-    cpgdb::EventLogger& event_logger,
-    const std::string& path) {
-
-    auto file_logger =
-        spdlog::basic_logger_mt(
-            "cpgdb-events-jsonl",
-            path);
-
-    file_logger->set_pattern("%v");
-    file_logger->set_level(spdlog::level::trace);
-
-    auto event_serializer = std::make_unique<cpgdb::JsonEventSerializer>();
-
-    event_logger.add_sink(
-        std::make_unique<cpgdb::SpdlogEventSink>(
-            std::move(file_logger), std::move(event_serializer)));
-}
-
-void add_stdout_sink(cpgdb::EventLogger& event_logger) {
-    auto stdout_logger =
-        spdlog::stdout_color_mt("cpgdb");
-
-    stdout_logger->set_level(spdlog::level::info);
-
-    auto event_serializer = std::make_unique<cpgdb::TextEventSerializer>();
-
-    event_logger.add_sink(
-        std::make_unique<cpgdb::SpdlogEventSink>(
-            std::move(stdout_logger), std::move(event_serializer)));
-}
-
-int main(int argc, char** argv) {
-    cpgdb::runtime::CurlGlobalGuard curl;
-
-    cpgdb::cli::CommandLine program("bfs");
-    cpgdb::cli::add_runtime_arguments(program);
-    cpgdb::cli::add_bfs_arguments(program);
-    cpgdb::cli::add_log_arguments(program);
+int main(int argc, char* argv[]) {
+    polygraph::cli::CommandLine command_line("polygraph-bfs");
+    polygraph::cli::add_runtime_arguments(command_line);
+    polygraph::cli::add_bfs_arguments(command_line);
+    polygraph::cli::add_log_arguments(command_line);
 
     try {
-        program.parse(argc, argv);
-        if (program.help_requested()) {
-            std::cout << program;
+        command_line.parse(argc, argv);
+        if (command_line.help_requested()) {
+            std::cout << command_line;
             return 0;
         }
-    } catch (const std::exception& err) {
-        std::cerr << err.what() << '\n';
-        std::cerr << program;
-        return 1;
-    }
 
-    auto log_options = cpgdb::cli::parse_log_options(program);
-    cpgdb::logger = std::make_unique<cpgdb::EventLogger>(log_options.log_file);
-    add_jsonl_sink(*cpgdb::logger, log_options.log_file);
- //   add_stdout_sink(*cpgdb::logger);
+        const auto observability = polygraph::cli::parse_observability_config(command_line);
+        polygraph::logging::install_logger(observability.logging);
+        polygraph::events::install_collector(observability.events);
 
-    try {
+        polygraph::runtime::CurlGlobalGuard curl;
+        LOG_INFO("Starting BFS CLI");
+        EVENT_INFO("bfs.cli.starting");
 
-        auto ctx = cpgdb::cli::GraphRuntimeBuilder::build(cpgdb::cli::parse_runtime_config(program));
+        const auto context = polygraph::cli::GraphRuntimeBuilder::build(
+            polygraph::cli::parse_runtime_config(command_line));
 
-        cpgdb::BfsExecutor bfs(*ctx->placement_catalog);
+        polygraph::BfsExecutor executor(*context->placement_catalog);
+        const auto result = executor.run(
+            polygraph::cli::parse_source(command_line, *context),
+            polygraph::cli::parse_expand_spec(command_line, *context->schema),
+            polygraph::cli::parse_bfs_options(command_line));
 
-        const cpgdb::NodeRef source = cpgdb::cli::parse_source(program, *ctx);
-        const cpgdb::ExpandSpec expand_spec = cpgdb::cli::parse_expand_spec(program, *ctx->schema);
-        const cpgdb::BfsOptions options = cpgdb::cli::parse_bfs_options(program);
+        const auto& output_file = command_line.string_value("output-file");
+        if (output_file.empty()) {
+            polygraph::cli::write_bfs_distances_csv(std::cout, result);
+        } else {
+            std::ofstream output(output_file);
+            if (!output) {
+                throw std::runtime_error("Could not open BFS output file: " + output_file);
+            }
+            polygraph::cli::write_bfs_distances_csv(output, result);
+            LOG_INFO("BFS result written to {}", output_file);
+        }
+        EVENT_INFO("bfs.cli.completed", {"vertices", result.distance.size()});
+        LOG_INFO("BFS completed with {} discovered vertices", result.distance.size());
 
-        const auto result = bfs.run(source, expand_spec, options);
-        cpgdb::cli::write_bfs_distances_csv(std::cout, result);
-
-        // cpgdb::prof::Profiler::dump(std::cerr);
+        polygraph::events::shutdown();
+        polygraph::logging::shutdown();
         return 0;
+    } catch (const std::exception& error) {
+        EVENT_ERROR("bfs.cli.failed", {"error", error.what()});
+        LOG_ERROR("BFS CLI failed: {}", error.what());
+        polygraph::prof::Profiler::dump(std::cerr);
+        polygraph::events::shutdown();
+        polygraph::logging::shutdown();
+        std::cerr << "polygraph-bfs: " << error.what() << '\n' << command_line;
+        return 1;
     } catch (...) {
-        cpgdb::prof::Profiler::dump(std::cerr);
-        throw;
+        EVENT_ERROR("bfs.cli.failed", {"error", "unknown exception"});
+        LOG_ERROR("BFS CLI failed with an unknown exception");
+        polygraph::prof::Profiler::dump(std::cerr);
+        polygraph::events::shutdown();
+        polygraph::logging::shutdown();
+        std::cerr << "polygraph-bfs: unknown exception\n" << command_line;
+        return 1;
     }
 }

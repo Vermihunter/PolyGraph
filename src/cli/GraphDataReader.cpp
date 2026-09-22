@@ -13,7 +13,7 @@
 #include <string>
 #include <string_view>
 
-namespace cpgdb::cli {
+namespace polygraph::cli {
     namespace {
 
         [[nodiscard]] const json &required_array(const json &object, std::string_view key) {
@@ -162,4 +162,4 @@ namespace cpgdb::cli {
         }
     }
 
-} // namespace cpgdb::cli
+} // namespace polygraph::cli

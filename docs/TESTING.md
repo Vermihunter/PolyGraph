@@ -1,26 +1,24 @@
-# Testing guide {#testing_guide}
+# Testing
 
-## Organization
+## Python tooling
 
-Tests are under `tests/` and use GoogleTest. Each source file builds as a separate
-executable and is registered with `gtest_discover_tests()`. CTest applies the
-`unit` label to every discovered case.
+Run the tooling tests from the repository root:
 
-The suites cover:
+```bash
+pytest -q tools/graphio tools/measurement
+```
 
-- graph value and JSON serialization;
-- expansion filtering and host adjacency behavior;
-- backend registry and placement planning;
-- distributed and native BFS behavior;
-- command-line parsing and error handling;
-- insertion item/query ownership and visitor dispatch;
-- UUID backend encoding;
-- load tracking and projected reservations;
-- type-based and replicated placement policies;
-- insertion batching, failure behavior, and accounting;
-- public-header self-containment.
+Important cache-planner regressions cover:
 
-## Run all tests
+- canonical `graph.jsonl` remains byte-for-byte unchanged;
+- `residency.bin` contains selected cache locations;
+- a second cache configuration reuses `cache-plan.sqlite3` without reindexing;
+- cache selection can change without stale Redis bits leaking between plans;
+- benchmark command construction forwards BFS tuning options.
+
+## C++ tests
+
+Configure a test-enabled preset and use CTest:
 
 ```bash
 cmake --preset cpu-core
@@ -28,32 +26,16 @@ cmake --build --preset cpu-core
 ctest --preset cpu-core
 ```
 
-## Run only unit-labelled tests
+or a broader test-enabled preset such as `full-cpu`.
 
-```bash
-ctest --test-dir build/cpu-core -L unit --output-on-failure
-```
+## Smoke test
 
-## Run one executable or case
+For runtime changes, a useful smoke sequence is:
 
-```bash
-./build/cpu-core/bin/cpgdb_insertion_coordinator_test
-./build/cpu-core/bin/cpgdb_bfs_executor_test \
-  --gtest_filter='*DepthLimits*'
-```
-
-## List tests
-
-```bash
-ctest --test-dir build/cpu-core -N
-./build/cpu-core/bin/cpgdb_insertion_placement_policy_test --gtest_list_tests
-```
-
-## Add a test
-
-1. Add a `tests/<name>_test.cpp` file.
-2. Register it with `cpgdb_add_unit_test()` in `tests/CMakeLists.txt`.
-3. Link the narrowest library that exposes the unit under test.
-4. Prefer parameterized tests for direction, depth, backend, type, and error
-   matrices.
-5. Test observable behavior rather than private implementation details.
+1. prepare a small LDBC/University graph;
+2. load persistent stores;
+3. build two cache plans from the same planning DB;
+4. materialize Redis for one plan;
+5. run BFS with both plans;
+6. compare output hashes/vertex counts;
+7. ensure event files parse as JSONL and operational logs remain text.

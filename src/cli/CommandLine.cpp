@@ -1,65 +1,71 @@
 /**
  * @file src/cli/CommandLine.cpp
- * @brief Implementation for command line in the command-line and runtime configuration module.
+ * @brief p-ranav/argparse-backed command-line adapter.
  */
 
 #include "cli/CommandLine.hpp"
 
-#include <algorithm>
+#include <argparse/argparse.hpp>
+
 #include <charconv>
-#include <iomanip>
+#include <ostream>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
 
-namespace cpgdb::cli {
+namespace polygraph::cli {
 
     struct CommandLine::Impl {
         struct Option {
             std::string key;
             std::vector<std::string> aliases;
-            std::string description;
             std::optional<std::string> default_value;
-            bool required = false;
             bool flag = false;
         };
 
-        std::string program_name;
+        argparse::ArgumentParser parser;
         std::vector<Option> options;
-        std::unordered_map<std::string, std::size_t> option_by_alias;
+        std::unordered_map<std::string, std::size_t> option_by_key;
         std::unordered_map<std::string, std::string> values;
         bool help_requested = false;
 
-        explicit Impl(std::string name) : program_name(std::move(name)) {}
+        explicit Impl(std::string name) :
+            parser(std::move(name), POLYGRAPH_VERSION, argparse::default_arguments::none) {}
 
-        void add_option(Option option) {
-            if (option.key.empty() || option.aliases.empty()) {
+        argparse::Argument &add_argument(const std::vector<std::string> &aliases) {
+            if (aliases.size() == 1) {
+                return parser.add_argument(aliases[0]);
+            }
+            if (aliases.size() == 2) {
+                return parser.add_argument(aliases[0], aliases[1]);
+            }
+            throw std::invalid_argument("CLI options must have one or two aliases");
+        }
+
+        void validate_option(const std::string &key, const std::vector<std::string> &aliases) const {
+            if (key.empty() || aliases.empty()) {
                 throw std::invalid_argument("CLI options require a key and at least one alias");
             }
-            if (std::ranges::any_of(options, [&](const Option &existing) { return existing.key == option.key; })) {
-                throw std::invalid_argument("Duplicate CLI option key: " + option.key);
+            if (option_by_key.contains(key)) {
+                throw std::invalid_argument("Duplicate CLI option key: " + key);
             }
-
-            const auto index = options.size();
-            for (const auto &alias: option.aliases) {
+            for (const auto &alias: aliases) {
                 if (!alias.starts_with('-')) {
                     throw std::invalid_argument("CLI option alias must start with '-': " + alias);
                 }
-                if (!option_by_alias.emplace(alias, index).second) {
-                    throw std::invalid_argument("Duplicate CLI option alias: " + alias);
-                }
             }
-            options.push_back(std::move(option));
         }
 
         const Option &option_for_key(const std::string_view key) const {
-            const auto iterator = std::ranges::find(options, key, &Option::key);
-            if (iterator == options.end()) {
+            const auto iterator = option_by_key.find(std::string(key));
+            if (iterator == option_by_key.end()) {
                 throw std::logic_error("Unknown registered CLI key: " + std::string(key));
             }
-            return *iterator;
+            return options.at(iterator->second);
         }
+
+        static const std::string &lookup_alias(const Option &option) { return option.aliases.back(); }
     };
 
     CommandLine::CommandLine(std::string program_name) : impl_(std::make_unique<Impl>(std::move(program_name))) {
@@ -72,78 +78,63 @@ namespace cpgdb::cli {
 
     void CommandLine::add_value_option(std::string key, std::vector<std::string> aliases, std::string description,
                                        std::optional<std::string> default_value, const bool required) {
-        impl_->add_option({.key = std::move(key),
-                           .aliases = std::move(aliases),
-                           .description = std::move(description),
-                           .default_value = std::move(default_value),
-                           .required = required,
-                           .flag = false});
+        impl_->validate_option(key, aliases);
+        auto &argument = impl_->add_argument(aliases).help(std::move(description));
+        if (default_value) {
+            argument.default_value(*default_value);
+        }
+        if (required) {
+            argument.required();
+        }
+
+        const auto index = impl_->options.size();
+        impl_->option_by_key.emplace(key, index);
+        impl_->options.push_back({.key = std::move(key),
+                                  .aliases = std::move(aliases),
+                                  .default_value = std::move(default_value),
+                                  .flag = false});
     }
 
     void CommandLine::add_flag_option(std::string key, std::vector<std::string> aliases, std::string description) {
-        impl_->add_option({.key = std::move(key),
-                           .aliases = std::move(aliases),
-                           .description = std::move(description),
-                           .default_value = std::string{"false"},
-                           .required = false,
-                           .flag = true});
+        impl_->validate_option(key, aliases);
+        impl_->add_argument(aliases).help(std::move(description)).flag();
+
+        const auto index = impl_->options.size();
+        impl_->option_by_key.emplace(key, index);
+        impl_->options.push_back({.key = std::move(key),
+                                  .aliases = std::move(aliases),
+                                  .default_value = std::string{"false"},
+                                  .flag = true});
     }
 
     void CommandLine::parse(const int argc, char *argv[]) {
         impl_->values.clear();
         impl_->help_requested = false;
 
-        for (const auto &option: impl_->options) {
-            if (option.default_value) {
-                impl_->values.emplace(option.key, *option.default_value);
+        // Do not let required application arguments hide the help screen.
+        for (int index = 1; index < argc; ++index) {
+            const std::string_view token(argv[index]);
+            if (token == "-h" || token == "--help") {
+                impl_->help_requested = true;
+                return;
             }
         }
 
-        for (int index = 1; index < argc; ++index) {
-            std::string token(argv[index]);
-            std::optional<std::string> inline_value;
-            if (const auto equals = token.find('='); equals != std::string::npos) {
-                inline_value = token.substr(equals + 1);
-                token.resize(equals);
-            }
+        try {
+            impl_->parser.parse_args(argc, argv);
+        } catch (const std::exception &error) {
+            throw std::invalid_argument(error.what());
+        }
 
-            const auto alias = impl_->option_by_alias.find(token);
-            if (alias == impl_->option_by_alias.end()) {
-                throw std::invalid_argument("Unknown command-line option: " + token);
-            }
-
-            const auto &option = impl_->options[alias->second];
+        for (const auto &option: impl_->options) {
+            const auto &alias = Impl::lookup_alias(option);
             if (option.flag) {
-                if (inline_value) {
-                    throw std::invalid_argument("Flag does not take a value: " + token);
-                }
-                impl_->values[option.key] = "true";
-                if (option.key == "help")
-                    impl_->help_requested = true;
+                impl_->values.emplace(option.key, impl_->parser.get<bool>(alias) ? "true" : "false");
                 continue;
             }
 
-            std::string value;
-            if (inline_value) {
-                value = std::move(*inline_value);
-            } else {
-                if (index + 1 >= argc) {
-                    throw std::invalid_argument("Missing value for command-line option: " + token);
-                }
-                value = argv[++index];
-                if (impl_->option_by_alias.contains(value)) {
-                    throw std::invalid_argument("Missing value for command-line option: " + token);
-                }
-            }
-            impl_->values[option.key] = std::move(value);
-        }
-
-        if (impl_->help_requested)
-            return;
-
-        for (const auto &option: impl_->options) {
-            if (option.required && !impl_->values.contains(option.key)) {
-                throw std::invalid_argument("Missing required option: " + option.aliases.back());
+            if (option.default_value || impl_->parser.is_used(alias)) {
+                impl_->values.emplace(option.key, impl_->parser.get<std::string>(alias));
             }
         }
     }
@@ -171,44 +162,18 @@ namespace cpgdb::cli {
 
     bool CommandLine::bool_value(const std::string_view key) const {
         const auto &value = string_value(key);
-        if (value == "true" || value == "1")
+        if (value == "true" || value == "1") {
             return true;
-        if (value == "false" || value == "0")
+        }
+        if (value == "false" || value == "0") {
             return false;
+        }
         throw std::invalid_argument("Expected boolean for --" + std::string(key) + ": " + value);
     }
 
     std::string CommandLine::help_text() const {
         std::ostringstream output;
-        output << "Usage: " << impl_->program_name << " [options]\n\nOptions:\n";
-
-        std::size_t alias_width = 0;
-        std::vector<std::string> aliases;
-        aliases.reserve(impl_->options.size());
-        for (const auto &option: impl_->options) {
-            std::ostringstream joined;
-            for (std::size_t i = 0; i < option.aliases.size(); ++i) {
-                if (i != 0)
-                    joined << ", ";
-                joined << option.aliases[i];
-            }
-            if (!option.flag)
-                joined << " <value>";
-            aliases.push_back(joined.str());
-            alias_width = std::max(alias_width, aliases.back().size());
-        }
-
-        for (std::size_t i = 0; i < impl_->options.size(); ++i) {
-            const auto &option = impl_->options[i];
-            output << "  " << std::left << std::setw(static_cast<int>(alias_width + 2)) << aliases[i]
-                   << option.description;
-            if (option.required) {
-                output << " (required)";
-            } else if (option.default_value && !option.flag && !option.default_value->empty()) {
-                output << " [default: " << *option.default_value << ']';
-            }
-            output << '\n';
-        }
+        output << impl_->parser;
         return output.str();
     }
 
@@ -216,4 +181,4 @@ namespace cpgdb::cli {
         return output << command_line.help_text();
     }
 
-} // namespace cpgdb::cli
+} // namespace polygraph::cli

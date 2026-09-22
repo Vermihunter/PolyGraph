@@ -2,7 +2,7 @@ include_guard(GLOBAL)
 
 include(FetchContent)
 
-function(cpgdb_setup_spdlog)
+function(polygraph_setup_spdlog)
     # Already provided by a parent project or another dependency.
     if(TARGET spdlog::spdlog)
         return()
@@ -16,11 +16,11 @@ function(cpgdb_setup_spdlog)
         return()
     endif()
 
-    if(NOT CPGDB_FETCH_DEPENDENCIES)
+    if(NOT POLYGRAPH_FETCH_DEPENDENCIES)
         message(FATAL_ERROR
                 "spdlog was not found.\n"
                 "Install spdlog, provide spdlog_DIR/CMAKE_PREFIX_PATH, or configure with:\n"
-                "  -DCPGDB_FETCH_DEPENDENCIES=ON"
+                "  -DPOLYGRAPH_FETCH_DEPENDENCIES=ON"
         )
     endif()
 

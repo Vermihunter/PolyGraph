@@ -8,8 +8,8 @@
 #include "algorithms/bfs/BfsResult.hpp"
 #include "utilities/json.hpp"
 
-namespace cpgdb {
+namespace polygraph {
 
 void to_json(json& json, const BfsResult& result);
 
-} // namespace cpgdb
+} // namespace polygraph

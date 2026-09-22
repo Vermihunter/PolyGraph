@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace cpgdb::insertion {
+namespace polygraph::insertion {
 
     InsertionItem::InsertionItem(std::shared_ptr<const Node> node) : entity_(std::move(node)) {
         if (!std::get<std::shared_ptr<const Node>>(entity_)) {
@@ -54,4 +54,4 @@ namespace cpgdb::insertion {
                          : std::get<std::shared_ptr<const Edge>>(entity_)->type;
     }
 
-} // namespace cpgdb::insertion
+} // namespace polygraph::insertion
