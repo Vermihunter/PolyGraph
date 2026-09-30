@@ -62,6 +62,16 @@ namespace polygraph {
         }
     }
 
+    bool IGraphStore::can_pull_expand(const ExpandSpec &) const { return false; }
+
+    std::size_t IGraphStore::pull_vertex_count() const { return 0; }
+
+    void IGraphStore::stream_pull_candidates(const ExpandSpec &, int, const BfsOptions &,
+                                             const VertexMembershipPredicate &, const VertexMembershipPredicate &,
+                                             const PullCandidateConsumer &) {
+        throw std::logic_error("Bottom-up/pull expansion is not supported by this graph store");
+    }
+
     bool IGraphStore::can_expand(const NodeRef &source, const ExpandSpec &spec) const {
         const BackendDescriptor &value = descriptor();
         return value.capabilities.supports_batch_neighbors && value.coverage.fresh &&

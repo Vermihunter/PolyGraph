@@ -122,6 +122,8 @@ namespace polygraph::dto {
                 positive_size(json, "neo4jMaxConcurrentRequests", request.neo4jMaxConcurrentRequests);
         request.arangoMaxConcurrentRequests =
                 positive_size(json, "arangoMaxConcurrentRequests", request.arangoMaxConcurrentRequests);
+        request.arangoTraversalBatchSize =
+                positive_size(json, "arangoTraversalBatchSize", request.arangoTraversalBatchSize);
         if (json.isMember("arangoRequestStrategy")) {
             if (!json["arangoRequestStrategy"].isString()) {
                 throw std::invalid_argument("arangoRequestStrategy must be a string");
@@ -132,6 +134,16 @@ namespace polygraph::dto {
                 throw std::invalid_argument("arangoRequestStrategy must be chunked, single, or auto");
             }
         }
+        if (json.isMember("arangoExpandMode")) {
+            if (!json["arangoExpandMode"].isString()) {
+                throw std::invalid_argument("arangoExpandMode must be a string");
+            }
+            request.arangoExpandMode = json["arangoExpandMode"].asString();
+            if (request.arangoExpandMode != "traversal" && request.arangoExpandMode != "edge-index") {
+                throw std::invalid_argument("arangoExpandMode must be traversal or edge-index");
+            }
+        }
+        optional_bool(json, "arangoUsePlanCache", request.arangoUsePlanCache);
         request.arangoSingleRequestMaxFrontier =
                 positive_size(json, "arangoSingleRequestMaxFrontier", request.arangoSingleRequestMaxFrontier);
         request.streamingCandidateBatchSize =
@@ -148,6 +160,30 @@ namespace polygraph::dto {
                 positive_size(json, "backendRequestRetries", request.backendRequestRetries, true);
         request.backendRetryDelayMs = positive_size(json, "backendRetryDelayMs", request.backendRetryDelayMs, true);
         request.threadCount = positive_size(json, "threadCount", request.threadCount);
+
+        if (json.isMember("executionPolicy")) {
+            if (!json["executionPolicy"].isString()) {
+                throw std::invalid_argument("executionPolicy must be a string");
+            }
+            request.executionPolicy = json["executionPolicy"].asString();
+            if (request.executionPolicy != "classic" && request.executionPolicy != "direction-optimized") {
+                throw std::invalid_argument("executionPolicy must be classic or direction-optimized");
+            }
+        }
+        request.pullEnterFrontierPercent =
+                positive_size(json, "pullEnterFrontierPercent", request.pullEnterFrontierPercent);
+        request.pullExitFrontierPercent =
+                positive_size(json, "pullExitFrontierPercent", request.pullExitFrontierPercent, true);
+        request.bitmapFrontierMinSize = positive_size(json, "bitmapFrontierMinSize", request.bitmapFrontierMinSize);
+        request.bitmapFrontierDensityPercent =
+                positive_size(json, "bitmapFrontierDensityPercent", request.bitmapFrontierDensityPercent);
+        if (request.pullEnterFrontierPercent > 100 || request.pullExitFrontierPercent > 100 ||
+            request.pullExitFrontierPercent > request.pullEnterFrontierPercent) {
+            throw std::invalid_argument("pull frontier percentages must satisfy 0 <= exit <= enter <= 100");
+        }
+        if (request.bitmapFrontierDensityPercent > 100) {
+            throw std::invalid_argument("bitmapFrontierDensityPercent must be between 1 and 100");
+        }
 
         if (json.isMember("responseMode")) {
             if (!json["responseMode"].isString()) {

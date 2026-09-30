@@ -53,10 +53,19 @@ namespace polygraph {
                                                       .max_in_flight = options.arango_max_concurrent_requests,
                                                       .priority = options.backend_scheduler_priority,
                                                       .weight = options.backend_scheduler_weight};
+            const std::size_t request_batch_size = options.arango_expand_mode == ArangoExpandMode::Traversal
+                                                           ? options.arango_traversal_batch_size
+                                                           : options.neighbor_batch_size;
+            // A0 graph traversal is intentionally bounded. Reusing A1's Auto/Single strategy can turn a
+            // source collection with tens of thousands of frontier vertices into one enormous traversal query.
+            const ArangoRequestStrategy request_strategy = options.arango_expand_mode == ArangoExpandMode::Traversal
+                                                                   ? ArangoRequestStrategy::Chunked
+                                                                   : options.arango_request_strategy;
             return visitor->get_minimal_neighbors_batch_fast(
-                    frontier, spec, depth, options.neighbor_batch_size, options.arango_max_concurrent_requests,
-                    options.arango_request_strategy, options.arango_single_request_max_frontier,
-                    options.backend_request_retries, options.backend_retry_delay_ms, scheduling);
+                    frontier, spec, depth, request_batch_size, options.arango_max_concurrent_requests, request_strategy,
+                    options.arango_expand_mode, options.arango_use_plan_cache,
+                    options.arango_single_request_max_frontier, options.backend_request_retries,
+                    options.backend_retry_delay_ms, scheduling);
         }
 
         return IGraphStore::get_minimal_neighbors_batch(frontier, spec, depth, options);
@@ -70,15 +79,23 @@ namespace polygraph {
         }
 
         if (auto *visitor = dynamic_cast<ArangoQueryVisitor *>(visitor_.get())) {
+            // A0 deliberately stays on the generic/materialized adapter so the
+            // benchmark measures ArangoDB graph traversal rather than the A1
+            // direct edge-index streaming path.
+            if (options.arango_expand_mode == ArangoExpandMode::Traversal) {
+                IGraphStore::stream_neighbor_candidates(frontier, spec, depth, options, consumer);
+                return;
+            }
+
             const BackendRequestScheduling scheduling{.query_id = options.scheduler_query_id,
                                                       .max_in_flight = options.arango_max_concurrent_requests,
                                                       .priority = options.backend_scheduler_priority,
                                                       .weight = options.backend_scheduler_weight};
             visitor->stream_neighbor_candidates_fast(
                     frontier, spec, depth, options.neighbor_batch_size, options.arango_max_concurrent_requests,
-                    options.arango_request_strategy, options.arango_single_request_max_frontier,
-                    options.backend_request_retries, options.backend_retry_delay_ms,
-                    options.streaming_candidate_batch_size, consumer, scheduling);
+                    options.arango_request_strategy, options.arango_expand_mode, options.arango_use_plan_cache,
+                    options.arango_single_request_max_frontier, options.backend_request_retries,
+                    options.backend_retry_delay_ms, options.streaming_candidate_batch_size, consumer, scheduling);
             return;
         }
 

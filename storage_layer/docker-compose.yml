@@ -102,6 +102,7 @@ services:
       # Memory and caches
       - --rocksdb.block-cache-size=${ARANGO_ROCKSDB_BLOCK_CACHE_SIZE:-3221225472}
       - --cache.size=${ARANGO_CACHE_SIZE:-2147483648}
+      - --cache.high-water-multiplier=${ARANGO_CACHE_HIGH_WATER_MULTIPLIER:-0.56}
       - --rocksdb.total-write-buffer-size=${ARANGO_ROCKSDB_WRITE_BUFFER_SIZE:-1073741824}
       - --rocksdb.enforce-block-cache-size-limit=${ARANGO_ROCKSDB_ENFORCE_CACHE_LIMIT:-true}
 

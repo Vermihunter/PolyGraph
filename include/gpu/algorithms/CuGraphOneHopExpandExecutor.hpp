@@ -9,6 +9,9 @@
 #include "algorithms/bfs/BfsOptions.hpp"
 #include "algorithms/bfs/BfsResult.hpp"
 #include "gpu/data_model/CsrGraphProjection.hpp"
+#include "gpu/algorithms/DeviceCompaction.hpp"
+#include "gpu/GpuTransfer.hpp"
+#include "gpu/GpuBfsWorkspace.hpp"
 #include "data_model/NodeRef.hpp"
 #include "events/Events.hpp"
 
@@ -22,8 +25,10 @@
 #include <raft/random/rng_state.hpp>
 #include <raft/util/cudart_utils.hpp>
 #include <rmm/device_uvector.hpp>
+#include <rmm/exec_policy.hpp>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -63,8 +68,10 @@ class CuGraphOneHopExpandExecutor {
     static OneHopExpansionResult run(CsrGraphProjection<vertex_t, edge_t>& projection,
                                      const std::vector<GlobalId>& source_ids,
                                      const BfsOptions& options) {
+        CudaDeviceGuard device_guard(projection.device_id());
         EVENT_SCOPE_INFO(total_span, "cugraph.one_hop", {"source_count", source_ids.size()},
-                         {"projection_vertices", projection.vertex_count()});
+                         {"projection_vertices", projection.vertex_count()},
+                         {"transfer_mode", std::string(to_string(projection.execution_config().transfer_mode))});
         validate_options(options);
 
         OneHopExpansionResult result;
@@ -124,17 +131,20 @@ class CuGraphOneHopExpandExecutor {
     static void stream_unique_destinations(CsrGraphProjection<vertex_t, edge_t>& projection,
                                            const std::vector<GlobalId>& source_ids,
                                            std::size_t candidate_batch_size,
-                                           Consumer&& consumer) {
+                                           Consumer&& consumer,
+                                           GpuQueryVisitedWorkspace<vertex_t>* query_workspace = nullptr) {
+        CudaDeviceGuard device_guard(projection.device_id());
         EVENT_SCOPE_INFO(total_span, "cugraph.one_hop.unique_destinations",
                          {"source_count", source_ids.size()},
                          {"projection_vertices", projection.vertex_count()},
-                         {"candidate_batch_size", candidate_batch_size});
+                         {"candidate_batch_size", candidate_batch_size},
+                         {"transfer_mode", std::string(to_string(projection.execution_config().transfer_mode))});
         if (candidate_batch_size == 0) {
             throw std::invalid_argument("GPU candidate batch size must be greater than zero");
         }
         if (source_ids.empty()) {
-            total_span.add_end_field("sampled_edges", 0);
-            total_span.add_end_field("unique_destinations", 0);
+            EVENT_SCOPE_INFO_FIELD(total_span, "sampled_edges", 0);
+            EVENT_SCOPE_INFO_FIELD(total_span, "unique_destinations", 0);
             return;
         }
         if (projection.vertex_count() == 0) {
@@ -151,13 +161,29 @@ class CuGraphOneHopExpandExecutor {
                 }
                 h_dense_sources.push_back(projection.mapper().at(source_id));
             }
-            map_span.add_end_field("dense-source-size", h_dense_sources.size());
+            EVENT_SCOPE_INFO_FIELD(map_span, "dense-source-size", h_dense_sources.size());
         }
 
         auto &handle = projection.handle();
         auto stream = handle.get_stream();
         auto d_sources = rmm::device_uvector<vertex_t>(h_dense_sources.size(), stream);
-        raft::update_device(d_sources.data(), h_dense_sources.data(), h_dense_sources.size(), stream);
+        PinnedHostBuffer<vertex_t> pinned_sources;
+        if (projection.execution_config().transfer_mode == GpuTransferMode::Baseline) {
+            raft::update_device(d_sources.data(), h_dense_sources.data(), h_dense_sources.size(), stream);
+        } else {
+            pinned_sources.resize(h_dense_sources.size());
+            std::copy(h_dense_sources.begin(), h_dense_sources.end(), pinned_sources.data());
+            cuda_check(cudaMemcpyAsync(d_sources.data(), pinned_sources.data(),
+                                       h_dense_sources.size() * sizeof(vertex_t), cudaMemcpyHostToDevice, stream),
+                       "one-hop pinned sources H2D");
+        }
+
+        if (query_workspace != nullptr) {
+            EVENT_SCOPE_INFO(visited_source_span, "cugraph.one_hop.query_visited_mark_sources",
+                             {"source_count", d_sources.size()});
+            gpu_detail::mark_visited_device(d_sources.data(), d_sources.size(),
+                                            query_workspace->visited_words.data(), stream);
+        }
 
         raft::device_span<vertex_t const> starting_vertices{d_sources.data(), d_sources.size()};
         std::vector<int32_t> h_fan_out{-1};
@@ -184,55 +210,201 @@ class CuGraphOneHopExpandExecutor {
         (void) d_sampled_offsets;
 
         const std::size_t sampled_edges = d_sampled_dsts.size();
-        total_span.add_end_field("sampled_edges", sampled_edges);
+        EVENT_SCOPE_INFO_FIELD(total_span, "sampled_edges", sampled_edges);
         if (sampled_edges == 0) {
-            total_span.add_end_field("unique_destinations", 0);
+            EVENT_SCOPE_INFO_FIELD(total_span, "unique_destinations", 0);
             return;
         }
 
-        std::vector<vertex_t> h_sampled_dense(sampled_edges);
-        {
-            EVENT_SCOPE_INFO(copy_span, "cugraph.one_hop.destinations_d2h",
-                             {"sampled_edges", sampled_edges},
-                             {"bytes", sampled_edges * sizeof(vertex_t)});
-            raft::update_host(h_sampled_dense.data(), d_sampled_dsts.data(), sampled_edges, stream);
-            handle.sync_stream();
-        }
-
         std::size_t unique_count = 0;
-        {
-            // This header is instantiated by ordinary C++ translation units. CUDA Thrust
-            // algorithms here would dispatch through RAPIDS/CCCL's generic host-compiler
-            // path, which is not implemented. Keep one dense destination ID per sampled
-            // edge, copy only that half of the sampled edge list, and deduplicate in-place.
-            EVENT_SCOPE_INFO(unique_span, "cugraph.one_hop.destination_sort_unique",
-                             {"sampled_edges", sampled_edges}, {"execution", "host"});
-            std::sort(h_sampled_dense.begin(), h_sampled_dense.end());
-            const auto unique_end = std::unique(h_sampled_dense.begin(), h_sampled_dense.end());
-            unique_count = static_cast<std::size_t>(unique_end - h_sampled_dense.begin());
-            unique_span.add_end_field("unique_destinations", unique_count);
-        }
-
-        std::vector<NodeRef> batch;
-        batch.reserve(candidate_batch_size);
         std::size_t emitted_batches = 0;
-        const std::span<const vertex_t> unique_destinations{h_sampled_dense.data(), unique_count};
-        for (const vertex_t dense: unique_destinations) {
-            batch.push_back(NodeRef{.global_id = projection.mapper().global_id(dense),
-                                    .type = unresolved_type_id});
-            if (batch.size() >= candidate_batch_size) {
-                consumer(std::span<const NodeRef>(batch));
-                batch.clear();
-                ++emitted_batches;
+        const auto &execution = projection.execution_config();
+
+        if (!execution.candidate_deduplication) {
+            unique_count = sampled_edges; // emitted count; duplicates are intentionally preserved.
+            if (execution.transfer_mode == GpuTransferMode::Pipelined) {
+                emitted_batches = pipeline_raw_destinations(projection, d_sampled_dsts, candidate_batch_size,
+                                                            execution.d2h_chunk_elements, consumer);
+            } else if (execution.transfer_mode == GpuTransferMode::Pinned) {
+                PinnedHostBuffer<vertex_t> h_sampled_dense(sampled_edges);
+                {
+                    EVENT_SCOPE_INFO(copy_span, "cugraph.one_hop.destinations_d2h",
+                                     {"mode", "pinned+no_dedup"},
+                                     {"sampled_edges", sampled_edges},
+                                     {"bytes", sampled_edges * sizeof(vertex_t)});
+                    cuda_check(cudaMemcpyAsync(h_sampled_dense.data(), d_sampled_dsts.data(),
+                                               sampled_edges * sizeof(vertex_t), cudaMemcpyDeviceToHost, stream),
+                               "one-hop no-dedup destinations D2H");
+                    handle.sync_stream();
+                }
+                emit_dense_candidates(projection, h_sampled_dense.data(), sampled_edges, candidate_batch_size,
+                                      consumer, emitted_batches);
+            } else {
+                std::vector<vertex_t> h_sampled_dense(sampled_edges);
+                {
+                    EVENT_SCOPE_INFO(copy_span, "cugraph.one_hop.destinations_d2h",
+                                     {"mode", "baseline+no_dedup"},
+                                     {"sampled_edges", sampled_edges},
+                                     {"bytes", sampled_edges * sizeof(vertex_t)});
+                    raft::update_host(h_sampled_dense.data(), d_sampled_dsts.data(), sampled_edges, stream);
+                    handle.sync_stream();
+                }
+                emit_dense_candidates(projection, h_sampled_dense.data(), sampled_edges, candidate_batch_size,
+                                      consumer, emitted_batches);
             }
-        }
-        if (!batch.empty()) {
-            consumer(std::span<const NodeRef>(batch));
-            ++emitted_batches;
+        } else if (execution.device_candidate_bitmap_compaction &&
+                   execution.transfer_mode != GpuTransferMode::Baseline) {
+            const std::size_t bitmap_words = (projection.vertex_count() + 31U) / 32U;
+            rmm::device_uvector<std::uint32_t> d_bitmap(bitmap_words, stream);
+            rmm::device_uvector<vertex_t> d_unique(sampled_edges, stream);
+            rmm::device_uvector<std::uint64_t> d_unique_count(1, stream);
+
+            {
+                EVENT_SCOPE_INFO(compact_span, "cugraph.one_hop.destination_device_bitmap_unique",
+                                 {"sampled_edges", sampled_edges},
+                                 {"bitmap_bytes", bitmap_words * sizeof(std::uint32_t)},
+                                 {"execution", "gpu"});
+                cuda_check(cudaMemsetAsync(d_bitmap.data(), 0, bitmap_words * sizeof(std::uint32_t), stream),
+                           "zero one-hop device dedup bitmap");
+                cuda_check(cudaMemsetAsync(d_unique_count.data(), 0, sizeof(std::uint64_t), stream),
+                           "zero one-hop device unique counter");
+                gpu_detail::bitmap_unique_device(d_sampled_dsts.data(), sampled_edges, d_bitmap.data(),
+                                                 d_unique.data(), d_unique_count.data(), stream);
+
+                std::uint64_t h_unique_count = 0;
+                cuda_check(cudaMemcpyAsync(&h_unique_count, d_unique_count.data(), sizeof(h_unique_count),
+                                           cudaMemcpyDeviceToHost, stream),
+                           "one-hop device bitmap unique count D2H");
+                handle.sync_stream();
+                unique_count = static_cast<std::size_t>(h_unique_count);
+                EVENT_SCOPE_INFO_FIELD(compact_span, "unique_destinations", unique_count);
+            }
+
+            if (execution.transfer_mode == GpuTransferMode::Pipelined) {
+                emitted_batches = pipeline_dense_candidates(projection, d_unique, unique_count,
+                                                            candidate_batch_size, execution.d2h_chunk_elements,
+                                                            consumer);
+            } else {
+                PinnedHostBuffer<vertex_t> h_unique(unique_count);
+                {
+                    EVENT_SCOPE_INFO(copy_span, "cugraph.one_hop.destinations_d2h",
+                                     {"mode", "device_bitmap+pinned"},
+                                     {"sampled_edges", sampled_edges},
+                                     {"unique_destinations", unique_count},
+                                     {"bytes", unique_count * sizeof(vertex_t)});
+                    cuda_check(cudaMemcpyAsync(h_unique.data(), d_unique.data(),
+                                               unique_count * sizeof(vertex_t), cudaMemcpyDeviceToHost, stream),
+                               "one-hop bitmap-compacted destinations D2H");
+                    handle.sync_stream();
+                }
+                emit_dense_candidates(projection, h_unique.data(), unique_count, candidate_batch_size,
+                                      consumer, emitted_batches);
+            }
+        } else if (execution.device_candidate_compaction && execution.transfer_mode != GpuTransferMode::Baseline) {
+            {
+                EVENT_SCOPE_INFO(compact_span, "cugraph.one_hop.destination_device_sort_unique",
+                                 {"sampled_edges", sampled_edges}, {"execution", "gpu"});
+                unique_count = gpu_detail::sort_unique_device(
+                    d_sampled_dsts.data(), sampled_edges, stream);
+                EVENT_SCOPE_INFO_FIELD(compact_span, "unique_destinations", unique_count);
+            }
+
+            rmm::device_uvector<vertex_t>* d_emit = &d_sampled_dsts;
+            if (query_workspace != nullptr) {
+                std::uint64_t h_new_count = 0;
+                {
+                    EVENT_SCOPE_INFO(visited_span, "cugraph.one_hop.query_visited_filter",
+                                     {"unique_candidates", unique_count});
+                    cuda_check(cudaMemsetAsync(query_workspace->filtered_count.data(), 0,
+                                               sizeof(std::uint64_t), stream),
+                               "reset query visited filtered counter");
+                    gpu_detail::filter_unvisited_device(
+                            d_sampled_dsts.data(), unique_count,
+                            query_workspace->visited_words.data(),
+                            query_workspace->filtered_candidates.data(),
+                            query_workspace->filtered_count.data(), stream);
+                    cuda_check(cudaMemcpyAsync(&h_new_count, query_workspace->filtered_count.data(),
+                                               sizeof(h_new_count), cudaMemcpyDeviceToHost, stream),
+                               "query visited filtered count D2H");
+                    handle.sync_stream();
+                    EVENT_SCOPE_INFO_FIELD(visited_span, "new_candidates", h_new_count);
+                }
+                unique_count = static_cast<std::size_t>(h_new_count);
+                d_emit = &query_workspace->filtered_candidates;
+            }
+
+            if (execution.transfer_mode == GpuTransferMode::Pipelined) {
+                emitted_batches = pipeline_dense_candidates(projection, *d_emit, unique_count,
+                                                            candidate_batch_size, execution.d2h_chunk_elements,
+                                                            consumer);
+            } else {
+                PinnedHostBuffer<vertex_t> h_unique(unique_count);
+                {
+                    EVENT_SCOPE_INFO(copy_span, "cugraph.one_hop.destinations_d2h",
+                                     {"mode", query_workspace != nullptr
+                                                      ? "device_sort_unique+query_visited+pinned"
+                                                      : "device_sort_unique+pinned"},
+                                     {"sampled_edges", sampled_edges},
+                                     {"unique_destinations", unique_count},
+                                     {"bytes", unique_count * sizeof(vertex_t)});
+                    cuda_check(cudaMemcpyAsync(h_unique.data(), d_emit->data(),
+                                               unique_count * sizeof(vertex_t), cudaMemcpyDeviceToHost, stream),
+                               "one-hop compacted destinations D2H");
+                    handle.sync_stream();
+                }
+                emit_dense_candidates(projection, h_unique.data(), unique_count, candidate_batch_size,
+                                      consumer, emitted_batches);
+            }
+        } else if (execution.transfer_mode == GpuTransferMode::Baseline) {
+            std::vector<vertex_t> h_sampled_dense(sampled_edges);
+            {
+                EVENT_SCOPE_INFO(copy_span, "cugraph.one_hop.destinations_d2h",
+                                 {"mode", "baseline"},
+                                 {"sampled_edges", sampled_edges},
+                                 {"bytes", sampled_edges * sizeof(vertex_t)});
+                raft::update_host(h_sampled_dense.data(), d_sampled_dsts.data(), sampled_edges, stream);
+                handle.sync_stream();
+            }
+
+            {
+                EVENT_SCOPE_INFO(unique_span, "cugraph.one_hop.destination_sort_unique",
+                                 {"sampled_edges", sampled_edges}, {"execution", "host"});
+                std::sort(h_sampled_dense.begin(), h_sampled_dense.end());
+                const auto unique_end = std::unique(h_sampled_dense.begin(), h_sampled_dense.end());
+                unique_count = static_cast<std::size_t>(unique_end - h_sampled_dense.begin());
+            }
+            emit_dense_candidates(projection, h_sampled_dense.data(), unique_count, candidate_batch_size,
+                                  consumer, emitted_batches);
+        } else if (execution.transfer_mode == GpuTransferMode::Pinned) {
+            PinnedHostBuffer<vertex_t> h_sampled_dense(sampled_edges);
+            {
+                EVENT_SCOPE_INFO(copy_span, "cugraph.one_hop.destinations_d2h",
+                                 {"mode", "pinned"},
+                                 {"sampled_edges", sampled_edges},
+                                 {"bytes", sampled_edges * sizeof(vertex_t)});
+                cuda_check(cudaMemcpyAsync(h_sampled_dense.data(), d_sampled_dsts.data(),
+                                           sampled_edges * sizeof(vertex_t), cudaMemcpyDeviceToHost, stream),
+                           "one-hop pinned destinations D2H");
+                handle.sync_stream();
+            }
+            if (execution.dense_candidate_deduplication) {
+                DenseVisitBitmap seen(projection.vertex_count());
+                emit_bitmap_deduplicated(projection, h_sampled_dense.data(), sampled_edges,
+                                         candidate_batch_size, consumer, seen, unique_count, emitted_batches);
+            } else {
+                std::sort(h_sampled_dense.data(), h_sampled_dense.data() + sampled_edges);
+                const auto unique_end = std::unique(h_sampled_dense.data(), h_sampled_dense.data() + sampled_edges);
+                unique_count = static_cast<std::size_t>(unique_end - h_sampled_dense.data());
+                emit_dense_candidates(projection, h_sampled_dense.data(), unique_count, candidate_batch_size,
+                                      consumer, emitted_batches);
+            }
+        } else {
+            std::tie(unique_count, emitted_batches) = pipeline_unique_destinations(
+                projection, d_sampled_dsts, candidate_batch_size, execution.d2h_chunk_elements, consumer);
         }
 
-        total_span.add_end_field("unique_destinations", unique_count);
-        total_span.add_end_field("emitted_batches", emitted_batches);
+        EVENT_SCOPE_INFO_FIELD(total_span, "unique_destinations", unique_count);
+        EVENT_SCOPE_INFO_FIELD(total_span, "emitted_batches", emitted_batches);
     }
 
     template <typename vertex_t,
@@ -252,6 +424,251 @@ class CuGraphOneHopExpandExecutor {
     }
 
   private:
+    template <typename vertex_t, typename edge_t, typename Consumer>
+    static void emit_dense_candidates(const CsrGraphProjection<vertex_t, edge_t>& projection,
+                                      const vertex_t* dense_values,
+                                      const std::size_t count,
+                                      const std::size_t candidate_batch_size,
+                                      Consumer& consumer,
+                                      std::size_t& emitted_batches) {
+        std::vector<NodeRef> batch;
+        batch.reserve(candidate_batch_size);
+        for (std::size_t i = 0; i < count; ++i) {
+            batch.push_back(NodeRef{.global_id = projection.mapper().global_id(dense_values[i]),
+                                    .type = unresolved_type_id});
+            if (batch.size() >= candidate_batch_size) {
+                consumer(std::span<const NodeRef>(batch));
+                batch.clear();
+                ++emitted_batches;
+            }
+        }
+        if (!batch.empty()) {
+            consumer(std::span<const NodeRef>(batch));
+            ++emitted_batches;
+        }
+    }
+
+    template <typename vertex_t, typename edge_t, typename Consumer>
+    static void emit_bitmap_deduplicated(const CsrGraphProjection<vertex_t, edge_t>& projection,
+                                         const vertex_t* dense_values,
+                                         const std::size_t count,
+                                         const std::size_t candidate_batch_size,
+                                         Consumer& consumer,
+                                         DenseVisitBitmap& seen,
+                                         std::size_t& unique_count,
+                                         std::size_t& emitted_batches,
+                                         std::vector<NodeRef>* reusable_batch = nullptr) {
+        std::vector<NodeRef> owned_batch;
+        std::vector<NodeRef>& batch = reusable_batch ? *reusable_batch : owned_batch;
+        if (batch.capacity() < candidate_batch_size) {
+            batch.reserve(candidate_batch_size);
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto dense = static_cast<std::size_t>(dense_values[i]);
+            if (seen.test_and_set(dense)) {
+                continue;
+            }
+            ++unique_count;
+            batch.push_back(NodeRef{.global_id = projection.mapper().global_id(dense_values[i]),
+                                    .type = unresolved_type_id});
+            if (batch.size() >= candidate_batch_size) {
+                consumer(std::span<const NodeRef>(batch));
+                batch.clear();
+                ++emitted_batches;
+            }
+        }
+        if (!reusable_batch && !batch.empty()) {
+            consumer(std::span<const NodeRef>(batch));
+            batch.clear();
+            ++emitted_batches;
+        }
+    }
+
+    template <typename vertex_t, typename edge_t, typename Consumer>
+    static std::size_t pipeline_dense_candidates(CsrGraphProjection<vertex_t, edge_t>& projection,
+                                                 const rmm::device_uvector<vertex_t>& d_values,
+                                                 const std::size_t value_count,
+                                                 const std::size_t candidate_batch_size,
+                                                 const std::size_t requested_chunk,
+                                                 Consumer& consumer) {
+        EVENT_SCOPE_INFO(pipe_span, "cugraph.one_hop.compacted_destinations_d2h_pipeline",
+                         {"unique_destinations", value_count}, {"chunk_elements", requested_chunk});
+        if (value_count == 0) {
+            return 0;
+        }
+        const std::size_t chunk = std::max<std::size_t>(1, std::min(requested_chunk, value_count));
+        auto compute_stream = projection.handle().get_stream();
+
+        CudaEvent compact_done;
+        cuda_check(cudaEventRecord(compact_done.get(), compute_stream), "record one-hop compaction completion");
+        CudaStream copy_streams[2];
+        CudaEvent ready[2];
+        for (auto& copy_stream : copy_streams) {
+            cuda_check(cudaStreamWaitEvent(copy_stream.get(), compact_done.get(), 0),
+                       "one-hop compacted copy stream wait");
+        }
+        PinnedHostBuffer<vertex_t> slots[2]{PinnedHostBuffer<vertex_t>(chunk),
+                                            PinnedHostBuffer<vertex_t>(chunk)};
+        struct PendingChunk { std::size_t count{0}; bool valid{false}; };
+        PendingChunk pending[2];
+        std::size_t emitted_batches = 0;
+
+        auto consume = [&](const int slot) {
+            if (!pending[slot].valid) {
+                return;
+            }
+            cuda_check(cudaEventSynchronize(ready[slot].get()), "wait compacted one-hop D2H chunk");
+            emit_dense_candidates(projection, slots[slot].data(), pending[slot].count,
+                                  candidate_batch_size, consumer, emitted_batches);
+            pending[slot].valid = false;
+        };
+
+        std::size_t chunk_index = 0;
+        for (std::size_t offset = 0; offset < value_count; offset += chunk, ++chunk_index) {
+            const int slot = static_cast<int>(chunk_index & 1U);
+            consume(slot);
+            const std::size_t count = std::min(chunk, value_count - offset);
+            const auto copy_stream = copy_streams[slot].get();
+            cuda_check(cudaMemcpyAsync(slots[slot].data(), d_values.data() + offset,
+                                       count * sizeof(vertex_t), cudaMemcpyDeviceToHost, copy_stream),
+                       "one-hop compacted pipelined destinations D2H");
+            cuda_check(cudaEventRecord(ready[slot].get(), copy_stream),
+                       "record compacted one-hop D2H chunk");
+            pending[slot] = PendingChunk{count, true};
+        }
+        consume(0);
+        consume(1);
+        EVENT_SCOPE_INFO_FIELD(pipe_span, "emitted_batches", emitted_batches);
+        return emitted_batches;
+    }
+
+    template <typename vertex_t, typename edge_t, typename Consumer>
+    static std::size_t pipeline_raw_destinations(CsrGraphProjection<vertex_t, edge_t>& projection,
+                                                 const rmm::device_uvector<vertex_t>& d_destinations,
+                                                 const std::size_t candidate_batch_size,
+                                                 const std::size_t requested_chunk,
+                                                 Consumer& consumer) {
+        EVENT_SCOPE_INFO(pipe_span, "cugraph.one_hop.destinations_d2h_pipeline_no_dedup",
+                         {"sampled_edges", d_destinations.size()},
+                         {"chunk_elements", requested_chunk});
+        const std::size_t total = d_destinations.size();
+        if (total == 0) {
+            return 0;
+        }
+        const std::size_t chunk = std::max<std::size_t>(1, std::min(requested_chunk, total));
+        auto compute_stream = projection.handle().get_stream();
+
+        CudaEvent sampling_done;
+        cuda_check(cudaEventRecord(sampling_done.get(), compute_stream), "record one-hop sampling completion");
+        CudaStream copy_streams[2];
+        CudaEvent ready[2];
+        for (auto& copy_stream : copy_streams) {
+            cuda_check(cudaStreamWaitEvent(copy_stream.get(), sampling_done.get(), 0),
+                       "one-hop no-dedup copy stream wait");
+        }
+        PinnedHostBuffer<vertex_t> slots[2]{PinnedHostBuffer<vertex_t>(chunk),
+                                            PinnedHostBuffer<vertex_t>(chunk)};
+        struct PendingChunk { std::size_t count{0}; bool valid{false}; };
+        PendingChunk pending[2];
+        std::size_t emitted_batches = 0;
+
+        auto consume = [&](const int slot) {
+            if (!pending[slot].valid) {
+                return;
+            }
+            cuda_check(cudaEventSynchronize(ready[slot].get()), "wait no-dedup one-hop D2H chunk");
+            emit_dense_candidates(projection, slots[slot].data(), pending[slot].count,
+                                  candidate_batch_size, consumer, emitted_batches);
+            pending[slot].valid = false;
+        };
+
+        std::size_t chunk_index = 0;
+        for (std::size_t offset = 0; offset < total; offset += chunk, ++chunk_index) {
+            const int slot = static_cast<int>(chunk_index & 1U);
+            consume(slot);
+            const std::size_t count = std::min(chunk, total - offset);
+            const auto copy_stream = copy_streams[slot].get();
+            cuda_check(cudaMemcpyAsync(slots[slot].data(), d_destinations.data() + offset,
+                                       count * sizeof(vertex_t), cudaMemcpyDeviceToHost, copy_stream),
+                       "one-hop no-dedup pipelined destinations D2H");
+            cuda_check(cudaEventRecord(ready[slot].get(), copy_stream),
+                       "record no-dedup one-hop D2H chunk");
+            pending[slot] = PendingChunk{count, true};
+        }
+        consume(0);
+        consume(1);
+        EVENT_SCOPE_INFO_FIELD(pipe_span, "emitted_candidates", total);
+        EVENT_SCOPE_INFO_FIELD(pipe_span, "emitted_batches", emitted_batches);
+        return emitted_batches;
+    }
+
+    template <typename vertex_t, typename edge_t, typename Consumer>
+    static std::pair<std::size_t, std::size_t>
+    pipeline_unique_destinations(CsrGraphProjection<vertex_t, edge_t>& projection,
+                                 const rmm::device_uvector<vertex_t>& d_destinations,
+                                 const std::size_t candidate_batch_size,
+                                 const std::size_t requested_chunk,
+                                 Consumer& consumer) {
+        EVENT_SCOPE_INFO(pipe_span, "cugraph.one_hop.destinations_d2h_pipeline",
+                         {"sampled_edges", d_destinations.size()},
+                         {"chunk_elements", requested_chunk});
+        const std::size_t total = d_destinations.size();
+        const std::size_t chunk = std::max<std::size_t>(1, std::min(requested_chunk, total));
+        auto compute_stream = projection.handle().get_stream();
+
+        CudaEvent sampling_done;
+        cuda_check(cudaEventRecord(sampling_done.get(), compute_stream), "record one-hop sampling completion");
+        CudaStream copy_streams[2];
+        CudaEvent ready[2];
+        for (auto& copy_stream : copy_streams) {
+            cuda_check(cudaStreamWaitEvent(copy_stream.get(), sampling_done.get(), 0),
+                       "one-hop copy stream wait");
+        }
+        PinnedHostBuffer<vertex_t> slots[2]{PinnedHostBuffer<vertex_t>(chunk),
+                                            PinnedHostBuffer<vertex_t>(chunk)};
+        struct PendingChunk { std::size_t count{0}; bool valid{false}; };
+        PendingChunk pending[2];
+
+        DenseVisitBitmap seen(projection.vertex_count());
+        std::vector<NodeRef> batch;
+        batch.reserve(candidate_batch_size);
+        std::size_t unique_count = 0;
+        std::size_t emitted_batches = 0;
+
+        auto consume = [&](const int slot) {
+            if (!pending[slot].valid) {
+                return;
+            }
+            cuda_check(cudaEventSynchronize(ready[slot].get()), "wait one-hop D2H chunk");
+            emit_bitmap_deduplicated(projection, slots[slot].data(), pending[slot].count,
+                                     candidate_batch_size, consumer, seen, unique_count, emitted_batches, &batch);
+            pending[slot].valid = false;
+        };
+
+        std::size_t chunk_index = 0;
+        for (std::size_t offset = 0; offset < total; offset += chunk, ++chunk_index) {
+            const int slot = static_cast<int>(chunk_index & 1U);
+            consume(slot);
+            const std::size_t count = std::min(chunk, total - offset);
+            const auto copy_stream = copy_streams[slot].get();
+            cuda_check(cudaMemcpyAsync(slots[slot].data(), d_destinations.data() + offset,
+                                       count * sizeof(vertex_t), cudaMemcpyDeviceToHost, copy_stream),
+                       "one-hop pipelined destinations D2H");
+            cuda_check(cudaEventRecord(ready[slot].get(), copy_stream), "record one-hop D2H chunk");
+            pending[slot] = PendingChunk{count, true};
+        }
+        consume(0);
+        consume(1);
+        if (!batch.empty()) {
+            consumer(std::span<const NodeRef>(batch));
+            ++emitted_batches;
+        }
+        EVENT_SCOPE_INFO_FIELD(pipe_span, "unique_destinations", unique_count);
+        EVENT_SCOPE_INFO_FIELD(pipe_span, "bitmap_bytes", seen.bytes());
+        EVENT_SCOPE_INFO_FIELD(pipe_span, "emitted_batches", emitted_batches);
+        return {unique_count, emitted_batches};
+    }
+
     struct GpuPhaseTiming {
         float source_h2d_ms{0.0F};
         float sampling_ms{0.0F};
@@ -374,11 +791,22 @@ class CuGraphOneHopExpandExecutor {
             return rmm::device_uvector<vertex_t>(h_dense_sources.size(), stream);
         }();
 
+        PinnedHostBuffer<vertex_t> pinned_sources;
         {
             EVENT_SCOPE_INFO(copy_span, "cugraph.one_hop.source_h2d_enqueue",
+                             {"mode", projection.execution_config().transfer_mode == GpuTransferMode::Baseline
+                                          ? "baseline" : "pinned"},
                              {"source_count", h_dense_sources.size()},
                              {"bytes", h_dense_sources.size() * sizeof(vertex_t)});
-            raft::update_device(d_sources.data(), h_dense_sources.data(), h_dense_sources.size(), stream);
+            if (projection.execution_config().transfer_mode == GpuTransferMode::Baseline) {
+                raft::update_device(d_sources.data(), h_dense_sources.data(), h_dense_sources.size(), stream);
+            } else {
+                pinned_sources.resize(h_dense_sources.size());
+                std::copy(h_dense_sources.begin(), h_dense_sources.end(), pinned_sources.data());
+                cuda_check(cudaMemcpyAsync(d_sources.data(), pinned_sources.data(),
+                                           h_dense_sources.size() * sizeof(vertex_t), cudaMemcpyHostToDevice, stream),
+                           "one-hop pinned sources H2D");
+            }
         }
         gpu_timer.record_after_h2d(stream);
 
@@ -408,20 +836,36 @@ class CuGraphOneHopExpandExecutor {
         const std::size_t edge_count = d_sampled_srcs.size();
         EVENT_SCOPE_INFO_FIELD(total_span, "sampled_edges", edge_count);
 
-        std::vector<vertex_t> h_sampled_srcs;
-        std::vector<vertex_t> h_sampled_dsts;
-        {
-            EVENT_SCOPE_INFO(alloc_span, "cugraph.one_hop.host_result_allocate", {"sampled_edges", edge_count},
-                             {"bytes", edge_count * sizeof(vertex_t) * 2U});
-            h_sampled_srcs.resize(edge_count);
-            h_sampled_dsts.resize(edge_count);
+        const bool use_pinned = projection.execution_config().transfer_mode != GpuTransferMode::Baseline;
+        std::vector<vertex_t> pageable_srcs;
+        std::vector<vertex_t> pageable_dsts;
+        PinnedHostBuffer<vertex_t> pinned_srcs;
+        PinnedHostBuffer<vertex_t> pinned_dsts;
+
+        if (use_pinned) {
+            pinned_srcs.resize(edge_count);
+            pinned_dsts.resize(edge_count);
+        } else {
+            pageable_srcs.resize(edge_count);
+            pageable_dsts.resize(edge_count);
         }
 
         if (edge_count > 0) {
-            EVENT_SCOPE_INFO(copy_span, "cugraph.one_hop.result_d2h_enqueue", {"sampled_edges", edge_count},
+            EVENT_SCOPE_INFO(copy_span, "cugraph.one_hop.result_d2h_enqueue",
+                             {"mode", use_pinned ? "pinned" : "baseline"},
+                             {"sampled_edges", edge_count},
                              {"bytes", edge_count * sizeof(vertex_t) * 2U});
-            raft::update_host(h_sampled_srcs.data(), d_sampled_srcs.data(), edge_count, stream);
-            raft::update_host(h_sampled_dsts.data(), d_sampled_dsts.data(), edge_count, stream);
+            if (use_pinned) {
+                cuda_check(cudaMemcpyAsync(pinned_srcs.data(), d_sampled_srcs.data(), edge_count * sizeof(vertex_t),
+                                           cudaMemcpyDeviceToHost, stream),
+                           "one-hop sampled sources D2H");
+                cuda_check(cudaMemcpyAsync(pinned_dsts.data(), d_sampled_dsts.data(), edge_count * sizeof(vertex_t),
+                                           cudaMemcpyDeviceToHost, stream),
+                           "one-hop sampled destinations D2H");
+            } else {
+                raft::update_host(pageable_srcs.data(), d_sampled_srcs.data(), edge_count, stream);
+                raft::update_host(pageable_dsts.data(), d_sampled_dsts.data(), edge_count, stream);
+            }
         }
         gpu_timer.record_after_d2h(stream);
 
@@ -447,7 +891,9 @@ class CuGraphOneHopExpandExecutor {
             }
         }
 
-        auto result = to_external_result(projection, source_ids, h_sampled_srcs, h_sampled_dsts);
+        const vertex_t* h_src_ptr = use_pinned ? pinned_srcs.data() : pageable_srcs.data();
+        const vertex_t* h_dst_ptr = use_pinned ? pinned_dsts.data() : pageable_dsts.data();
+        auto result = to_external_result(projection, source_ids, h_src_ptr, h_dst_ptr, edge_count);
         EVENT_SCOPE_INFO_FIELD(total_span, "external_edges", result.edges.size());
         return result;
     }
@@ -496,15 +942,16 @@ class CuGraphOneHopExpandExecutor {
     static OneHopExpansionResult
     to_external_result(const CsrGraphProjection<vertex_t, edge_t>& projection,
                        const std::vector<GlobalId>& source_ids,
-                       const std::vector<vertex_t>& h_sampled_srcs,
-                       const std::vector<vertex_t>& h_sampled_dsts) {
+                       const vertex_t* h_sampled_srcs,
+                       const vertex_t* h_sampled_dsts,
+                       const std::size_t edge_count) {
         EVENT_SCOPE_INFO(external_result_conversion_layer, "cugraph.to-external-result-conversion",
-                         {"sampled_edges", h_sampled_srcs.size()});
+                         {"sampled_edges", edge_count});
         OneHopExpansionResult result;
         result.sources = source_ids;
-        result.edges.reserve(h_sampled_srcs.size());
+        result.edges.reserve(edge_count);
 
-        for (std::size_t i = 0; i < h_sampled_srcs.size(); ++i) {
+        for (std::size_t i = 0; i < edge_count; ++i) {
             const GlobalId& external_source = projection.mapper().global_id(h_sampled_srcs[i]);
             const GlobalId& external_destination = projection.mapper().global_id(h_sampled_dsts[i]);
             result.edges.emplace_back(external_source, external_destination);

@@ -31,3 +31,5 @@ include/insertion/
 src/insertion/
 measurements/
 results/
+
+.polygraph/

@@ -1,74 +1,42 @@
-OUT="measurements/sf1-cache-N10-no-prefill"
-N=10
+#!/usr/bin/env bash
+set -euo pipefail
 
-rm -rf "$OUT"
-mkdir -p "$OUT"
+# Convenience wrapper for the cache benchmark runner.
+#
+# Usage:
+#   tools/measurement/benchmark.sh [repetitions]
+#
+# Optional environment overrides:
+#   CFG=config/benchmarks/sf1-gpu-transport.json
+#   OUT=measurements/sf1-gpu-transport/v0-baseline
+#
+# These overrides are used by run_gpu_transport_matrix.sh so every GPU
+# implementation is benchmarked against exactly the cache plan selected by CFG.
 
-export ARANGO_ROCKSDB_AUTO_FILL_INDEX_CACHES_ON_STARTUP=false
+N="${1:-10}"
+CFG="${CFG:-config/benchmarks/sf1-cache-matrix.json}"
+OUT="${OUT:-}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+SKIP_ACTIVATE="${SKIP_ACTIVATE:-0}"
+SKIP_REDIS_START="${SKIP_REDIS_START:-0}"
 
-for CFG in config/cache/benchmark/sf1/*.json; do
-    NAME="$(basename "$CFG" .json)"
+args=(
+  "$PYTHON_BIN" tools/measurement/run_cache_matrix.py
+  --config "$CFG"
+  --repetitions "$N"
+  --overwrite
+)
 
-    echo
-    echo "============================================================"
-    echo "CACHE: $NAME"
-    echo "============================================================"
+if [[ -n "$OUT" ]]; then
+  args+=(--output-dir "$OUT")
+fi
 
-    # 1. Fresh Arango process for every cache configuration.
-    #    Database/index volumes are PRESERVED.
-    #    Auto-fill is OFF.
-    docker compose \
-      --env-file storage_layer/.env \
-      -p polygraph-sf1-0-schema-based \
-      -f storage_layer/docker-compose.yml \
-      -f storage_layer/docker-compose.arango-bfs-warm.yml \
-      up -d --force-recreate --no-deps arangodb
+if [[ "$SKIP_ACTIVATE" == "1" ]]; then
+  args+=(--skip-activate)
+fi
 
-    # 2. Wait until Arango answers requests.
-    until curl -sf \
-      -u root:rootpassword \
-      http://127.0.0.1:8529/_api/version \
-      >/dev/null; do
-        sleep 0.5
-    done
+if [[ "$SKIP_REDIS_START" == "1" ]]; then
+  args+=(--skip-redis-start)
+fi
 
-    # Verify the important setting.
-    ARANGO="$(docker ps --format '{{.Names}}' | grep -i arango | head -1)"
-
-    docker inspect "$ARANGO" --format '{{json .Config.Cmd}}' |
-      jq -r '.[]' |
-      grep 'auto-fill-index-caches'
-
-    # 3. Run this cache configuration.
-    #
-    # benchmark_compact_repeated.py gives:
-    #   - one unmeasured warmup ROUND
-    #   - N measured repetitions
-    #   - no cache planning
-    TMP="$OUT/.tmp-$NAME"
-
-    python3 tools/measurement/benchmark_compact_repeated.py \
-      --domain data/ldbc-snb/sf1_0/schema-based/domain.json \
-      --cache-configs "$CFG" \
-      --cache-root data/ldbc-snb/sf1_0/schema-based/caches \
-      --request-plan config/benchmarks/sf1-cache-http-requests.example.json \
-      --repetitions "$N" \
-      --output-dir "$TMP" \
-      --overwrite
-
-    # 4. Flatten the result.
-    #
-    # From:
-    #   .tmp-04.../04.../events/...
-    #
-    # To:
-    #   OUT/04.../events/...
-    mv "$TMP/$NAME" "$OUT/$NAME"
-
-    # Keep the generated request plan once for reproducibility.
-    if [[ ! -d "$OUT/_benchmark" ]]; then
-        mv "$TMP/_benchmark" "$OUT/_benchmark"
-    fi
-
-    rm -rf "$TMP"
-done
+exec "${args[@]}"

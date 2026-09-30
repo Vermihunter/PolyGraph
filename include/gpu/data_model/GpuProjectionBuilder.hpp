@@ -7,6 +7,7 @@
 #define POLYGRAPH_GPUPROJECTIONBUILDER_HPP
 
 #include "gpu/data_model/CsrGraphProjection.hpp"
+#include "gpu/GpuTransfer.hpp"
 #include "events/Events.hpp"
 
 #include <algorithm>
@@ -41,7 +42,9 @@ class GpuProjectionBuilder {
     from_prebuilt_dense_edgelist(raft::handle_t &handle, std::vector<GlobalId> dense_to_global,
                                  std::vector<vertex_t> dense_sources,
                                  std::vector<vertex_t> dense_destinations,
-                                 const std::uint64_t graph_version) {
+                                 const std::uint64_t graph_version, const int device_id = 0,
+                                 GpuExecutionConfig execution_config = {}) {
+        CudaDeviceGuard device_guard(device_id);
         const auto build_started = std::chrono::steady_clock::now();
         EVENT_SCOPE_INFO(gpu_load, "GPU reusable projection load",
                          {"vertices", dense_to_global.size()}, {"adjacency_pairs", dense_sources.size()});
@@ -66,6 +69,24 @@ class GpuProjectionBuilder {
         std::vector<vertex_t> host_vertices(vertex_count);
         std::iota(host_vertices.begin(), host_vertices.end(), vertex_t{0});
 
+        std::unique_ptr<ScopedHostRegistration> source_registration;
+        std::unique_ptr<ScopedHostRegistration> destination_registration;
+        std::unique_ptr<ScopedHostRegistration> vertex_registration;
+        if (execution_config.pin_projection_build_inputs) {
+            if (!dense_sources.empty()) {
+                source_registration = std::make_unique<ScopedHostRegistration>(
+                    dense_sources.data(), dense_sources.size() * sizeof(vertex_t));
+            }
+            if (!dense_destinations.empty()) {
+                destination_registration = std::make_unique<ScopedHostRegistration>(
+                    dense_destinations.data(), dense_destinations.size() * sizeof(vertex_t));
+            }
+            if (!host_vertices.empty()) {
+                vertex_registration = std::make_unique<ScopedHostRegistration>(
+                    host_vertices.data(), host_vertices.size() * sizeof(vertex_t));
+            }
+        }
+
         auto device_sources = rmm::device_uvector<vertex_t>(edge_count, stream);
         auto device_destinations = rmm::device_uvector<vertex_t>(edge_count, stream);
         auto device_vertices = rmm::device_uvector<vertex_t>(vertex_count, stream);
@@ -86,6 +107,9 @@ class GpuProjectionBuilder {
                            "copy prebuilt projection vertices");
             gpu_cuda_check(cudaStreamSynchronize(stream), "synchronize prebuilt projection input copy");
         }
+        source_registration.reset();
+        destination_registration.reset();
+        vertex_registration.reset();
 
         // Release potentially hundreds of MiB of host COO before cuGraph allocates
         // its construction workspace and final CSR. This materially reduces peak
@@ -125,14 +149,16 @@ class GpuProjectionBuilder {
                 .mirrored_for_undirected_expansion = false,
         };
         return std::make_shared<projection_t>(handle, std::move(graph), std::move(mapper), graph_version,
-                                              std::move(stats));
+                                              std::move(stats), device_id, std::move(execution_config));
     }
 
     template <typename vertex_t, typename edge_t>
     static std::shared_ptr<CsrGraphProjection<vertex_t, edge_t>>
     from_edgelist(raft::handle_t &handle, std::vector<GlobalId> vertex_ids,
                   std::vector<std::pair<GlobalId, GlobalId>> edges, const std::uint64_t graph_version,
-                  const bool mirror_edges_for_undirected_expansion = false) {
+                  const bool mirror_edges_for_undirected_expansion = false, const int device_id = 0,
+                  GpuExecutionConfig execution_config = {}) {
+        CudaDeviceGuard device_guard(device_id);
         const auto build_started = std::chrono::steady_clock::now();
         EVENT_SCOPE_INFO(gpu_load, "GPU data load", {"vertices", vertex_ids.size()}, {"edges", edges.size()},
                          {"mirror_edges", mirror_edges_for_undirected_expansion});
@@ -239,6 +265,24 @@ class GpuProjectionBuilder {
             return rmm::device_uvector<vertex_t>(vertex_count, stream);
         }();
 
+        std::unique_ptr<ScopedHostRegistration> source_registration;
+        std::unique_ptr<ScopedHostRegistration> destination_registration;
+        std::unique_ptr<ScopedHostRegistration> vertex_registration;
+        if (execution_config.pin_projection_build_inputs) {
+            if (!host_sources.empty()) {
+                source_registration = std::make_unique<ScopedHostRegistration>(
+                    host_sources.data(), host_sources.size() * sizeof(vertex_t));
+            }
+            if (!host_destinations.empty()) {
+                destination_registration = std::make_unique<ScopedHostRegistration>(
+                    host_destinations.data(), host_destinations.size() * sizeof(vertex_t));
+            }
+            if (!host_vertices.empty()) {
+                vertex_registration = std::make_unique<ScopedHostRegistration>(
+                    host_vertices.data(), host_vertices.size() * sizeof(vertex_t));
+            }
+        }
+
         {
             EVENT_SCOPE_INFO(copy_span, "cugraph.projection.h2d_enqueue",
                              {"vertex_bytes", vertex_count * sizeof(vertex_t)},
@@ -259,6 +303,9 @@ class GpuProjectionBuilder {
             EVENT_SCOPE_INFO(wait_span, "cugraph.projection.h2d_stream_wait");
             gpu_cuda_check(cudaStreamSynchronize(stream), "synchronize projection input copy");
         }
+        source_registration.reset();
+        destination_registration.reset();
+        vertex_registration.reset();
 
         host_sources.clear();
         host_sources.shrink_to_fit();
@@ -314,7 +361,7 @@ class GpuProjectionBuilder {
         EVENT_SCOPE_INFO_FIELD(gpu_load, "device_edge_input_bytes", stats.device_edge_input_bytes);
         EVENT_SCOPE_INFO_FIELD(gpu_load, "build_duration_seconds", stats.build_duration_seconds);
         return std::make_shared<projection_t>(handle, std::move(graph), std::move(mapper), graph_version,
-                                              std::move(stats));
+                                              std::move(stats), device_id, std::move(execution_config));
     }
 };
 

@@ -128,6 +128,31 @@ namespace polygraph {
         return best->id;
     }
 
+    std::optional<BackendId> PlacementCatalog::choose_pull_backend(const ExpandSpec &spec,
+                                                                   const BfsOptions &options) const {
+        if (!options.allow_partial_acceleration) {
+            return std::nullopt;
+        }
+
+        struct Candidate {
+            BackendId id;
+            int priority;
+        };
+
+        std::optional<Candidate> best;
+        for (const auto &[backend_id, store_value]: backend_registry_->stores()) {
+            if (!store_value || !store_value->can_pull_expand(spec) || store_value->pull_vertex_count() == 0) {
+                continue;
+            }
+            const Candidate candidate{.id = backend_id, .priority = store_value->descriptor().priority};
+            if (!best || candidate.priority < best->priority ||
+                (candidate.priority == best->priority && candidate.id < best->id)) {
+                best = candidate;
+            }
+        }
+        return best ? std::optional<BackendId>{best->id} : std::nullopt;
+    }
+
     PlacementCatalog::LayerExpansionPlan PlacementCatalog::plan_frontier_expansion(std::span<const NodeRef> frontier,
                                                                                    const ExpandSpec &spec,
                                                                                    const BfsOptions &options) const {

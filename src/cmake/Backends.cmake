@@ -27,6 +27,9 @@ target_link_libraries(
 )
 
 if(POLYGRAPH_ENABLE_GPU)
+    target_sources(polygraph_backends PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/gpu/algorithms/DeviceCompaction.cu"
+    )
     target_link_libraries(polygraph_backends PUBLIC polygraph::gpu_dependencies)
     set_property(
         SOURCE "${PROJECT_SOURCE_DIR}/src/infrastructure/ConfiguredGraphStoreFactory.cpp"

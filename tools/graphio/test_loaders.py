@@ -185,6 +185,43 @@ class Neo4jIntegerIdLoadTests(unittest.TestCase):
         self.assertEqual(parameters["rows"][0]["uuid"], to_signed_storage(canonical_global_id(remote_id)))
         self.assertNotIn("uuid", parameters["rows"][0]["props"])
 
+    def test_proxy_insert_splits_transaction_after_memory_pool_failure(self) -> None:
+        memory_error = Neo4jQueryError(
+            [{
+                "code": "Neo.TransientError.General.MemoryPoolOutOfMemoryError",
+                "message": "db.memory.transaction.max threshold reached",
+            }]
+        )
+        adapter = RecordingNeo4jAdapter([
+            memory_error,
+            {"results": [], "errors": []},
+            {"results": [], "errors": []},
+        ])
+        layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
+        nodes = [
+            NodeRecord(layout.encode_local(index + 1, "ArangoDB"), "Proxy", "Neo4J", {"remote-type": "Person"})
+            for index in range(4)
+        ]
+
+        adapter.insert_proxy_nodes(nodes)
+
+        self.assertEqual([len(parameters["rows"]) for _, parameters in adapter.calls], [4, 2, 2])
+
+    def test_adaptive_insert_does_not_hide_non_memory_errors(self) -> None:
+        original_error = Neo4jQueryError(
+            [{"code": "Neo.ClientError.Statement.SyntaxError", "message": "bad query"}]
+        )
+        adapter = RecordingNeo4jAdapter([original_error])
+        layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
+
+        with self.assertRaises(Neo4jQueryError) as raised:
+            adapter.insert_proxy_nodes([
+                NodeRecord(layout.encode_local(1, "ArangoDB"), "Proxy", "Neo4J", {})
+            ])
+
+        self.assertIs(raised.exception, original_error)
+        self.assertEqual(len(adapter.calls), 1)
+
     def test_native_relationship_has_no_uuid_and_uses_stable_payload_local_id(self) -> None:
         layout = BackendLayout(("Neo4J", "ArangoDB", "GPU"))
         source = layout.encode_local(3, "Neo4J")

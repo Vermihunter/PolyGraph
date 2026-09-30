@@ -159,33 +159,8 @@ class Placement:
             if explicit is None
             else self._layout.source_for_code(self._layout.code_for(explicit))
         )
-        try:
-            numeric_id = int(external_id)
-        except ValueError as exc:
-            raise ValueError(
-                f"LDBC node ID must be numeric for scalable direct ID encoding: "
-                f"type={type_name} id={external_id!r}"
-            ) from exc
-        if numeric_id < 0:
-            raise ValueError(
-                f"LDBC node ID must be non-negative: type={type_name} id={numeric_id}"
-            )
-        if type_name not in NODE_TYPE_NAMES:
-            raise ValueError(f"Unknown LDBC node type for ID encoding: {type_name}")
-
-        raw_prefix = numeric_id >> NODE_LOCAL_ID_BITS
-        prefix_key = (type_name, raw_prefix)
-        prefix_code = self._node_prefix_codes.get(prefix_key)
-        if prefix_code is None:
-            prefix_code = len(self._node_prefix_codes)
-            if prefix_code > NODE_PREFIX_MASK:
-                raise OverflowError(
-                    "LDBC node IDs require more than "
-                    f"{NODE_PREFIX_MASK + 1:,} distinct (type, high-32) prefixes; "
-                    "the bounded 48-bit PolyGraph payload prefix table is exhausted"
-                )
-            self._node_prefix_codes[prefix_key] = prefix_code
-
+        numeric_id = int(external_id)
+        prefix_code = self.register_node_prefix(type_name, numeric_id)
         local_component = numeric_id & NODE_LOCAL_ID_MASK
         payload = (prefix_code << NODE_LOCAL_ID_BITS) | local_component
         return self._layout.encode_local(payload, source), source
@@ -231,6 +206,73 @@ class Placement:
             return None
         return self._layout.source_for_code(self._layout.code_for(source))
 
+
+    def register_node_prefix(self, type_name: str, external_id: str | int) -> int:
+        """Reserve the deterministic compact prefix used by ``node_route``.
+
+        Fast preparation only needs the first numeric field of each LDBC node
+        row.  Separating prefix registration from full NodeRecord construction
+        lets it establish the exact same ID mapping without parsing properties
+        or writing graph.jsonl.
+        """
+        if type_name not in NODE_TYPE_NAMES:
+            raise ValueError(f"Unknown LDBC node type for ID encoding: {type_name}")
+        try:
+            numeric_id = int(external_id)
+        except ValueError as exc:
+            raise ValueError(
+                f"LDBC node ID must be numeric for scalable direct ID encoding: "
+                f"type={type_name} id={external_id!r}"
+            ) from exc
+        if numeric_id < 0:
+            raise ValueError(
+                f"LDBC node ID must be non-negative: type={type_name} id={numeric_id}"
+            )
+        prefix_key = (type_name, numeric_id >> NODE_LOCAL_ID_BITS)
+        prefix_code = self._node_prefix_codes.get(prefix_key)
+        if prefix_code is None:
+            prefix_code = len(self._node_prefix_codes)
+            if prefix_code > NODE_PREFIX_MASK:
+                raise OverflowError(
+                    "LDBC node IDs require more than "
+                    f"{NODE_PREFIX_MASK + 1:,} distinct (type, high-32) prefixes; "
+                    "the bounded 48-bit PolyGraph payload prefix table is exhausted"
+                )
+            self._node_prefix_codes[prefix_key] = prefix_code
+        return prefix_code
+
+    def export_node_prefix_table(self) -> list[dict[str, int | str]]:
+        return [
+            {"type": type_name, "rawPrefix": raw_prefix, "code": code}
+            for (type_name, raw_prefix), code in sorted(
+                self._node_prefix_codes.items(), key=lambda item: item[1]
+            )
+        ]
+
+    def install_node_prefix_table(self, entries: list[dict[str, Any]]) -> None:
+        table: dict[tuple[str, int], int] = {}
+        codes: set[int] = set()
+        for entry in entries:
+            type_name = str(entry["type"])
+            raw_prefix = int(entry["rawPrefix"])
+            code = int(entry["code"])
+            if type_name not in NODE_TYPE_NAMES:
+                raise ValueError(f"Unknown node type in prefix table: {type_name}")
+            if not 0 <= code <= NODE_PREFIX_MASK:
+                raise ValueError(f"Node prefix code is out of range: {code}")
+            key = (type_name, raw_prefix)
+            if key in table or code in codes:
+                raise ValueError("Duplicate node prefix table entry")
+            table[key] = code
+            codes.add(code)
+        expected = set(range(len(table)))
+        if codes != expected:
+            raise ValueError(
+                "Node prefix codes must be contiguous starting at zero; "
+                f"got {sorted(codes)[:10]}"
+            )
+        self._node_prefix_codes.clear()
+        self._node_prefix_codes.update(table)
 
     @property
     def node_prefix_count(self) -> int:

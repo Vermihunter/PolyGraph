@@ -77,6 +77,15 @@ class PlacementCatalog {
         const NodeRef& source, const ExpandSpec& spec, const BfsOptions& options) const;
 
     /**
+     * @brief Chooses a complete backend capable of exact bottom-up/pull expansion.
+     *
+     * Partial caches are intentionally excluded: pull must scan the entire candidate
+     * vertex universe or it can miss shortest-path discoveries.
+     */
+    [[nodiscard]] std::optional<BackendId> choose_pull_backend(
+        const ExpandSpec& spec, const BfsOptions& options) const;
+
+    /**
      * @brief Assigns every frontier vertex to the home store encoded in its global ID.
      */
     [[nodiscard]] LayerExpansionPlan plan_frontier_expansion(std::span<const NodeRef> frontier,

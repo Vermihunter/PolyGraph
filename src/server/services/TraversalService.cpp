@@ -53,7 +53,10 @@ namespace polygraph::services {
                                .neighbor_batch_size = request.neighborBatchSize,
                                .neo4j_max_concurrent_requests = request.neo4jMaxConcurrentRequests,
                                .arango_max_concurrent_requests = request.arangoMaxConcurrentRequests,
+                               .arango_traversal_batch_size = request.arangoTraversalBatchSize,
                                .arango_request_strategy = parse_arango_request_strategy(request.arangoRequestStrategy),
+                               .arango_expand_mode = parse_arango_expand_mode(request.arangoExpandMode),
+                               .arango_use_plan_cache = request.arangoUsePlanCache,
                                .arango_single_request_max_frontier = request.arangoSingleRequestMaxFrontier,
                                .streaming_candidate_batch_size = request.streamingCandidateBatchSize,
                                .redis_pipeline_batch_size = request.redisPipelineBatchSize,
@@ -63,6 +66,11 @@ namespace polygraph::services {
                                .backend_request_retries = request.backendRequestRetries,
                                .backend_retry_delay_ms = request.backendRetryDelayMs,
                                .thread_count = request.threadCount};
+            options.execution_policy = parse_bfs_execution_policy(request.executionPolicy);
+            options.pull_enter_frontier_percent = request.pullEnterFrontierPercent;
+            options.pull_exit_frontier_percent = request.pullExitFrontierPercent;
+            options.bitmap_frontier_min_size = request.bitmapFrontierMinSize;
+            options.bitmap_frontier_density_percent = request.bitmapFrontierDensityPercent;
             if (request.maxDepth >= 0) {
                 options.max_depth = static_cast<std::uint32_t>(request.maxDepth);
             }

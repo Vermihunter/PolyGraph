@@ -39,7 +39,10 @@ struct BfsRequest {
     std::size_t neighborBatchSize = 10'000;
     std::size_t neo4jMaxConcurrentRequests = 4;
     std::size_t arangoMaxConcurrentRequests = 4;
+    std::size_t arangoTraversalBatchSize = 1'024;
     std::string arangoRequestStrategy = "chunked";
+    std::string arangoExpandMode = "edge-index";
+    bool arangoUsePlanCache = true;
     std::size_t arangoSingleRequestMaxFrontier = 50'000;
     std::size_t streamingCandidateBatchSize = 16'384;
     std::size_t redisPipelineBatchSize = 20'000;
@@ -50,6 +53,12 @@ struct BfsRequest {
     std::size_t backendRequestRetries = 2;
     std::size_t backendRetryDelayMs = 100;
     std::size_t threadCount = 1;
+
+    std::string executionPolicy = "classic";
+    std::size_t pullEnterFrontierPercent = 5;
+    std::size_t pullExitFrontierPercent = 1;
+    std::size_t bitmapFrontierMinSize = 4'096;
+    std::size_t bitmapFrontierDensityPercent = 10;
     std::string responseMode = "full";
 
     [[nodiscard]] static BfsRequest fromJson(const Json::Value& json);

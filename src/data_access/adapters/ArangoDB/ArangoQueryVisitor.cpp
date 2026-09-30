@@ -188,28 +188,29 @@ namespace polygraph {
         std::vector<MinimalAdjacencyRow>
         get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth,
                                          std::size_t batch_size, std::size_t max_concurrent_requests,
-                                         ArangoRequestStrategy request_strategy,
-                                         std::size_t single_request_max_frontier, std::size_t request_retries,
-                                         std::size_t retry_delay_ms, const BackendRequestScheduling &scheduling) const {
-            /*
-             * Keep the switch here: one active implementation and the other
-             * two preserved immediately below it for reproducible benchmarks.
-             */
+                                         ArangoRequestStrategy request_strategy, ArangoExpandMode expand_mode,
+                                         bool use_plan_cache, std::size_t single_request_max_frontier,
+                                         std::size_t request_retries, std::size_t retry_delay_ms,
+                                         const BackendRequestScheduling &scheduling) const {
+            EVENT_SCOPE_INFO(mode_span, "arango.minimal_neighbors.dispatch",
+                             {"expand_mode", std::string(to_string(expand_mode))}, {"use_plan_cache", use_plan_cache});
 
-            // return get_minimal_neighbors_batch_edge_index_union(frontier, spec, depth);
-            //  return get_minimal_neighbors_batch_traversal_projection(frontier, spec, depth);
+            if (expand_mode == ArangoExpandMode::Traversal) {
+                return get_minimal_neighbors_batch_traversal_projection(frontier, spec, depth, batch_size,
+                                                                        request_strategy, single_request_max_frontier);
+            }
+
             return get_minimal_neighbors_batch_edge_index_projection_async(
-                    frontier, spec, depth, batch_size, max_concurrent_requests, request_strategy,
+                    frontier, spec, depth, batch_size, max_concurrent_requests, request_strategy, use_plan_cache,
                     single_request_max_frontier, request_retries, retry_delay_ms, scheduling);
-            // return get_minimal_neighbors_batch_original(frontier, spec, depth);
         }
 
         void stream_neighbor_candidates_fast(std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth,
                                              std::size_t batch_size, std::size_t max_concurrent_requests,
-                                             ArangoRequestStrategy request_strategy,
-                                             std::size_t single_request_max_frontier, std::size_t request_retries,
-                                             std::size_t retry_delay_ms, std::size_t candidate_batch_size,
-                                             const NeighborBatchConsumer &consumer,
+                                             ArangoRequestStrategy request_strategy, ArangoExpandMode expand_mode,
+                                             bool use_plan_cache, std::size_t single_request_max_frontier,
+                                             std::size_t request_retries, std::size_t retry_delay_ms,
+                                             std::size_t candidate_batch_size, const NeighborBatchConsumer &consumer,
                                              const BackendRequestScheduling &scheduling) const {
             if (!consumer || frontier.empty()) {
                 return;
@@ -217,11 +218,15 @@ namespace polygraph {
             if (batch_size == 0 || max_concurrent_requests == 0 || candidate_batch_size == 0) {
                 throw std::invalid_argument("ArangoDB streaming batch sizes and concurrency must be greater than zero");
             }
+            if (expand_mode != ArangoExpandMode::EdgeIndex) {
+                throw std::logic_error("Arango streaming fast path requires edge-index expansion mode");
+            }
 
             EVENT_SCOPE_INFO(total_span, "arango.stream_neighbor_candidates", {"depth", depth},
                              {"frontier_size", frontier.size()}, {"batch_size", batch_size},
                              {"max_concurrent_requests", max_concurrent_requests},
                              {"request_strategy", std::string(to_string(request_strategy))},
+                             {"expand_mode", std::string(to_string(expand_mode))}, {"use_plan_cache", use_plan_cache},
                              {"single_request_max_frontier", single_request_max_frontier},
                              {"candidate_batch_size", candidate_batch_size},
                              {"worker_strategy", "lazy-request-bounded-thread-work-queue"});
@@ -230,14 +235,14 @@ namespace polygraph {
             {
                 EVENT_SCOPE_INFO(group_span, "arango.stream.group_frontier", {"frontier_size", frontier.size()});
                 grouped_frontier = group_frontier_by_collection(frontier);
-                group_span.add_end_field("source_collection_count", grouped_frontier.size());
+                EVENT_SCOPE_INFO_FIELD(group_span, "source_collection_count", grouped_frontier.size());
             }
 
             std::unordered_set<std::string> materialized_edge_collections;
             {
                 EVENT_SCOPE_INFO(collection_span, "arango.stream.edge_collection_discovery");
                 materialized_edge_collections = available_edge_collections();
-                collection_span.add_end_field("collection_count", materialized_edge_collections.size());
+                EVENT_SCOPE_INFO_FIELD(collection_span, "collection_count", materialized_edge_collections.size());
             }
 
             struct RequestDescriptor {
@@ -305,20 +310,20 @@ namespace polygraph {
                         }
                     }
                 }
-                prepare_span.add_end_field("request_count", descriptors.size());
-                prepare_span.add_end_field("schema_pruned_edge_scan_count", selected_scan_count);
-                prepare_span.add_end_field("single_frontier_group_count", single_frontier_group_count);
-                prepare_span.add_end_field("chunked_frontier_group_count", chunked_frontier_group_count);
+                EVENT_SCOPE_INFO_FIELD(prepare_span, "request_count", descriptors.size());
+                EVENT_SCOPE_INFO_FIELD(prepare_span, "schema_pruned_edge_scan_count", selected_scan_count);
+                EVENT_SCOPE_INFO_FIELD(prepare_span, "single_frontier_group_count", single_frontier_group_count);
+                EVENT_SCOPE_INFO_FIELD(prepare_span, "chunked_frontier_group_count", chunked_frontier_group_count);
                 // Intentionally no request_bytes here: request bodies are built
                 // lazily by workers and destroyed immediately after each request.
-                prepare_span.add_end_field("pre_serialized_request_bytes", 0);
+                EVENT_SCOPE_INFO_FIELD(prepare_span, "pre_serialized_request_bytes", 0);
             }
 
-            total_span.add_end_field("request_count", descriptors.size());
-            total_span.add_end_field("schema_pruned_edge_scan_count", selected_scan_count);
-            total_span.add_end_field("single_frontier_group_count", single_frontier_group_count);
-            total_span.add_end_field("chunked_frontier_group_count", chunked_frontier_group_count);
-            total_span.add_end_field("pre_serialized_request_bytes", 0);
+            EVENT_SCOPE_INFO_FIELD(total_span, "request_count", descriptors.size());
+            EVENT_SCOPE_INFO_FIELD(total_span, "schema_pruned_edge_scan_count", selected_scan_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "single_frontier_group_count", single_frontier_group_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "chunked_frontier_group_count", chunked_frontier_group_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "pre_serialized_request_bytes", 0);
             if (descriptors.empty()) {
                 return;
             }
@@ -336,7 +341,7 @@ namespace polygraph {
 
             const auto worker_body = [this, &descriptors, &next_request, &completed_requests, &response_rows,
                                       &request_bytes, &stop_requested, &worker_errors, spec, request_retries,
-                                      retry_delay_ms, candidate_batch_size, consumer,
+                                      retry_delay_ms, candidate_batch_size, consumer, use_plan_cache,
                                       scheduling](const std::size_t worker_index) {
                 EVENT_SCOPE_INFO(worker_span, "arango.stream.worker", {"worker_index", worker_index});
                 std::size_t local_completed = 0;
@@ -384,9 +389,10 @@ namespace polygraph {
                                                              {"targetType", descriptor.target_type},
                                                              {"frontier", std::move(frontier_json)}};
                                         request_body = build_minimal_cursor_request_body(
-                                                compact_edge_index_candidate_query(descriptor.outbound), bind_vars);
+                                                compact_edge_index_candidate_query(descriptor.outbound), bind_vars,
+                                                use_plan_cache);
                                         current_request_bytes = request_body.size();
-                                        construct_span.add_end_field("request_bytes", current_request_bytes);
+                                        EVENT_SCOPE_INFO_FIELD(construct_span, "request_bytes", current_request_bytes);
                                     }
                                     return send_minimal_request_body_to_consumer(
                                             http, request_body, descriptor.vertex_collection, descriptor.count, spec,
@@ -397,16 +403,16 @@ namespace polygraph {
                                 local_rows += rows;
                                 completed_requests.fetch_add(1, std::memory_order_relaxed);
                                 response_rows.fetch_add(rows, std::memory_order_relaxed);
-                                request_span.add_end_field("attempts", attempt + 1);
-                                request_span.add_end_field("request_bytes", current_request_bytes);
-                                request_span.add_end_field("response_row_count", rows);
-                                request_span.add_end_field("status", "ok");
+                                EVENT_SCOPE_INFO_FIELD(request_span, "attempts", attempt + 1);
+                                EVENT_SCOPE_INFO_FIELD(request_span, "request_bytes", current_request_bytes);
+                                EVENT_SCOPE_INFO_FIELD(request_span, "response_row_count", rows);
+                                EVENT_SCOPE_INFO_FIELD(request_span, "status", "ok");
                                 break;
                             } catch (const std::exception &error) {
                                 if (attempt >= request_retries) {
-                                    request_span.add_end_field("attempts", attempt + 1);
-                                    request_span.add_end_field("status", "failed");
-                                    request_span.add_end_field("error", error.what());
+                                    EVENT_SCOPE_INFO_FIELD(request_span, "attempts", attempt + 1);
+                                    EVENT_SCOPE_INFO_FIELD(request_span, "status", "failed");
+                                    EVENT_SCOPE_INFO_FIELD(request_span, "error", error.what());
                                     throw;
                                 }
                                 http = make_http_client();
@@ -417,15 +423,15 @@ namespace polygraph {
                             }
                         }
                     }
-                    worker_span.add_end_field("completed_request_count", local_completed);
-                    worker_span.add_end_field("response_row_count", local_rows);
-                    worker_span.add_end_field("status", "ok");
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "completed_request_count", local_completed);
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "response_row_count", local_rows);
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "status", "ok");
                 } catch (...) {
                     stop_requested.store(true, std::memory_order_relaxed);
                     worker_errors[worker_index] = std::current_exception();
-                    worker_span.add_end_field("completed_request_count", local_completed);
-                    worker_span.add_end_field("response_row_count", local_rows);
-                    worker_span.add_end_field("status", "failed");
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "completed_request_count", local_completed);
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "response_row_count", local_rows);
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "status", "failed");
                 }
             };
 
@@ -442,16 +448,17 @@ namespace polygraph {
 
             for (const auto &error: worker_errors) {
                 if (error) {
-                    total_span.add_end_field("status", "failed");
+                    EVENT_SCOPE_INFO_FIELD(total_span, "status", "failed");
                     std::rethrow_exception(error);
                 }
             }
 
-            total_span.add_end_field("completed_request_count", completed_requests.load(std::memory_order_relaxed));
-            total_span.add_end_field("response_row_count", response_rows.load(std::memory_order_relaxed));
-            total_span.add_end_field("request_bytes", request_bytes.load(std::memory_order_relaxed));
-            total_span.add_end_field("worker_count", worker_count);
-            total_span.add_end_field("status", "ok");
+            EVENT_SCOPE_INFO_FIELD(total_span, "completed_request_count",
+                                   completed_requests.load(std::memory_order_relaxed));
+            EVENT_SCOPE_INFO_FIELD(total_span, "response_row_count", response_rows.load(std::memory_order_relaxed));
+            EVENT_SCOPE_INFO_FIELD(total_span, "request_bytes", request_bytes.load(std::memory_order_relaxed));
+            EVENT_SCOPE_INFO_FIELD(total_span, "worker_count", worker_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "status", "ok");
         }
 
         query_result_t visit(const InsertQuery &query) override {
@@ -606,49 +613,45 @@ namespace polygraph {
                 parse_minimal_response_into_rows(response, rows, row_by_source, spec);
             }
 
-            total_span.add_end_field("result_source_rows", rows.size());
+            EVENT_SCOPE_INFO_FIELD(total_span, "result_source_rows", rows.size());
             return rows;
         }
 
-        std::vector<MinimalAdjacencyRow>
-        get_minimal_neighbors_batch_traversal_projection(std::span<const NodeRef> frontier, const ExpandSpec &spec,
-                                                         int depth) const {
+        std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_traversal_projection(
+                std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth, std::size_t batch_size,
+                ArangoRequestStrategy request_strategy, std::size_t single_request_max_frontier) const {
             (void) depth;
 
             if (frontier.empty()) {
                 return {};
             }
+            if (batch_size == 0) {
+                throw std::invalid_argument("ArangoDB traversal batch size must be greater than zero");
+            }
 
             EVENT_SCOPE_INFO(total_span, "arango.minimal_neighbors.traversal_projection",
-                             {"frontier_size", frontier.size()});
+                             {"frontier_size", frontier.size()}, {"batch_size", batch_size},
+                             {"request_strategy", std::string(to_string(request_strategy))},
+                             {"single_request_max_frontier", single_request_max_frontier});
 
             auto [rows, row_by_source] = initialize_minimal_rows(frontier);
             const auto grouped_frontier = group_frontier_by_collection(frontier);
             const auto edge_type_ids = edge_types_for_query(spec);
+            std::size_t request_count = 0;
 
             for (const auto &[vertex_collection, source_group]: grouped_frontier) {
                 if (source_group.empty() || edge_type_ids.empty()) {
                     continue;
                 }
 
-                json frontier_json = json::array();
-                frontier_json.get_ref<json::array_t &>().reserve(source_group.size());
-
-                for (const auto &source: source_group) {
-                    frontier_json.push_back(global_id_to_string(source.global_id));
-                }
-
-                json bind_vars{{"@vertexCollection", vertex_collection}, {"frontier", std::move(frontier_json)}};
+                json bind_template{{"@vertexCollection", vertex_collection}};
                 std::string edge_collections;
-
                 for (std::size_t edge_index = 0; edge_index < edge_type_ids.size(); ++edge_index) {
                     const std::string bind_name = "edgeCollection" + std::to_string(edge_index);
-                    bind_vars["@" + bind_name] = db_context_.schema->edge_type(edge_type_ids[edge_index]).name;
-
+                    bind_template["@" + bind_name] = db_context_.schema->edge_type(edge_type_ids[edge_index]).name;
                     if (!edge_collections.empty()) {
                         edge_collections += ", ";
                     }
-
                     edge_collections += "@@" + bind_name;
                 }
 
@@ -665,11 +668,30 @@ namespace polygraph {
                                           "  neighbor[\"remote-type\"]"
                                           "]";
 
-                const json response = send_req(query, bind_vars);
-                parse_minimal_response_into_rows(response, rows, row_by_source, spec);
+                const bool use_single = request_strategy == ArangoRequestStrategy::Single ||
+                                        (request_strategy == ArangoRequestStrategy::Auto &&
+                                         source_group.size() <= single_request_max_frontier);
+                const std::size_t effective_batch_size = use_single ? source_group.size() : batch_size;
+
+                for (std::size_t offset = 0; offset < source_group.size(); offset += effective_batch_size) {
+                    const std::size_t count = std::min(effective_batch_size, source_group.size() - offset);
+                    json frontier_json = json::array();
+                    auto &frontier_array = frontier_json.get_ref<json::array_t &>();
+                    frontier_array.reserve(count);
+                    for (std::size_t i = 0; i < count; ++i) {
+                        frontier_array.emplace_back(global_id_to_string(source_group[offset + i].global_id));
+                    }
+
+                    json bind_vars = bind_template;
+                    bind_vars["frontier"] = std::move(frontier_json);
+                    const json response = send_req(query, bind_vars);
+                    parse_minimal_response_into_rows(response, rows, row_by_source, spec);
+                    ++request_count;
+                }
             }
 
-            total_span.add_end_field("result_source_rows", rows.size());
+            EVENT_SCOPE_INFO_FIELD(total_span, "request_count", request_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "result_source_rows", rows.size());
             return rows;
         }
 
@@ -757,15 +779,21 @@ namespace polygraph {
         }
 
         [[nodiscard]] static std::string build_minimal_cursor_request_body(const std::string &query,
-                                                                           const json &bind_vars) {
-            // Keep the server cursor bounded. The response parser consumes rows while
-            // parsing, so the client does not retain a second full JSON result tree.
-            return json{{"query", query}, {"bindVars", bind_vars}, {"batchSize", 50000}, {"cache", false}}.dump();
+                                                                           const json &bind_vars,
+                                                                           const bool use_plan_cache = false) {
+            // Result caching is deliberately disabled: frontiers change on every BFS
+            // layer. A1 can still reuse the query *execution plan*, which avoids
+            // repeated parse/optimize work while allowing bind values to change.
+            json request{{"query", query}, {"bindVars", bind_vars}, {"batchSize", 50000}, {"cache", false}};
+            if (use_plan_cache) {
+                request["options"] = json{{"usePlanCache", true}};
+            }
+            return request.dump();
         }
 
         std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_edge_index_projection_async(
                 std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth, std::size_t batch_size,
-                std::size_t max_concurrent_requests, ArangoRequestStrategy request_strategy,
+                std::size_t max_concurrent_requests, ArangoRequestStrategy request_strategy, bool use_plan_cache,
                 std::size_t single_request_max_frontier, std::size_t request_retries, std::size_t retry_delay_ms,
                 const BackendRequestScheduling &scheduling) const {
             (void) depth;
@@ -780,13 +808,13 @@ namespace polygraph {
                 throw std::invalid_argument("ArangoDB max concurrent requests must be greater than zero");
             }
 
-            EVENT_SCOPE_INFO(total_span, "arango.minimal_neighbors.edge_index_bounded",
-                             {"frontier_size", frontier.size()}, {"batch_size", batch_size},
-                             {"max_concurrent_requests", max_concurrent_requests}, {"request_retries", request_retries},
-                             {"request_strategy", std::string(to_string(request_strategy))},
-                             {"single_request_max_frontier", single_request_max_frontier},
-                             {"query_strategy", "single-edge-index-requests"},
-                             {"worker_strategy", "bounded-thread-work-queue"});
+            EVENT_SCOPE_INFO(
+                    total_span, "arango.minimal_neighbors.edge_index_bounded", {"frontier_size", frontier.size()},
+                    {"batch_size", batch_size}, {"max_concurrent_requests", max_concurrent_requests},
+                    {"request_retries", request_retries},
+                    {"request_strategy", std::string(to_string(request_strategy))}, {"use_plan_cache", use_plan_cache},
+                    {"single_request_max_frontier", single_request_max_frontier},
+                    {"query_strategy", "single-edge-index-requests"}, {"worker_strategy", "bounded-thread-work-queue"});
 
             auto [rows, row_by_source] = initialize_minimal_rows(frontier);
 
@@ -795,14 +823,14 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(group_span, "arango.minimal_neighbors.group_frontier",
                                  {"frontier_size", frontier.size()});
                 grouped_frontier = group_frontier_by_collection(frontier);
-                group_span.add_end_field("source_collection_count", grouped_frontier.size());
+                EVENT_SCOPE_INFO_FIELD(group_span, "source_collection_count", grouped_frontier.size());
             }
 
             std::unordered_set<std::string> materialized_edge_collections;
             {
                 EVENT_SCOPE_INFO(collection_span, "arango.minimal_neighbors.edge_collection_discovery");
                 materialized_edge_collections = available_edge_collections();
-                collection_span.add_end_field("collection_count", materialized_edge_collections.size());
+                EVENT_SCOPE_INFO_FIELD(collection_span, "collection_count", materialized_edge_collections.size());
             }
 
             struct ArangoPreparedBatch {
@@ -885,7 +913,7 @@ namespace polygraph {
                                            {"targetType", scan.target_type},
                                            {"frontier", frontier_json}};
                             std::string request_body = build_minimal_cursor_request_body(
-                                    compact_edge_index_query(scan.outbound), bind_vars);
+                                    compact_edge_index_query(scan.outbound), bind_vars, use_plan_cache);
                             prepared_request_bytes += request_body.size();
 
                             prepared_batches.push_back(
@@ -903,25 +931,25 @@ namespace polygraph {
                     }
                 }
 
-                prepare_span.add_end_field("request_count", prepared_batches.size());
-                prepare_span.add_end_field("request_bytes", prepared_request_bytes);
-                prepare_span.add_end_field("single_frontier_group_count", single_frontier_group_count);
-                prepare_span.add_end_field("chunked_frontier_group_count", chunked_frontier_group_count);
-                prepare_span.add_end_field("schema_pruned_edge_scan_count", selected_scan_count);
-                prepare_span.add_end_field("unpruned_edge_scan_upper_bound", unpruned_scan_count);
+                EVENT_SCOPE_INFO_FIELD(prepare_span, "request_count", prepared_batches.size());
+                EVENT_SCOPE_INFO_FIELD(prepare_span, "request_bytes", prepared_request_bytes);
+                EVENT_SCOPE_INFO_FIELD(prepare_span, "single_frontier_group_count", single_frontier_group_count);
+                EVENT_SCOPE_INFO_FIELD(prepare_span, "chunked_frontier_group_count", chunked_frontier_group_count);
+                EVENT_SCOPE_INFO_FIELD(prepare_span, "schema_pruned_edge_scan_count", selected_scan_count);
+                EVENT_SCOPE_INFO_FIELD(prepare_span, "unpruned_edge_scan_upper_bound", unpruned_scan_count);
             }
 
-            total_span.add_end_field("request_count", prepared_batches.size());
-            total_span.add_end_field("request_bytes", prepared_request_bytes);
-            total_span.add_end_field("single_frontier_group_count", single_frontier_group_count);
-            total_span.add_end_field("chunked_frontier_group_count", chunked_frontier_group_count);
-            total_span.add_end_field("schema_pruned_edge_scan_count", selected_scan_count);
-            total_span.add_end_field("unpruned_edge_scan_upper_bound", unpruned_scan_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "request_count", prepared_batches.size());
+            EVENT_SCOPE_INFO_FIELD(total_span, "request_bytes", prepared_request_bytes);
+            EVENT_SCOPE_INFO_FIELD(total_span, "single_frontier_group_count", single_frontier_group_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "chunked_frontier_group_count", chunked_frontier_group_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "schema_pruned_edge_scan_count", selected_scan_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "unpruned_edge_scan_upper_bound", unpruned_scan_count);
 
             if (prepared_batches.empty()) {
-                total_span.add_end_field("completed_request_count", 0);
-                total_span.add_end_field("response_row_count", 0);
-                total_span.add_end_field("result_source_rows", rows.size());
+                EVENT_SCOPE_INFO_FIELD(total_span, "completed_request_count", 0);
+                EVENT_SCOPE_INFO_FIELD(total_span, "response_row_count", 0);
+                EVENT_SCOPE_INFO_FIELD(total_span, "result_source_rows", rows.size());
                 return rows;
             }
 
@@ -984,15 +1012,15 @@ namespace polygraph {
                                 ++stats.completed_requests;
                                 stats.response_row_count += response_rows;
                                 ++worker_request_count;
-                                request_span.add_end_field("attempts", attempt + 1);
-                                request_span.add_end_field("response_row_count", response_rows);
-                                request_span.add_end_field("status", "ok");
+                                EVENT_SCOPE_INFO_FIELD(request_span, "attempts", attempt + 1);
+                                EVENT_SCOPE_INFO_FIELD(request_span, "response_row_count", response_rows);
+                                EVENT_SCOPE_INFO_FIELD(request_span, "status", "ok");
                                 return;
                             } catch (const std::exception &error) {
                                 if (attempt >= request_retries) {
-                                    request_span.add_end_field("attempts", attempt + 1);
-                                    request_span.add_end_field("status", "failed");
-                                    request_span.add_end_field("error", error.what());
+                                    EVENT_SCOPE_INFO_FIELD(request_span, "attempts", attempt + 1);
+                                    EVENT_SCOPE_INFO_FIELD(request_span, "status", "failed");
+                                    EVENT_SCOPE_INFO_FIELD(request_span, "error", error.what());
                                     throw std::runtime_error(
                                             "ArangoDB neighbor batch " + std::to_string(prepared.batch_index + 1) +
                                             "/" + std::to_string(prepared.batch_count) + " for collection '" +
@@ -1023,19 +1051,19 @@ namespace polygraph {
                         execute_batch(prepared_index);
                     }
 
-                    worker_span.add_end_field("request_count", worker_request_count);
-                    worker_span.add_end_field("completed_request_count", stats.completed_requests);
-                    worker_span.add_end_field("response_row_count", stats.response_row_count);
-                    worker_span.add_end_field("status", "ok");
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "request_count", worker_request_count);
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "completed_request_count", stats.completed_requests);
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "response_row_count", stats.response_row_count);
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "status", "ok");
                 } catch (...) {
                     // Stop handing out new work once one worker has failed. Requests
                     // already in flight are allowed to finish before the join below.
                     stop_requested.store(true, std::memory_order_relaxed);
                     worker_errors[worker_index] = std::current_exception();
-                    worker_span.add_end_field("request_count", worker_request_count);
-                    worker_span.add_end_field("completed_request_count", stats.completed_requests);
-                    worker_span.add_end_field("response_row_count", stats.response_row_count);
-                    worker_span.add_end_field("status", "failed");
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "request_count", worker_request_count);
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "completed_request_count", stats.completed_requests);
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "response_row_count", stats.response_row_count);
+                    EVENT_SCOPE_INFO_FIELD(worker_span, "status", "failed");
                 }
             };
 
@@ -1059,12 +1087,12 @@ namespace polygraph {
                                 worker.join();
                             }
                         }
-                        worker_creation_span.add_end_field("created_worker_count", workers.size());
-                        worker_creation_span.add_end_field("status", "failed");
+                        EVENT_SCOPE_INFO_FIELD(worker_creation_span, "created_worker_count", workers.size());
+                        EVENT_SCOPE_INFO_FIELD(worker_creation_span, "status", "failed");
                         throw;
                     }
-                    worker_creation_span.add_end_field("created_worker_count", workers.size());
-                    worker_creation_span.add_end_field("status", "ok");
+                    EVENT_SCOPE_INFO_FIELD(worker_creation_span, "created_worker_count", workers.size());
+                    EVENT_SCOPE_INFO_FIELD(worker_creation_span, "status", "ok");
                 }
 
                 for (auto &worker: workers) {
@@ -1072,15 +1100,14 @@ namespace polygraph {
                         worker.join();
                     }
                 }
-                worker_execution_span.add_end_field("joined_worker_count", workers.size());
-                worker_execution_span.add_end_field(
-                        "claimed_request_count",
-                        std::min(next_batch.load(std::memory_order_relaxed), prepared_batches.size()));
+                EVENT_SCOPE_INFO_FIELD(worker_execution_span, "joined_worker_count", workers.size());
+                EVENT_SCOPE_INFO_FIELD(worker_execution_span, "claimed_request_count",
+                                       std::min(next_batch.load(std::memory_order_relaxed), prepared_batches.size()));
             }
 
             for (const auto &worker_error: worker_errors) {
                 if (worker_error != nullptr) {
-                    total_span.add_end_field("status", "failed");
+                    EVENT_SCOPE_INFO_FIELD(total_span, "status", "failed");
                     std::rethrow_exception(worker_error);
                 }
             }
@@ -1094,16 +1121,16 @@ namespace polygraph {
                     total_response_rows += result.response_row_count;
                     merge_minimal_rows(std::move(result.rows), rows, row_by_source);
                 }
-                merge_span.add_end_field("completed_request_count", completed_requests);
-                merge_span.add_end_field("response_row_count", total_response_rows);
-                merge_span.add_end_field("result_source_rows", rows.size());
+                EVENT_SCOPE_INFO_FIELD(merge_span, "completed_request_count", completed_requests);
+                EVENT_SCOPE_INFO_FIELD(merge_span, "response_row_count", total_response_rows);
+                EVENT_SCOPE_INFO_FIELD(merge_span, "result_source_rows", rows.size());
             }
 
-            total_span.add_end_field("completed_request_count", completed_requests);
-            total_span.add_end_field("response_row_count", total_response_rows);
-            total_span.add_end_field("worker_count", worker_count);
-            total_span.add_end_field("result_source_rows", rows.size());
-            total_span.add_end_field("status", "ok");
+            EVENT_SCOPE_INFO_FIELD(total_span, "completed_request_count", completed_requests);
+            EVENT_SCOPE_INFO_FIELD(total_span, "response_row_count", total_response_rows);
+            EVENT_SCOPE_INFO_FIELD(total_span, "worker_count", worker_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "result_source_rows", rows.size());
+            EVENT_SCOPE_INFO_FIELD(total_span, "status", "ok");
             return rows;
         }
 
@@ -1387,7 +1414,7 @@ namespace polygraph {
             {
                 EVENT_SCOPE_INFO(lock_span, "arango.collections.edge_cache_lock");
                 lock = std::unique_lock<std::mutex>(collection_cache_mutex_);
-                lock_span.add_end_field("cache_hit", edge_collection_cache_.has_value());
+                EVENT_SCOPE_INFO_FIELD(lock_span, "cache_hit", edge_collection_cache_.has_value());
             }
 
             if (!edge_collection_cache_.has_value()) {
@@ -1399,7 +1426,7 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(fetch_span, "arango.collections.edge_fetch", {"endpoint", collections_endpoint()});
                 const auto collections = fetchAndSortCollections(collections_endpoint(), auth, collection_t::EDGE);
                 edge_collection_cache_.emplace(collections.begin(), collections.end());
-                fetch_span.add_end_field("collection_count", collections.size());
+                EVENT_SCOPE_INFO_FIELD(fetch_span, "collection_count", collections.size());
             }
             return *edge_collection_cache_;
         }
@@ -1555,8 +1582,8 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(request_span, "arango.bfs_req_construct", {"vertex_collection", vertex_collection},
                                  {"bind_variable_count", bind_vars.size()});
                 request_body = build_minimal_cursor_request_body(query, bind_vars);
-                request_span.add_end_field("query_bytes", query.size());
-                request_span.add_end_field("request_bytes", request_body.size());
+                EVENT_SCOPE_INFO_FIELD(request_span, "query_bytes", query.size());
+                EVENT_SCOPE_INFO_FIELD(request_span, "request_bytes", request_body.size());
             }
             return send_minimal_request_body_into_rows(http, request_body, vertex_collection, group_size, rows,
                                                        row_by_source, spec);
@@ -1687,7 +1714,7 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(http_span, "arango.bfs_http_post", {"vertex_collection", vertex_collection},
                                  {"request_bytes", request_body.size()});
                 response_body = http.post(config_.endpoint, request_body);
-                http_span.add_end_field("response_bytes", response_body.size());
+                EVENT_SCOPE_INFO_FIELD(http_span, "response_bytes", response_body.size());
             }
 
             ParsedMinimalArangoPage page;
@@ -1695,8 +1722,8 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(parse_span, "arango.bfs_response_to_candidates_parse",
                                  {"vertex_collection", vertex_collection}, {"response_bytes", response_body.size()});
                 page = parse_minimal_arango_page_to_consumer(response_body, spec, candidate_batch_size, consumer);
-                parse_span.add_end_field("response_row_count", page.row_count);
-                parse_span.add_end_field("has_more", page.metadata.value("hasMore", false));
+                EVENT_SCOPE_INFO_FIELD(parse_span, "response_row_count", page.row_count);
+                EVENT_SCOPE_INFO_FIELD(parse_span, "has_more", page.metadata.value("hasMore", false));
             }
 
             if (page.metadata.value("error", false)) {
@@ -1731,10 +1758,10 @@ namespace polygraph {
                 }
             }
 
-            total_span.add_end_field("cursor_page_count", cursor_page_count);
-            total_span.add_end_field("cursor_response_bytes", cursor_response_bytes);
-            total_span.add_end_field("response_row_count", total_row_count);
-            total_span.add_end_field("status", "ok");
+            EVENT_SCOPE_INFO_FIELD(total_span, "cursor_page_count", cursor_page_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "cursor_response_bytes", cursor_response_bytes);
+            EVENT_SCOPE_INFO_FIELD(total_span, "response_row_count", total_row_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "status", "ok");
             return total_row_count;
         }
 
@@ -1755,7 +1782,7 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(http_span, "arango.bfs_http_post", {"vertex_collection", vertex_collection},
                                  {"request_bytes", request_body.size()});
                 response_body = http.post(config_.endpoint, request_body);
-                http_span.add_end_field("response_bytes", response_body.size());
+                EVENT_SCOPE_INFO_FIELD(http_span, "response_bytes", response_body.size());
             }
 
             ParsedMinimalArangoPage page;
@@ -1763,8 +1790,8 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(parse_span, "arango.bfs_response_to_minimal_rows_parse",
                                  {"vertex_collection", vertex_collection}, {"response_bytes", response_body.size()});
                 page = parse_minimal_arango_page_into_rows(response_body, rows, row_by_source, seen_by_source, spec);
-                parse_span.add_end_field("response_row_count", page.row_count);
-                parse_span.add_end_field("has_more", page.metadata.value("hasMore", false));
+                EVENT_SCOPE_INFO_FIELD(parse_span, "response_row_count", page.row_count);
+                EVENT_SCOPE_INFO_FIELD(parse_span, "has_more", page.metadata.value("hasMore", false));
             }
 
             if (page.metadata.value("error", false)) {
@@ -1810,15 +1837,15 @@ namespace polygraph {
                     }
                 }
 
-                cursor_span.add_end_field("cursor_page_count", cursor_page_count);
-                cursor_span.add_end_field("cursor_response_bytes", cursor_response_bytes);
-                cursor_span.add_end_field("cursor_result_count", total_row_count);
-                cursor_span.add_end_field("status", "ok");
+                EVENT_SCOPE_INFO_FIELD(cursor_span, "cursor_page_count", cursor_page_count);
+                EVENT_SCOPE_INFO_FIELD(cursor_span, "cursor_response_bytes", cursor_response_bytes);
+                EVENT_SCOPE_INFO_FIELD(cursor_span, "cursor_result_count", total_row_count);
+                EVENT_SCOPE_INFO_FIELD(cursor_span, "status", "ok");
             }
 
-            total_span.add_end_field("cursor_page_count", cursor_page_count);
-            total_span.add_end_field("response_row_count", total_row_count);
-            total_span.add_end_field("status", "ok");
+            EVENT_SCOPE_INFO_FIELD(total_span, "cursor_page_count", cursor_page_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "response_row_count", total_row_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "status", "ok");
             return total_row_count;
         }
 
@@ -1837,14 +1864,14 @@ namespace polygraph {
                                // but bounded so concurrent requests do not each ask
                                // ArangoDB for a million rows at once.
                                {"batchSize", 50000}};
-                request_span.add_end_field("query_bytes", query.size());
+                EVENT_SCOPE_INFO_FIELD(request_span, "query_bytes", query.size());
             }
 
             std::string request_body;
             {
                 EVENT_SCOPE_INFO(dump_span, "arango.bfs_json_req_dump", {"vertex_collection", vertex_collection});
                 request_body = request.dump();
-                dump_span.add_end_field("request_bytes", request_body.size());
+                EVENT_SCOPE_INFO_FIELD(dump_span, "request_bytes", request_body.size());
             }
 
             std::string response_body;
@@ -1852,7 +1879,7 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(http_span, "arango.bfs_http_post", {"vertex_collection", vertex_collection},
                                  {"request_bytes", request_body.size()});
                 response_body = http.post(config_.endpoint, request_body);
-                http_span.add_end_field("response_bytes", response_body.size());
+                EVENT_SCOPE_INFO_FIELD(http_span, "response_bytes", response_body.size());
             }
 
             json response;
@@ -1860,19 +1887,19 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(parse_span, "arango.bfs_response_to_json_parse",
                                  {"vertex_collection", vertex_collection}, {"response_bytes", response_body.size()});
                 response = json::parse(response_body);
-                parse_span.add_end_field("result_count", response.contains("result") && response["result"].is_array()
-                                                                 ? response["result"].size()
-                                                                 : 0);
-                parse_span.add_end_field("has_more", response.value("hasMore", false));
+                EVENT_SCOPE_INFO_FIELD(
+                        parse_span, "result_count",
+                        response.contains("result") && response["result"].is_array() ? response["result"].size() : 0);
+                EVENT_SCOPE_INFO_FIELD(parse_span, "has_more", response.value("hasMore", false));
             }
 
             if (response.contains("error") && response["error"].is_boolean() && response["error"].get<bool>()) {
-                total_span.add_end_field("status", "arango_error");
+                EVENT_SCOPE_INFO_FIELD(total_span, "status", "arango_error");
                 return response;
             }
 
             if (!response.contains("result") || !response["result"].is_array()) {
-                total_span.add_end_field("status", "missing_result");
+                EVENT_SCOPE_INFO_FIELD(total_span, "status", "missing_result");
                 return response;
             }
 
@@ -1900,7 +1927,7 @@ namespace polygraph {
                     ++cursor_page_count;
 
                     if (response.contains("error") && response["error"].is_boolean() && response["error"].get<bool>()) {
-                        cursor_span.add_end_field("status", "arango_error");
+                        EVENT_SCOPE_INFO_FIELD(cursor_span, "status", "arango_error");
                         return response;
                     }
 
@@ -1915,18 +1942,18 @@ namespace polygraph {
                     }
                 }
 
-                cursor_span.add_end_field("cursor_page_count", cursor_page_count);
-                cursor_span.add_end_field("cursor_response_bytes", cursor_response_bytes);
-                cursor_span.add_end_field("cursor_result_count", cursor_result_count);
-                cursor_span.add_end_field("status", "ok");
+                EVENT_SCOPE_INFO_FIELD(cursor_span, "cursor_page_count", cursor_page_count);
+                EVENT_SCOPE_INFO_FIELD(cursor_span, "cursor_response_bytes", cursor_response_bytes);
+                EVENT_SCOPE_INFO_FIELD(cursor_span, "cursor_result_count", cursor_result_count);
+                EVENT_SCOPE_INFO_FIELD(cursor_span, "status", "ok");
             }
 
             response["result"] = std::move(combined_result);
             response["hasMore"] = false;
 
-            total_span.add_end_field("cursor_page_count", cursor_page_count);
-            total_span.add_end_field("combined_result_count", response["result"].size());
-            total_span.add_end_field("status", "ok");
+            EVENT_SCOPE_INFO_FIELD(total_span, "cursor_page_count", cursor_page_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "combined_result_count", response["result"].size());
+            EVENT_SCOPE_INFO_FIELD(total_span, "status", "ok");
             return response;
         }
 
@@ -2286,23 +2313,24 @@ namespace polygraph {
 
     std::vector<MinimalAdjacencyRow> ArangoQueryVisitor::get_minimal_neighbors_batch_fast(
             std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth, std::size_t batch_size,
-            std::size_t max_concurrent_requests, ArangoRequestStrategy request_strategy,
-            std::size_t single_request_max_frontier, std::size_t request_retries, std::size_t retry_delay_ms,
-            const BackendRequestScheduling &scheduling) const {
-        return impl_->get_minimal_neighbors_batch_fast(frontier, spec, depth, batch_size, max_concurrent_requests,
-                                                       request_strategy, single_request_max_frontier, request_retries,
-                                                       retry_delay_ms, scheduling);
+            std::size_t max_concurrent_requests, ArangoRequestStrategy request_strategy, ArangoExpandMode expand_mode,
+            bool use_plan_cache, std::size_t single_request_max_frontier, std::size_t request_retries,
+            std::size_t retry_delay_ms, const BackendRequestScheduling &scheduling) const {
+        return impl_->get_minimal_neighbors_batch_fast(
+                frontier, spec, depth, batch_size, max_concurrent_requests, request_strategy, expand_mode,
+                use_plan_cache, single_request_max_frontier, request_retries, retry_delay_ms, scheduling);
     }
 
     void ArangoQueryVisitor::stream_neighbor_candidates_fast(
             std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth, std::size_t batch_size,
-            std::size_t max_concurrent_requests, ArangoRequestStrategy request_strategy,
-            std::size_t single_request_max_frontier, std::size_t request_retries, std::size_t retry_delay_ms,
-            std::size_t candidate_batch_size, const NeighborBatchConsumer &consumer,
+            std::size_t max_concurrent_requests, ArangoRequestStrategy request_strategy, ArangoExpandMode expand_mode,
+            bool use_plan_cache, std::size_t single_request_max_frontier, std::size_t request_retries,
+            std::size_t retry_delay_ms, std::size_t candidate_batch_size, const NeighborBatchConsumer &consumer,
             const BackendRequestScheduling &scheduling) const {
         impl_->stream_neighbor_candidates_fast(frontier, spec, depth, batch_size, max_concurrent_requests,
-                                               request_strategy, single_request_max_frontier, request_retries,
-                                               retry_delay_ms, candidate_batch_size, consumer, scheduling);
+                                               request_strategy, expand_mode, use_plan_cache,
+                                               single_request_max_frontier, request_retries, retry_delay_ms,
+                                               candidate_batch_size, consumer, scheduling);
     }
 
 } // namespace polygraph

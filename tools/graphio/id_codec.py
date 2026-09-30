@@ -39,7 +39,7 @@ CANONICAL_NAMES: dict[int, str] = {
     7: "PostgreSQL",
 }
 CANONICAL_ROUTING_ORDER: tuple[str, ...] = ("Neo4J", "ArangoDB", "PostgreSQL", "Memgraph", "GPU")
-DEFAULT_ROUTING_BACKENDS: tuple[str, ...] = ("Neo4J", "ArangoDB", "GPU")
+DEFAULT_ROUTING_BACKENDS: tuple[str, ...] = ("Neo4J", "ArangoDB", "PostgreSQL")
 
 UINT64_MASK = (1 << 64) - 1
 INT64_SIGN = 1 << 63

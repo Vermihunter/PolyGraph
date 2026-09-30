@@ -15,17 +15,23 @@
 #include "data_access/adapters/cache/RedisGraphStore.hpp"
 #include "utilities/BackendIds.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include <stdexcept>
 #include <utility>
 #ifdef POLYGRAPH_ENABLE_GPU
 #include "data_access/adapters/cuGraph/CuGraphProjectionStore.hpp"
+#include "gpu/GpuExecutionConfig.hpp"
 #include "gpu/GpuRuntime.hpp"
 #include "gpu/data_model/GpuProjectionBuilder.hpp"
 #endif
@@ -59,6 +65,129 @@ namespace polygraph {
             }
             return result;
         }
+
+#ifdef POLYGRAPH_ENABLE_GPU
+        [[nodiscard]] std::optional<std::string> environment_value(const std::string &name) {
+            if (const char *value = std::getenv(name.c_str()); value != nullptr && *value != '\0') {
+                return std::string{value};
+            }
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::optional<std::string> gpu_environment_value(const unsigned int device_id,
+                                                                       const std::string_view suffix) {
+            const std::string device_name = "POLYGRAPH_GPU_" + std::to_string(device_id) + "_" + std::string(suffix);
+            if (auto value = environment_value(device_name)) {
+                return value;
+            }
+            return environment_value("POLYGRAPH_GPU_" + std::string(suffix));
+        }
+
+        [[nodiscard]] bool parse_environment_bool(const std::string &name, std::string value) {
+            std::ranges::transform(value, value.begin(),
+                                   [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            if (value == "1" || value == "true" || value == "yes" || value == "on") {
+                return true;
+            }
+            if (value == "0" || value == "false" || value == "no" || value == "off") {
+                return false;
+            }
+            throw std::runtime_error(name + " must be one of: 0/1, false/true, no/yes, off/on");
+        }
+
+        [[nodiscard]] std::size_t parse_environment_size(const std::string &name, const std::string &value) {
+            std::size_t consumed = 0;
+            const auto parsed = std::stoull(value, &consumed);
+            if (consumed != value.size() || parsed == 0) {
+                throw std::runtime_error(name + " must be a positive integer");
+            }
+            return static_cast<std::size_t>(parsed);
+        }
+
+        void apply_gpu_environment_overrides(GpuExecutionConfig &config, const unsigned int device_id) {
+            if (const auto value = gpu_environment_value(device_id, "TRANSFER_MODE")) {
+                config.transfer_mode = parse_gpu_transfer_mode(*value);
+            }
+            if (const auto value = gpu_environment_value(device_id, "D2H_CHUNK_ELEMENTS")) {
+                config.d2h_chunk_elements = parse_environment_size("POLYGRAPH_GPU_D2H_CHUNK_ELEMENTS", *value);
+            }
+            if (const auto value = gpu_environment_value(device_id, "PIN_PROJECTION_BUILD_INPUTS")) {
+                config.pin_projection_build_inputs =
+                        parse_environment_bool("POLYGRAPH_GPU_PIN_PROJECTION_BUILD_INPUTS", *value);
+            }
+            if (const auto value = gpu_environment_value(device_id, "CANDIDATE_DEDUPLICATION")) {
+                config.candidate_deduplication =
+                        parse_environment_bool("POLYGRAPH_GPU_CANDIDATE_DEDUPLICATION", *value);
+            }
+            if (const auto value = gpu_environment_value(device_id, "DEVICE_CANDIDATE_COMPACTION")) {
+                config.device_candidate_compaction =
+                        parse_environment_bool("POLYGRAPH_GPU_DEVICE_CANDIDATE_COMPACTION", *value);
+            }
+            if (const auto value = gpu_environment_value(device_id, "DEVICE_CANDIDATE_BITMAP_COMPACTION")) {
+                config.device_candidate_bitmap_compaction =
+                        parse_environment_bool("POLYGRAPH_GPU_DEVICE_CANDIDATE_BITMAP_COMPACTION", *value);
+            }
+            if (const auto value = gpu_environment_value(device_id, "DENSE_CANDIDATE_DEDUPLICATION")) {
+                config.dense_candidate_deduplication =
+                        parse_environment_bool("POLYGRAPH_GPU_DENSE_CANDIDATE_DEDUPLICATION", *value);
+            }
+            if (const auto value = gpu_environment_value(device_id, "DEVICE_QUERY_VISITED_FILTER")) {
+                config.device_query_visited_filter =
+                        parse_environment_bool("POLYGRAPH_GPU_DEVICE_QUERY_VISITED_FILTER", *value);
+            }
+            if (const auto value = gpu_environment_value(device_id, "NATIVE_BFS_REUSE_WORKSPACE")) {
+                config.native_bfs_reuse_workspace =
+                        parse_environment_bool("POLYGRAPH_GPU_NATIVE_BFS_REUSE_WORKSPACE", *value);
+            }
+            if (const auto value = gpu_environment_value(device_id, "NATIVE_BFS_COMPACT_RESULT")) {
+                config.native_bfs_compact_result =
+                        parse_environment_bool("POLYGRAPH_GPU_NATIVE_BFS_COMPACT_RESULT", *value);
+            }
+        }
+
+        [[nodiscard]] GpuExecutionConfig parse_gpu_execution_config(const json &backend_json,
+                                                                    const unsigned int device_id) {
+            GpuExecutionConfig config;
+            const auto it = backend_json.find("gpu_execution");
+            if (it != backend_json.end()) {
+                if (!it->is_object()) {
+                    throw std::runtime_error("gpu_execution must be a JSON object");
+                }
+
+                config.transfer_mode = parse_gpu_transfer_mode(
+                        it->value("transfer_mode", std::string(to_string(config.transfer_mode))));
+                config.d2h_chunk_elements = it->value("d2h_chunk_elements", config.d2h_chunk_elements);
+                config.pin_projection_build_inputs =
+                        it->value("pin_projection_build_inputs", config.transfer_mode != GpuTransferMode::Baseline);
+                config.candidate_deduplication = it->value("candidate_deduplication", config.candidate_deduplication);
+                config.device_candidate_compaction =
+                        it->value("device_candidate_compaction", config.device_candidate_compaction);
+                config.device_candidate_bitmap_compaction =
+                        it->value("device_candidate_bitmap_compaction", config.device_candidate_bitmap_compaction);
+                config.dense_candidate_deduplication =
+                        it->value("dense_candidate_deduplication", config.dense_candidate_deduplication);
+                config.device_query_visited_filter =
+                        it->value("device_query_visited_filter", config.device_query_visited_filter);
+                config.native_bfs_reuse_workspace =
+                        it->value("native_bfs_reuse_workspace", config.native_bfs_reuse_workspace);
+                config.native_bfs_compact_result =
+                        it->value("native_bfs_compact_result", config.native_bfs_compact_result);
+            }
+
+            apply_gpu_environment_overrides(config, device_id);
+            if (config.d2h_chunk_elements == 0) {
+                throw std::runtime_error("GPU d2h_chunk_elements must be greater than zero");
+            }
+            if (config.device_candidate_compaction && config.device_candidate_bitmap_compaction) {
+                throw std::runtime_error("GPU sort/unique and bitmap candidate compaction are mutually exclusive");
+            }
+            if (config.device_query_visited_filter && !config.device_candidate_compaction) {
+                throw std::runtime_error(
+                        "GPU device_query_visited_filter currently requires device_candidate_compaction=true");
+            }
+            return config;
+        }
+#endif
 
         class ProgressHeartbeat final {
         public:
@@ -174,6 +303,7 @@ namespace polygraph {
                                                                              const Inputs &inputs) {
 #ifdef POLYGRAPH_ENABLE_GPU
         const unsigned int device_id = backend_json.value("device_id", gpu_device_id_from_backend(descriptor_value.id));
+        const auto gpu_execution = parse_gpu_execution_config(backend_json, device_id);
         if (inputs.ensure_cuda) {
             inputs.ensure_cuda(device_id);
         }
@@ -216,6 +346,15 @@ namespace polygraph {
             context.gpu_runtime = runtime;
         }
 
+        LOG_INFO("GPU:{} execution: transfer_mode={}, d2h_chunk_elements={}, pin_projection_build_inputs={}, "
+                 "candidate_deduplication={}, device_candidate_compaction={}, "
+                 "device_candidate_bitmap_compaction={}, dense_candidate_deduplication={}, "
+                 "device_query_visited_filter={}, native_bfs_reuse_workspace={}, native_bfs_compact_result={}",
+                 device_id, to_string(gpu_execution.transfer_mode), gpu_execution.d2h_chunk_elements,
+                 gpu_execution.pin_projection_build_inputs, gpu_execution.candidate_deduplication,
+                 gpu_execution.device_candidate_compaction, gpu_execution.device_candidate_bitmap_compaction,
+                 gpu_execution.dense_candidate_deduplication, gpu_execution.device_query_visited_filter,
+                 gpu_execution.native_bfs_reuse_workspace, gpu_execution.native_bfs_compact_result);
         LOG_INFO("GPU:{} loading: building cuGraph CSR projection", device_id);
         std::shared_ptr<Projection> projection;
         {
@@ -224,11 +363,12 @@ namespace polygraph {
             if (build.prebuilt_dense) {
                 projection = GpuProjectionBuilder::from_prebuilt_dense_edgelist<Vertex, Edge>(
                         runtime->handle, std::move(build.vertex_ids), std::move(build.dense_sources),
-                        std::move(build.dense_destinations), inputs.graph_version);
+                        std::move(build.dense_destinations), inputs.graph_version, static_cast<int>(device_id),
+                        gpu_execution);
             } else {
                 projection = GpuProjectionBuilder::from_edgelist<Vertex, Edge>(
                         runtime->handle, std::move(build.vertex_ids), std::move(build.edges), inputs.graph_version,
-                        true);
+                        true, static_cast<int>(device_id), gpu_execution);
             }
         }
         LOG_INFO("GPU:{} loading: cuGraph projection ready", device_id);

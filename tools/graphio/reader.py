@@ -106,16 +106,39 @@ class JsonLinesGraphReader(GraphReader):
                 yield RelationshipRecord.from_dict(payload)
 
 
+def _special_json_reader(path: Path) -> GraphReader | None:
+    # Keep special graph formats behind a tiny JSON descriptor so callers can
+    # continue using the GraphReader abstraction without materializing a second
+    # copy of a large dataset.  Import lazily to avoid a graphio/LDBC cycle.
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("format") == "polygraph.ldbc-csv":
+        from tools.ldbc_snb.raw_reader import LdbcCsvGraphReader
+
+        return LdbcCsvGraphReader(path)
+    return None
+
+
 def open_graph_reader(path: str | Path) -> GraphReader:
     resolved = Path(path)
     suffix = resolved.suffix.lower()
     if suffix in {".jsonl", ".ndjson"}:
         return JsonLinesGraphReader(resolved)
     if suffix == ".json":
-        return JsonGraphReader(resolved)
+        special = _special_json_reader(resolved)
+        return special if special is not None else JsonGraphReader(resolved)
     # Content sniffing keeps old/custom filenames working.
     with resolved.open("r", encoding="utf-8") as handle:
         first = handle.read(4096).lstrip()
+    if first.startswith("{"):
+        special = _special_json_reader(resolved)
+        if special is not None:
+            return special
     return JsonGraphReader(resolved) if first.startswith("{") and '"nodes"' in first else JsonLinesGraphReader(resolved)
 
 

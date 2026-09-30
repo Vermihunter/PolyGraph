@@ -161,9 +161,18 @@ namespace polygraph::cli {
         program.add_value_option("arango-max-concurrent-requests", {"--arango-max-concurrent-requests"},
                                  "Maximum number of concurrent ArangoDB neighbor requests", std::string{"4"});
 
+        program.add_value_option("arango-traversal-batch-size", {"--arango-traversal-batch-size"},
+                                 "Maximum source vertices per A0 Arango graph-traversal query", std::string{"1024"});
+
         program.add_value_option("arango-request-strategy", {"--arango-request-strategy"},
                                  "ArangoDB frontier request strategy: chunked, single, or auto",
                                  std::string{"chunked"});
+
+        program.add_value_option("arango-expand-mode", {"--arango-expand-mode"},
+                                 "ArangoDB one-hop expansion: traversal or edge-index", std::string{"edge-index"});
+
+        program.add_flag_option("no-arango-plan-cache", {"--no-arango-plan-cache"},
+                                "Disable AQL execution-plan caching for direct Arango edge-index queries");
 
         program.add_value_option(
                 "arango-single-request-max-frontier", {"--arango-single-request-max-frontier"},
@@ -194,6 +203,20 @@ namespace polygraph::cli {
 
         program.add_value_option("thread-count", {"--thread-count"}, "Worker count reserved for the BFS thread pool",
                                  default_thread_count());
+
+        program.add_value_option("bfs-execution-policy", {"--bfs-execution-policy"},
+                                 "Distributed BFS policy: classic or direction-optimized", std::string{"classic"});
+        program.add_value_option("pull-enter-frontier-percent", {"--pull-enter-frontier-percent"},
+                                 "Direction-optimized BFS: enter pull mode at this frontier percentage",
+                                 std::string{"5"});
+        program.add_value_option("pull-exit-frontier-percent", {"--pull-exit-frontier-percent"},
+                                 "Direction-optimized BFS: return to push mode at/below this percentage",
+                                 std::string{"1"});
+        program.add_value_option("bitmap-frontier-min-size", {"--bitmap-frontier-min-size"},
+                                 "Minimum frontier size before bitmap membership is considered", std::string{"4096"});
+        program.add_value_option("bitmap-frontier-density-percent", {"--bitmap-frontier-density-percent"},
+                                 "Use bitmap membership above this frontier/known-vertex density percentage",
+                                 std::string{"10"});
     }
 
     GraphRuntimeConfig parse_runtime_config(const CommandLine &args) {
@@ -277,8 +300,10 @@ namespace polygraph::cli {
         const int neighbor_batch_size = args.int_value("neighbor-batch-size");
         const int neo4j_max_concurrent_requests = args.int_value("neo4j-max-concurrent-requests");
         const int arango_max_concurrent_requests = args.int_value("arango-max-concurrent-requests");
+        const int arango_traversal_batch_size = args.int_value("arango-traversal-batch-size");
         const auto arango_request_strategy =
                 parse_arango_request_strategy(args.string_value("arango-request-strategy"));
+        const auto arango_expand_mode = parse_arango_expand_mode(args.string_value("arango-expand-mode"));
         const int arango_single_request_max_frontier = args.int_value("arango-single-request-max-frontier");
         const int streaming_candidate_batch_size = args.int_value("streaming-candidate-batch-size");
         const int redis_pipeline_batch_size = args.int_value("redis-pipeline-batch-size");
@@ -287,6 +312,11 @@ namespace polygraph::cli {
         const int backend_request_retries = args.int_value("backend-request-retries");
         const int backend_retry_delay_ms = args.int_value("backend-retry-delay-ms");
         const int thread_count = args.int_value("thread-count");
+        const auto execution_policy = parse_bfs_execution_policy(args.string_value("bfs-execution-policy"));
+        const int pull_enter_frontier_percent = args.int_value("pull-enter-frontier-percent");
+        const int pull_exit_frontier_percent = args.int_value("pull-exit-frontier-percent");
+        const int bitmap_frontier_min_size = args.int_value("bitmap-frontier-min-size");
+        const int bitmap_frontier_density_percent = args.int_value("bitmap-frontier-density-percent");
 
         if (neighbor_batch_size <= 0) {
             throw std::runtime_error("--neighbor-batch-size must be greater than zero");
@@ -296,6 +326,9 @@ namespace polygraph::cli {
         }
         if (arango_max_concurrent_requests <= 0) {
             throw std::runtime_error("--arango-max-concurrent-requests must be greater than zero");
+        }
+        if (arango_traversal_batch_size <= 0) {
+            throw std::runtime_error("--arango-traversal-batch-size must be greater than zero");
         }
         if (arango_single_request_max_frontier <= 0) {
             throw std::runtime_error("--arango-single-request-max-frontier must be greater than zero");
@@ -321,6 +354,16 @@ namespace polygraph::cli {
         if (thread_count <= 0) {
             throw std::runtime_error("--thread-count must be greater than zero");
         }
+        if (pull_enter_frontier_percent <= 0 || pull_enter_frontier_percent > 100 || pull_exit_frontier_percent < 0 ||
+            pull_exit_frontier_percent > pull_enter_frontier_percent) {
+            throw std::runtime_error("--pull-* percentages must satisfy 0 <= exit <= enter <= 100 and enter > 0");
+        }
+        if (bitmap_frontier_min_size <= 0) {
+            throw std::runtime_error("--bitmap-frontier-min-size must be greater than zero");
+        }
+        if (bitmap_frontier_density_percent <= 0 || bitmap_frontier_density_percent > 100) {
+            throw std::runtime_error("--bitmap-frontier-density-percent must be between 1 and 100");
+        }
 
         BfsOptions options{.max_depth = std::nullopt,
                            .return_predecessors = !args.bool_value("no-predecessors"),
@@ -329,7 +372,10 @@ namespace polygraph::cli {
                            .neighbor_batch_size = static_cast<std::size_t>(neighbor_batch_size),
                            .neo4j_max_concurrent_requests = static_cast<std::size_t>(neo4j_max_concurrent_requests),
                            .arango_max_concurrent_requests = static_cast<std::size_t>(arango_max_concurrent_requests),
+                           .arango_traversal_batch_size = static_cast<std::size_t>(arango_traversal_batch_size),
                            .arango_request_strategy = arango_request_strategy,
+                           .arango_expand_mode = arango_expand_mode,
+                           .arango_use_plan_cache = !args.bool_value("no-arango-plan-cache"),
                            .arango_single_request_max_frontier =
                                    static_cast<std::size_t>(arango_single_request_max_frontier),
                            .streaming_candidate_batch_size = static_cast<std::size_t>(streaming_candidate_batch_size),
@@ -339,6 +385,11 @@ namespace polygraph::cli {
                            .backend_request_retries = static_cast<std::size_t>(backend_request_retries),
                            .backend_retry_delay_ms = static_cast<std::size_t>(backend_retry_delay_ms),
                            .thread_count = static_cast<std::size_t>(thread_count)};
+        options.execution_policy = execution_policy;
+        options.pull_enter_frontier_percent = static_cast<std::size_t>(pull_enter_frontier_percent);
+        options.pull_exit_frontier_percent = static_cast<std::size_t>(pull_exit_frontier_percent);
+        options.bitmap_frontier_min_size = static_cast<std::size_t>(bitmap_frontier_min_size);
+        options.bitmap_frontier_density_percent = static_cast<std::size_t>(bitmap_frontier_density_percent);
 
         if (max_depth >= 0) {
             options.max_depth = static_cast<std::uint32_t>(max_depth);

@@ -14,10 +14,14 @@
 #include "domain/graph/TypeId.hpp"
 #include "gpu/algorithms/CuGraphBfsExecutor.hpp"
 #include "gpu/algorithms/CuGraphOneHopExpandExecutor.hpp"
+#include "gpu/GpuBfsWorkspace.hpp"
+#include "gpu/GpuTransfer.hpp"
 #include "infrastructure/BackendDescriptor.hpp"
 #include "events/Events.hpp"
 
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -207,19 +211,34 @@ template <typename ProjectionT> class CuGraphProjectionStore final : public IGra
             }
         }
 
-        total_span.add_end_field("gpu_sources", gpu_source_ids.size());
-        total_span.add_end_field("projection_misses", projection_misses);
+        EVENT_SCOPE_INFO_FIELD(total_span, "gpu_sources", gpu_source_ids.size());
+        EVENT_SCOPE_INFO_FIELD(total_span, "projection_misses", projection_misses);
         if (gpu_source_ids.empty()) {
             return;
         }
 
         using vertex_t = typename ProjectionT::vertex_type;
         using edge_t = typename ProjectionT::edge_type;
+        std::shared_ptr<QueryVisitedContext> query_visited_context;
+        std::unique_lock<std::mutex> query_visited_lock;
+        if (projection_->execution_config().device_query_visited_filter &&
+            projection_->execution_config().device_candidate_compaction &&
+            options.scheduler_query_id != 0) {
+            query_visited_context = acquire_query_visited_context(options.scheduler_query_id);
+            query_visited_lock = std::unique_lock<std::mutex>(query_visited_context->mutex);
+            auto stream = projection_->handle().get_stream();
+            if (depth == 0 || depth < query_visited_context->last_depth) {
+                query_visited_context->workspace.reset(stream);
+            }
+            query_visited_context->last_depth = depth;
+        }
+
         CuGraphOneHopExpandExecutor::template stream_unique_destinations<vertex_t,
                                                                           edge_t,
                                                                           ProjectionT::multi_gpu,
                                                                           ProjectionT::store_transposed>(
-                *projection_, gpu_source_ids, options.streaming_candidate_batch_size, consumer);
+                *projection_, gpu_source_ids, options.streaming_candidate_batch_size, consumer,
+                query_visited_context ? &query_visited_context->workspace : nullptr);
     }
 
     std::vector<AdjacencyRow> get_neighbors_batch(std::span<const NodeRef> frontier, const ExpandSpec &spec,
@@ -254,6 +273,42 @@ template <typename ProjectionT> class CuGraphProjectionStore final : public IGra
     [[nodiscard]] const ProjectionT &projection() const noexcept { return *projection_; }
 
   private:
+    using projection_vertex_t = typename ProjectionT::vertex_type;
+
+    struct QueryVisitedContext {
+        QueryVisitedContext(const std::uint64_t id,
+                            const std::size_t vertex_count,
+                            const rmm::cuda_stream_view stream) :
+            query_id(id), workspace(vertex_count, stream) {}
+
+        std::uint64_t query_id{0};
+        int last_depth{-1};
+        std::mutex mutex;
+        GpuQueryVisitedWorkspace<projection_vertex_t> workspace;
+    };
+
+    std::shared_ptr<QueryVisitedContext> acquire_query_visited_context(const std::uint64_t query_id) {
+        std::scoped_lock lock(query_visited_contexts_mutex_);
+        if (const auto it = query_visited_contexts_.find(query_id); it != query_visited_contexts_.end()) {
+            return it->second;
+        }
+
+        // The CPU/global visited map remains authoritative, so evicting an old
+        // GPU context can only reduce this optimization's effectiveness; it
+        // cannot change BFS correctness. This bounds extra GPU memory under
+        // concurrent HTTP workloads.
+        constexpr std::size_t max_contexts = 8;
+        if (query_visited_contexts_.size() >= max_contexts) {
+            query_visited_contexts_.erase(query_visited_contexts_.begin());
+        }
+
+        CudaDeviceGuard device_guard(projection_->device_id());
+        auto context = std::make_shared<QueryVisitedContext>(
+                query_id, projection_->vertex_count(), projection_->handle().get_stream());
+        query_visited_contexts_.emplace(query_id, context);
+        return context;
+    }
+
     [[nodiscard]] static bool supports_uuid_only_spec(const ExpandSpec &spec) noexcept {
         return spec.direction != Direction::Directed && spec.allowed_edge_types.empty() &&
                spec.allowed_target_node_types.empty();
@@ -274,6 +329,8 @@ template <typename ProjectionT> class CuGraphProjectionStore final : public IGra
 
     BackendDescriptor descriptor_;
     std::shared_ptr<ProjectionT> projection_;
+    std::mutex query_visited_contexts_mutex_;
+    std::unordered_map<std::uint64_t, std::shared_ptr<QueryVisitedContext>> query_visited_contexts_;
 };
 
 } // namespace polygraph

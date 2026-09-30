@@ -449,7 +449,7 @@ namespace polygraph {
             const auto grouped_frontier = group_frontier_by_physical_source_label(frontier);
             const auto edge_type_names = edge_type_names_for_spec(spec);
 
-            total_span.add_end_field("label_group_count", grouped_frontier.size());
+            EVENT_SCOPE_INFO_FIELD(total_span, "label_group_count", grouped_frontier.size());
 
             std::vector<std::future<Neo4jGroupResponse>> futures;
 
@@ -493,7 +493,7 @@ namespace polygraph {
                 parse_fast_response_into_rows(result.response, rows, row_by_source, spec);
             }
 
-            total_span.add_end_field("result_source_rows", rows.size());
+            EVENT_SCOPE_INFO_FIELD(total_span, "result_source_rows", rows.size());
 
             return rows;
         }
@@ -581,7 +581,7 @@ namespace polygraph {
             const json response = send_req(query, parameters);
             parse_minimal_response_into_rows(response, rows, row_by_source, spec);
 
-            total_span.add_end_field("result_source_rows", rows.size());
+            EVENT_SCOPE_INFO_FIELD(total_span, "result_source_rows", rows.size());
             return rows;
         }
 
@@ -764,12 +764,14 @@ namespace polygraph {
                                                                  {"response_row_count", response_row_count});
                                                 std::scoped_lock lock(rows_mutex);
                                                 merge_minimal_rows(std::move(batch_rows), rows, row_by_source);
-                                                response_to_rows.add_end_field("result_source_rows", rows.size());
+                                                EVENT_SCOPE_INFO_FIELD(response_to_rows, "result_source_rows",
+                                                                       rows.size());
                                             }
 
-                                            request_span.add_end_field("attempts", attempt + 1);
-                                            request_span.add_end_field("response_row_count", response_row_count);
-                                            request_span.add_end_field("status", "ok");
+                                            EVENT_SCOPE_INFO_FIELD(request_span, "attempts", attempt + 1);
+                                            EVENT_SCOPE_INFO_FIELD(request_span, "response_row_count",
+                                                                   response_row_count);
+                                            EVENT_SCOPE_INFO_FIELD(request_span, "status", "ok");
                                             ++stats.completed_requests;
                                             stats.response_row_count += response_row_count;
                                             break;
@@ -787,10 +789,11 @@ namespace polygraph {
                                                 if (transient && use_bolt_) {
                                                     bolt_client.reset();
                                                 }
-                                                request_span.add_end_field("attempts", attempt + 1);
-                                                request_span.add_end_field(
-                                                        "status", defer_to_lower_concurrency ? "deferred" : "failed");
-                                                request_span.add_end_field("error", error.what());
+                                                EVENT_SCOPE_INFO_FIELD(request_span, "attempts", attempt + 1);
+                                                EVENT_SCOPE_INFO_FIELD(request_span, "status",
+                                                                       defer_to_lower_concurrency ? "deferred"
+                                                                                                  : "failed");
+                                                EVENT_SCOPE_INFO_FIELD(request_span, "error", error.what());
                                                 stats.failures.push_back(
                                                         Neo4jFailedBatch{.prepared_index = prepared_index,
                                                                          .error = error.what(),
@@ -866,12 +869,12 @@ namespace polygraph {
                 }
             }
 
-            total_span.add_end_field("request_count", prepared_batches.size());
-            total_span.add_end_field("completed_request_count", completed_requests);
-            total_span.add_end_field("response_row_count", total_response_rows);
-            total_span.add_end_field("recovery_round_count", recovery_round);
-            total_span.add_end_field("final_concurrency", current_concurrency);
-            total_span.add_end_field("result_source_rows", rows.size());
+            EVENT_SCOPE_INFO_FIELD(total_span, "request_count", prepared_batches.size());
+            EVENT_SCOPE_INFO_FIELD(total_span, "completed_request_count", completed_requests);
+            EVENT_SCOPE_INFO_FIELD(total_span, "response_row_count", total_response_rows);
+            EVENT_SCOPE_INFO_FIELD(total_span, "recovery_round_count", recovery_round);
+            EVENT_SCOPE_INFO_FIELD(total_span, "final_concurrency", current_concurrency);
+            EVENT_SCOPE_INFO_FIELD(total_span, "result_source_rows", rows.size());
             return rows;
         }
 
@@ -1499,7 +1502,7 @@ namespace polygraph {
                                                                ? response["results"][0]["data"].size()
                                                                : 0;
                 parse_minimal_response_into_rows(response, rows, row_by_source, spec);
-                bolt_span.add_end_field("response_row_count", response_row_count);
+                EVENT_SCOPE_INFO_FIELD(bolt_span, "response_row_count", response_row_count);
                 return response_row_count;
             }
 
@@ -1511,14 +1514,14 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(request_span, "neo4j.bfs_req_construct", {"source_label", source_label},
                                  {"group_size", group_size});
                 request = json{{"statements", json::array({{{"statement", query}, {"parameters", parameters}}})}};
-                request_span.add_end_field("query_bytes", query.size());
+                EVENT_SCOPE_INFO_FIELD(request_span, "query_bytes", query.size());
             }
 
             std::string request_body;
             {
                 EVENT_SCOPE_INFO(dump_span, "neo4j.bfs_json_req_dump", {"source_label", source_label});
                 request_body = request.dump();
-                dump_span.add_end_field("request_bytes", request_body.size());
+                EVENT_SCOPE_INFO_FIELD(dump_span, "request_bytes", request_body.size());
             }
 
             std::string auth;
@@ -1531,7 +1534,7 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(http_span, "neo4j.bfs_http_post", {"source_label", source_label},
                                  {"request_bytes", request_body.size()});
                 response_body = http_post(config_.endpoint, request_body, auth);
-                http_span.add_end_field("response_bytes", response_body.size());
+                EVENT_SCOPE_INFO_FIELD(http_span, "response_bytes", response_body.size());
             }
 
             std::size_t response_row_count = 0;
@@ -1595,7 +1598,7 @@ namespace polygraph {
                 EVENT_SCOPE_INFO(parse_span, "neo4j.bfs_response_to_minimal_rows_parse", {"source_label", source_label},
                                  {"response_bytes", response_body.size()});
                 metadata = json::parse(response_body, callback);
-                parse_span.add_end_field("response_row_count", response_row_count);
+                EVENT_SCOPE_INFO_FIELD(parse_span, "response_row_count", response_row_count);
             }
 
             if (metadata.contains("errors") && metadata["errors"].is_array() && !metadata["errors"].empty()) {
@@ -1607,8 +1610,8 @@ namespace polygraph {
                 throw std::runtime_error("Neo4J minimal neighbor response has no results[0].data: " + metadata.dump());
             }
 
-            total_span.add_end_field("response_row_count", response_row_count);
-            total_span.add_end_field("status", "ok");
+            EVENT_SCOPE_INFO_FIELD(total_span, "response_row_count", response_row_count);
+            EVENT_SCOPE_INFO_FIELD(total_span, "status", "ok");
             return response_row_count;
         }
 

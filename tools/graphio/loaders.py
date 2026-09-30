@@ -548,20 +548,69 @@ class Neo4jHttpAdapter:
             if self._deleted_count(response) == 0:
                 return
 
+    def _cypher_rows_adaptive(
+        self,
+        statement: str,
+        rows: list[dict[str, Any]],
+    ) -> None:
+        """Execute a row batch and split only transactions that exceed Neo4j memory.
+
+        Neo4j rolls back a transaction that hits ``db.memory.transaction.max``. That makes
+        it safe to retry the exact failed row set as smaller independent transactions. The
+        normal path still uses the caller's large batch for throughput; splitting happens
+        only after Neo4j reports ``MemoryPoolOutOfMemoryError``.
+        """
+        if not rows:
+            return
+
+        pending: list[list[dict[str, Any]]] = [rows]
+        while pending:
+            current = pending.pop()
+            try:
+                self._cypher(statement, {"rows": current})
+            except Neo4jQueryError as error:
+                if not error.is_memory_pool_oom() or len(current) == 1:
+                    raise
+                midpoint = len(current) // 2
+                left = current[:midpoint]
+                right = current[midpoint:]
+                _progress(
+                    self.source_name,
+                    f"transaction memory limit reached for {len(current):,} rows; "
+                    f"retrying as {len(left):,} + {len(right):,}",
+                )
+                # LIFO stack: append right first so the original row order is preserved.
+                pending.append(right)
+                pending.append(left)
+
     def reset(self, *, batch_size: int = 1_000) -> None:
         if batch_size <= 0:
             raise ValueError("reset batch size must be positive")
 
         if self._driver is not None:
             # One implicit Bolt query lets Neo4j perform the delete in server-side
-            # subtransactions instead of paying one client round-trip per batch.
+            # subtransactions instead of paying one client round-trip per batch. If a
+            # dense delete still hits the transaction-memory cap, retry with smaller
+            # server-side subtransactions. Already committed subtransactions are harmless:
+            # the repeated MATCH simply continues deleting what remains.
             delete_batch_size = min(max(batch_size, 1_000), 10_000)
-            self._cypher(
-                "MATCH (n) "
-                "CALL (n) { DETACH DELETE n } "
-                f"IN TRANSACTIONS OF {delete_batch_size} ROWS"
-            )
-            return
+            while True:
+                try:
+                    self._cypher(
+                        "MATCH (n) "
+                        "CALL (n) { DETACH DELETE n } "
+                        f"IN TRANSACTIONS OF {delete_batch_size} ROWS"
+                    )
+                    return
+                except Neo4jQueryError as error:
+                    if not error.is_memory_pool_oom() or delete_batch_size == 1:
+                        raise
+                    delete_batch_size = max(1, delete_batch_size // 2)
+                    _progress(
+                        self.source_name,
+                        "transaction memory limit reached while resetting; "
+                        f"retrying deletes with {delete_batch_size:,} rows per subtransaction",
+                    )
 
         # HTTP fallback for configurations that do not provide a Bolt endpoint.
         delete_batch_size = min(batch_size, 1_000)
@@ -624,7 +673,7 @@ class Neo4jHttpAdapter:
         remapped: dict[int, int] = {node.uuid: node.uuid for node in nodes}
         for type_name, rows in sorted(grouped.items()):
             label = sanitize_name(type_name)
-            self._cypher(
+            self._cypher_rows_adaptive(
                 " ".join(
                     [
                         "UNWIND $rows AS row",
@@ -633,7 +682,7 @@ class Neo4jHttpAdapter:
                         "n.type = row.type, n.source = row.source, n.is_proxy = false",
                     ]
                 ),
-                {"rows": rows},
+                rows,
             )
         return remapped
 
@@ -653,11 +702,11 @@ class Neo4jHttpAdapter:
             )
         if not rows:
             return
-        self._cypher(
+        self._cypher_rows_adaptive(
             "UNWIND $rows AS row "
             "MERGE (n:Proxy:POLYGRAPHVertex:__GraphNode {uuid: row.uuid}) "
             "SET n += row.props, n.type = row.type, n.source = row.source, n.is_proxy = true",
-            {"rows": rows},
+            rows,
         )
 
     def insert_nodes(self, nodes: list[NodeRecord]) -> None:
@@ -751,7 +800,7 @@ class Neo4jHttpAdapter:
                 "SET r = row.props",
                 id_assignment,
             ]
-            self._cypher("\n".join(clauses), {"rows": rows})
+            self._cypher_rows_adaptive("\n".join(clauses), rows)
         return remapped
 
     def update_cache_residency(
@@ -766,11 +815,11 @@ class Neo4jHttpAdapter:
         ]
         if not rows:
             return
-        self._cypher(
+        self._cypher_rows_adaptive(
             "UNWIND $rows AS row "
             "MATCH (n:POLYGRAPHVertex {localId: row.local_id}) "
             "SET n.cache_residency = row.cache_residency",
-            {"rows": rows},
+            rows,
         )
 
 
@@ -1017,9 +1066,14 @@ class ArangoHttpAdapter:
 
 
 class PostgreSqlAdapter:
-    """Bulk PostgreSQL loader using psycopg 3 COPY."""
+    """Bulk PostgreSQL loader using psycopg 3 COPY.
 
-    def __init__(self, connection: BackendConnection):
+    Traversal indexes are deliberately opt-in. This keeps the default benchmark
+    path index-free while preserving the primary-key indexes required for stable
+    identity/upsert semantics.
+    """
+
+    def __init__(self, connection: BackendConnection, *, create_traversal_indexes: bool = False):
         try:
             import psycopg
         except ImportError as exc:
@@ -1050,6 +1104,10 @@ class PostgreSqlAdapter:
             application_name="polygraph-loader",
         )
         self._fresh_load = False
+        self._create_traversal_indexes = create_traversal_indexes
+        with self._connection.cursor() as cursor:
+            cursor.execute("SET synchronous_commit = off")
+        self._connection.commit()
 
     def reset(self, *, batch_size: int = 1_000) -> None:
         del batch_size
@@ -1170,17 +1228,18 @@ class PostgreSqlAdapter:
 
     def finalize(self, _node_types: Iterable[str], _relationship_types: Iterable[str]) -> None:
         with self._connection.cursor() as cursor:
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS polygraph_edges_from_idx "
-                "ON polygraph_edges(from_id,edge_type) INCLUDE(to_id,to_type)"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS polygraph_edges_to_idx "
-                "ON polygraph_edges(to_id,edge_type) INCLUDE(from_id,from_type)"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS polygraph_nodes_type_idx ON polygraph_nodes(type,id)"
-            )
+            if self._create_traversal_indexes:
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS polygraph_edges_from_idx "
+                    "ON polygraph_edges(from_id,edge_type) INCLUDE(to_id,to_type)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS polygraph_edges_to_idx "
+                    "ON polygraph_edges(to_id,edge_type) INCLUDE(from_id,from_type)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS polygraph_nodes_type_idx ON polygraph_nodes(type,id)"
+                )
             cursor.execute("ANALYZE polygraph_nodes")
             cursor.execute("ANALYZE polygraph_edges")
         self._connection.commit()
@@ -1589,7 +1648,7 @@ def load_postgresql_source(
         adapter.insert_relationships(batch, endpoint_types)
         relationship_count += len(batch)
 
-    _progress(source, "building traversal indexes and analyzing tables")
+    _progress(source, "finalizing PostgreSQL tables (traversal indexes are opt-in)")
     adapter.finalize(inspection.node_types, inspection.relationship_types)
     _progress(source, "load completed")
     return node_count, proxy_count, relationship_count
@@ -1612,6 +1671,7 @@ def load_graph(
     reset: bool = False,
     batch_size: int = 20_000,
     load_workers: int = 4,
+    postgresql_indexes: bool = False,
     only_sources: Iterable[str] | None = None,
     resolved_output: str | Path | None = None,
     id_map_output: str | Path | None = None,
@@ -1705,7 +1765,10 @@ def load_graph(
                 raise ValueError("PostgreSQL is selected but has no configured connection")
             nodes, proxies, relationships = load_postgresql_source(
                 input_graph=working_graph,
-                adapter=PostgreSqlAdapter(connections["PostgreSQL"]),
+                adapter=PostgreSqlAdapter(
+                    connections["PostgreSQL"],
+                    create_traversal_indexes=postgresql_indexes,
+                ),
                 endpoint_directory=endpoint_directory,
                 routing_layout=routing_layout,
                 reset=reset,
@@ -1715,6 +1778,7 @@ def load_graph(
                 "nodes": nodes,
                 "proxies": proxies,
                 "relationships": relationships,
+                "traversal_indexes": bool(postgresql_indexes),
             }
 
         for backend_name in sorted(selected):

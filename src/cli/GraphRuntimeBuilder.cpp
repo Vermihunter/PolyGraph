@@ -164,6 +164,57 @@ namespace polygraph::cli {
                 if (id.empty()) {
                     throw std::runtime_error("cache-plan runtime backend is missing id");
                 }
+
+                // Older cache plans intentionally marked every cached GPU as
+                // native_bfs=false.  Derive full-projection eligibility from the
+                // immutable artifact metadata at load time so existing plans do
+                // not need to be rebuilt just to benchmark native cuGraph BFS.
+                // residentVertices (not projection vertices) is the proof: a
+                // partial projection may contain proxy destination vertices.
+                bool complete_gpu_cache = false;
+                if (cache_backend.value("kind", std::string{}) == "CuGraph" && id.rfind("GPU:", 0) == 0) {
+                    const auto total_nodes = plan.value("nodes", std::uint64_t{0});
+                    const auto device_key = id.substr(4);
+                    if (const auto artifacts = plan.find("artifacts");
+                        artifacts != plan.end() && artifacts->is_object()) {
+                        if (const auto gpu = artifacts->find("gpu"); gpu != artifacts->end() && gpu->is_object()) {
+                            if (const auto artifact = gpu->find(device_key);
+                                artifact != gpu->end() && artifact->is_object()) {
+                                const auto resident = artifact->value("residentVertices", std::uint64_t{0});
+                                complete_gpu_cache = total_nodes > 0 && resident == total_nodes;
+                            }
+                        }
+                    }
+                    if (!cache_backend.contains("capabilities") || !cache_backend["capabilities"].is_object()) {
+                        cache_backend["capabilities"] = json::object();
+                    }
+                    if (!cache_backend.contains("coverage") || !cache_backend["coverage"].is_object()) {
+                        cache_backend["coverage"] = json::object();
+                    }
+                    cache_backend["capabilities"]["native_bfs"] = complete_gpu_cache;
+                    cache_backend["coverage"]["complete_for_requested_subgraph"] = complete_gpu_cache;
+                    if (complete_gpu_cache) {
+                        cache_backend["coverage"]["mode"] = "id-routing";
+                        cache_backend["coverage"]["fresh"] = true;
+                    }
+                }
+                if (cache_backend.value("kind", std::string{}) == "MemoryMapped" && id == "MMap") {
+                    const auto total_nodes = plan.value("nodes", std::uint64_t{0});
+                    std::uint64_t resident_vertices = 0;
+                    if (const auto artifacts = plan.find("artifacts");
+                        artifacts != plan.end() && artifacts->is_object()) {
+                        if (const auto mmap = artifacts->find("mmap"); mmap != artifacts->end() && mmap->is_object()) {
+                            resident_vertices = mmap->value("vertices", std::uint64_t{0});
+                        }
+                    }
+                    const bool complete_mmap_cache = total_nodes > 0 && resident_vertices == total_nodes;
+                    if (!cache_backend.contains("coverage") || !cache_backend["coverage"].is_object()) {
+                        cache_backend["coverage"] = json::object();
+                    }
+                    cache_backend["coverage"]["mode"] = "id-routing";
+                    cache_backend["coverage"]["fresh"] = true;
+                    cache_backend["coverage"]["complete_for_requested_subgraph"] = complete_mmap_cache;
+                }
                 if (id == "Redis") {
                     cache_backend["cache_plan_path"] = plan_path.string();
                 }
@@ -205,6 +256,18 @@ namespace polygraph::cli {
                                               cache_backend.value("relation_limit", std::uint64_t{0}));
                         if (cache_backend.contains("projection_artifact")) {
                             existing["cache_projection_artifact"] = cache_backend["projection_artifact"];
+                        }
+                        if (complete_gpu_cache) {
+                            if (!existing.contains("capabilities") || !existing["capabilities"].is_object()) {
+                                existing["capabilities"] = json::object();
+                            }
+                            if (!existing.contains("coverage") || !existing["coverage"].is_object()) {
+                                existing["coverage"] = json::object();
+                            }
+                            existing["capabilities"]["native_bfs"] = true;
+                            existing["coverage"]["mode"] = "id-routing";
+                            existing["coverage"]["fresh"] = true;
+                            existing["coverage"]["complete_for_requested_subgraph"] = true;
                         }
                         existing["cache_role"] = "acceleration";
                     } else {

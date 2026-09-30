@@ -17,6 +17,7 @@
 #include "infrastructure/BackendKind.hpp"
 #include "query/QueryResult.hpp"
 
+#include <functional>
 #include <memory>
 #include <span>
 #include <vector>
@@ -24,6 +25,18 @@
 namespace polygraph {
 
 class Query;
+
+/** @brief Membership predicate used by bottom-up BFS without exposing executor internals. */
+using VertexMembershipPredicate = std::function<bool(GlobalId)>;
+
+/** @brief One vertex discovered by a bottom-up/pull expansion and one valid BFS predecessor. */
+struct PullCandidate {
+    NodeRef vertex;
+    NodeRef predecessor;
+};
+
+/** @brief Bounded batch consumer for pull discoveries. */
+using PullCandidateConsumer = std::function<void(std::span<const PullCandidate>)>;
 
 /**
  * @brief Polymorphic interface implemented by every physical graph backend.
@@ -73,6 +86,31 @@ class IGraphStore {
         int depth,
         const BfsOptions& options,
         const NeighborBatchConsumer& consumer);
+
+    /**
+     * @brief Whether this store can perform an exact complete bottom-up scan for @p spec.
+     *
+     * Pull is deliberately stricter than normal one-hop expansion: returning true means the
+     * store contains the complete candidate-vertex universe for the requested subgraph.
+     */
+    [[nodiscard]] virtual bool can_pull_expand(const ExpandSpec& spec) const;
+
+    /** @brief Number of candidate vertices scanned by a complete pull expansion. */
+    [[nodiscard]] virtual std::size_t pull_vertex_count() const;
+
+    /**
+     * @brief Streams vertices not in @p visited_contains that have any neighbor in the frontier.
+     *
+     * Every emitted item contains one frontier predecessor, preserving exact level-synchronous
+     * BFS semantics and allowing predecessor maps to be produced in pull mode.
+     */
+    virtual void stream_pull_candidates(
+        const ExpandSpec& spec,
+        int depth,
+        const BfsOptions& options,
+        const VertexMembershipPredicate& frontier_contains,
+        const VertexMembershipPredicate& visited_contains,
+        const PullCandidateConsumer& consumer);
 
     /** @brief Returns whether this store can execute the complete requested BFS natively. */
     /** @brief Returns whether this store can answer one-hop expansion for this vertex/spec. */

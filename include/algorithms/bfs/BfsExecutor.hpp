@@ -95,6 +95,19 @@ class BfsExecutor {
         const BfsOptions& options,
         const std::function<void(const BfsLayerEvent&)>& on_layer) const;
 
+    /**
+     * @brief Adaptive distributed BFS using push/pull direction switching and sparse/bitmap frontiers.
+     *
+     * Exact pull is used only when PlacementCatalog exposes a complete pull-capable backend;
+     * otherwise the policy automatically falls back to top-down push while retaining adaptive
+     * frontier membership representation.
+     */
+    [[nodiscard]] BfsResult run_direction_optimized_bfs(
+        const NodeRef& source,
+        const ExpandSpec& spec,
+        const BfsOptions& options,
+        const std::function<void(const BfsLayerEvent&)>& on_layer) const;
+
     /** @brief Converts compact dense state to the external ID-keyed representation. */
     [[nodiscard]] static BfsResult make_result(const DenseBfsState& state,
                                                bool include_predecessors);
