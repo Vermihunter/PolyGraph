@@ -1,0 +1,11 @@
+{
+  "storageBackends": ["Neo4J", "PostgreSQL", "GPU"],
+  "defaultNodeSource": "PostgreSQL",
+  "defaultRelationshipSource": "PostgreSQL",
+  "nodeSources": {
+    "Person": "Neo4J",
+    "Forum": "Neo4J",
+    "Tag": "Neo4J"
+  },
+  "relationshipSources": {}
+}

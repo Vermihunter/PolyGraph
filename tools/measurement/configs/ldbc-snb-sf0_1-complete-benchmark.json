@@ -1,0 +1,48 @@
+{
+  "name": "ldbc-snb-sf0_1-complete-bfs",
+  "outputDir": "measurements/benchmark-suites",
+  "repetitions": 3,
+  "startUuidCount": 5,
+  "compareWithReference": true,
+  "failOnMismatch": true,
+  "reconstructLogs": true,
+  "batchSize": 5000,
+  "dockerCompose": "storage_layer/docker-compose.yml",
+
+  "build": {
+    "enabled": true,
+    "preset": "gpu-bfs"
+  },
+
+  "services": {
+    "start": true,
+    "resetVolumes": true,
+    "timeoutSeconds": 180
+  },
+
+  "bfs": {
+    "maxDepth": 7,
+    "direction": "undirected",
+    "noPredecessors": true
+  },
+
+  "datasets": [
+    {
+      "name": "schema-based",
+      "domain": "data/ldbc-snb/sf0_1/schema-based/domain.json",
+      "startUuidsFile": "data/ldbc-snb/sf0_1/schema-based/start_uuids.txt"
+    },
+    {
+      "name": "hash-based",
+      "domain": "data/ldbc-snb/sf0_1/hash-based/domain.json",
+      "startUuidsFile": "data/ldbc-snb/sf0_1/hash-based/start_uuids.txt"
+    }
+  ],
+
+  "scenarios": {
+    "distributed": true,
+    "implementationFull": ["Neo4J", "ArangoDB", "GPU"],
+    "native": ["Neo4J", "ArangoDB"],
+    "reloadEachRepetition": false
+  }
+}

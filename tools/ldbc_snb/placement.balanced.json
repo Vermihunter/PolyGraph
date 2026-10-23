@@ -1,0 +1,8 @@
+{
+  "strategy": "identity-hash-v1",
+  "storageBackends": [
+    "Neo4J",
+    "ArangoDB",
+    "GPU"
+  ]
+}

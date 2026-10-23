@@ -1,0 +1,33 @@
+{
+  "paths": {
+    "schema": "/home/akos/Projects/diplomka/vermesa/data/ldbc-snb/sf1_0/hash-based/ldbc-snb.graph-shape.json",
+    "data": "/home/akos/Projects/diplomka/vermesa/data/ldbc-snb/sf1_0/hash-based/graph.jsonl",
+    "backend_config": "/home/akos/Projects/diplomka/vermesa/data/ldbc-snb/sf1_0/hash-based/backends.json",
+    "graph_db_binary": "/home/akos/Projects/diplomka/vermesa/build/gpu-bfs/bin/bfs",
+    "loader_script": "/home/akos/Projects/diplomka/vermesa/tools/load_graph.py",
+    "reference_bfs_script": "/home/akos/Projects/diplomka/vermesa/tools/algorithms/bfs.py",
+    "docker_compose": "/home/akos/Projects/diplomka/vermesa/storage_layer/docker-compose.yml"
+  },
+  "neo4j": {
+    "http_endpoint": "http://localhost:7474/db/neo4j/tx/commit",
+    "bolt_uri": "bolt://localhost:7687",
+    "user": "neo4j",
+    "password": "password"
+  },
+  "arango": {
+    "base_url": "http://localhost:8529",
+    "user": "root",
+    "password": "rootpassword",
+    "database": "ldbc_snb_sf1_0_hash_based"
+  },
+  "bfs": {
+    "max_depth": 7,
+    "direction": "undirected",
+    "allowed_edge_types": "",
+    "allowed_target_node_types": "",
+    "allow_native_pushdown": false,
+    "no_partial_acceleration": false,
+    "no_predecessors": true
+  },
+  "batch_size": 5000
+}

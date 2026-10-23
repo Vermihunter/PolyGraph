@@ -1,0 +1,4 @@
+{
+  "storageBackends": ["Neo4J", "ArangoDB", "PostgreSQL"],
+  "strategy": "label-striped"
+}

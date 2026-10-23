@@ -1,0 +1,46 @@
+{
+  "name": "ldbc-snb-sf0_1-persistent-distributed",
+  "outputDir": "measurements/benchmark-suites",
+  "repetitions": 3,
+  "startUuidCount": 5,
+  "compareWithReference": true,
+  "failOnMismatch": true,
+  "reconstructLogs": true,
+  "batchSize": 5000,
+  "dockerCompose": "storage_layer/docker-compose.yml",
+  "build": {
+    "enabled": true,
+    "preset": "gpu-bfs"
+  },
+  "services": {
+    "start": true,
+    "resetVolumes": false,
+    "timeoutSeconds": 600
+  },
+  "bfs": {
+    "maxDepth": 7,
+    "direction": "undirected",
+    "noPredecessors": true
+  },
+  "datasets": [
+    {
+      "name": "schema-based",
+      "domain": "data/ldbc-snb/sf0_1/schema-based/domain.json",
+      "startUuidsFile": "data/ldbc-snb/sf0_1/schema-based/start_uuids.txt",
+      "composeInstance": "sf0_1/schema-based"
+    },
+    {
+      "name": "hash-based",
+      "domain": "data/ldbc-snb/sf0_1/hash-based/domain.json",
+      "startUuidsFile": "data/ldbc-snb/sf0_1/hash-based/start_uuids.txt",
+      "composeInstance": "sf0_1/hash-based"
+    }
+  ],
+  "scenarios": {
+    "distributed": true,
+    "implementationFull": [],
+    "native": [],
+    "loadDistributed": false,
+    "reloadEachRepetition": false
+  }
+}

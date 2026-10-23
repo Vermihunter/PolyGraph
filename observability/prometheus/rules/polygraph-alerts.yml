@@ -1,0 +1,42 @@
+groups:
+  - name: polygraph-local
+    rules:
+      - alert: PolyGraphTargetDown
+        expr: up{job=~"polygraph|neo4j|arangodb"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} metrics target is down"
+          description: "Prometheus has not scraped {{ $labels.instance }} successfully for one minute."
+
+      - alert: PolyGraphHighResidentMemory
+        expr: polygraph_process_resident_memory_bytes > 12 * 1024 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PolyGraph resident memory is above 12 GiB"
+          description: "Current RSS is {{ $value | humanize1024 }}B."
+
+      - alert: PolyGraphAllocatorFragmentationHigh
+        expr: |
+          (polygraph_jemalloc_resident_bytes - polygraph_jemalloc_allocated_bytes)
+          / clamp_min(polygraph_jemalloc_resident_bytes, 1) > 0.35
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "jemalloc resident-to-allocated gap is high"
+          description: "More than 35% of jemalloc resident memory is not live allocated memory."
+
+      - alert: PolyGraphHttpP95Slow
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, route) (rate(polygraph_http_request_duration_seconds_bucket[5m]))) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PolyGraph HTTP p95 latency is above two seconds"
+          description: "Route {{ $labels.route }} has p95 latency {{ $value }}s."

@@ -1,0 +1,24 @@
+# Optional low-memory ArangoDB read profile for PolyGraph BFS experiments.
+services:
+  arangodb:
+    command:
+      - --server.endpoint=tcp://0.0.0.0:8529
+      - --server.export-metrics-api=true
+      - --server.export-read-write-metrics=true
+      - --server.options-api=${ARANGO_OPTIONS_API:-admin}
+      - --server.minimal-threads=${ARANGO_SERVER_MINIMAL_THREADS:-16}
+      - --server.maximal-threads=${ARANGO_SERVER_MAXIMAL_THREADS:-64}
+      - --server.io-threads=${ARANGO_SERVER_IO_THREADS:-4}
+      - --server.scheduler-queue-size=${ARANGO_SERVER_SCHEDULER_QUEUE_SIZE:-4096}
+      - --server.ongoing-low-priority-multiplier=${ARANGO_SERVER_LOW_PRIORITY_MULTIPLIER:-2}
+      - --rocksdb.block-cache-size=${ARANGO_ROCKSDB_BLOCK_CACHE_SIZE:-3221225472}
+      - --cache.size=${ARANGO_CACHE_SIZE:-2147483648}
+      - --cache.min-value-size-for-edge-compression=${ARANGO_CACHE_MIN_VALUE_SIZE_FOR_EDGE_COMPRESSION:-100}
+      - --rocksdb.total-write-buffer-size=${ARANGO_ROCKSDB_WRITE_BUFFER_SIZE:-268435456}
+      - --rocksdb.enforce-block-cache-size-limit=${ARANGO_ROCKSDB_ENFORCE_CACHE_LIMIT:-true}
+      - --query.memory-limit=${ARANGO_QUERY_MEMORY_LIMIT:-536870912}
+      - --query.global-memory-limit=${ARANGO_QUERY_GLOBAL_MEMORY_LIMIT:-2147483648}
+      - --query.memory-limit-override=${ARANGO_QUERY_MEMORY_LIMIT_OVERRIDE:-false}
+      - --query.log-memory-usage-threshold=${ARANGO_QUERY_LOG_MEMORY_THRESHOLD:-268435456}
+      - --query.max-runtime=${ARANGO_QUERY_MAX_RUNTIME:-0}
+      - --query.log-failed=${ARANGO_QUERY_LOG_FAILED:-true}

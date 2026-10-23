@@ -1,0 +1,33 @@
+{
+  "paths": {
+    "schema": "data/ldbc-snb/sf0_1/ldbc-snb.graph-shape.json",
+    "data": "data/ldbc-snb/sf0_1/graph.jsonl",
+    "backend_config": "data/ldbc-snb/sf0_1/backends.json",
+    "graph_db_binary": "build/gpu-bfs/bin/bfs",
+    "loader_script": "tools/load_graph.py",
+    "reference_bfs_script": "tools/algorithms/bfs.py",
+    "docker_compose": "storage_layer/docker-compose.yml"
+  },
+  "neo4j": {
+    "http_endpoint": "http://localhost:7474/db/neo4j/tx/commit",
+    "bolt_uri": "bolt://localhost:7687",
+    "user": "neo4j",
+    "password": "password"
+  },
+  "arango": {
+    "base_url": "http://localhost:8529",
+    "user": "root",
+    "password": "rootpassword",
+    "database": "ldbc_snb_sf0_1"
+  },
+  "bfs": {
+    "max_depth": 7,
+    "direction": "undirected",
+    "allowed_edge_types": "",
+    "allowed_target_node_types": "",
+    "allow_native_pushdown": false,
+    "no_partial_acceleration": false,
+    "no_predecessors": true
+  },
+  "batch_size": 5000
+}

@@ -1,0 +1,37 @@
+# Compatibility image for the pinned Hadoop-based LDBC SNB Datagen release.
+#
+# The upstream v1.0.0 Dockerfile uses openjdk:8-jdk-buster. The Docker Official
+# Image for OpenJDK is retired and that tag is no longer published, so the
+# project builds the unchanged Datagen source on a maintained Java 8 image.
+ARG DATAGEN_BASE_IMAGE=eclipse-temurin:8-jdk-jammy
+FROM ${DATAGEN_BASE_IMAGE}
+
+ARG HADOOP_VERSION=3.2.1
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /opt
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        ca-certificates-java \
+        curl \
+        maven \
+        python3 \
+        python-is-python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --fail --location --retry 5 --retry-delay 2 \
+        "https://archive.apache.org/dist/hadoop/core/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz" \
+    | tar -xz
+
+COPY . /opt/ldbc_snb_datagen
+WORKDIR /opt/ldbc_snb_datagen
+
+RUN mvn --batch-mode dependency:resolve \
+    && mvn --batch-mode -DskipTests clean assembly:assembly
+
+ENV HADOOP_CLIENT_OPTS="-Xmx6G"
+
+CMD ["/bin/bash", "/opt/ldbc_snb_datagen/docker_run.sh"]

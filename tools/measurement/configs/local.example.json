@@ -1,0 +1,51 @@
+{
+  "paths": {
+    "schema": "storage_layer/sample-university-domain.graph-shape.json",
+    "data": "tools/generators/large-university.json",
+    "backend_config": "config/backends.full.json",
+
+    "graph_db_binary": "cmake-build-release/bin/bfs",
+    "loader_script": "tools/load_graph.py",
+    "reference_bfs_script": "tools/algorithms/bfs.py",
+    "docker_compose": "storage_layer/docker-compose.yml"
+  },
+  "implementation_full": {
+    "neo4j": {
+      "schema": "storage_layer/sample-university-domain.neo.graph-shape.json",
+      "data": "tools/generators/large-university-neo.json",
+      "backend_config": "config/backends.neo.json"
+    },
+    "arango": {
+      "schema": "storage_layer/sample-university-domain.arango.graph-shape.json",
+      "data": "tools/generators/large-university-arango.json",
+      "backend_config": "config/backends.arango.json"
+    },
+    "gpu": {
+      "schema": "storage_layer/sample-university-domain.gpu.graph-shape.json",
+      "data": "tools/generators/large-university-gpu.json",
+      "backend_config": "config/backends.gpu.json"
+    }
+  },
+  "neo4j": {
+    "http_endpoint": "http://localhost:7474/db/neo4j/tx/commit",
+    "bolt_uri": "bolt://localhost:7687",
+    "user": "neo4j",
+    "password": "password"
+  },
+  "arango": {
+    "base_url": "http://localhost:8529",
+    "user": "root",
+    "password": "rootpassword",
+    "database": "university"
+  },
+  "bfs": {
+    "max_depth": 7,
+    "direction": "undirected",
+    "allowed_edge_types": "",
+    "allowed_target_node_types": "",
+    "allow_native_pushdown": false,
+    "no_partial_acceleration": false,
+    "no_predecessors": false
+  },
+  "batch_size": 10000
+}

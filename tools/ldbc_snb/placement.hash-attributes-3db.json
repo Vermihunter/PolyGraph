@@ -1,0 +1,16 @@
+{
+  "storageBackends": ["Neo4J", "ArangoDB", "PostgreSQL"],
+  "strategy": "attribute-hash",
+  "nodeHashAttributes": {
+    "*": ["$type", "ldbc_id"]
+  },
+  "relationshipHashAttributes": {
+    "*": ["$type", "$from", "$to"],
+    "PERSON_KNOWS_PERSON": ["$type", "$from", "$to", "creationDate"],
+    "PERSON_LIKES_POST": ["$type", "$from", "$to", "creationDate"],
+    "PERSON_LIKES_COMMENT": ["$type", "$from", "$to", "creationDate"],
+    "FORUM_HASMEMBER_PERSON": ["$type", "$from", "$to", "joinDate"],
+    "PERSON_STUDYAT_ORGANISATION": ["$type", "$from", "$to", "classYear"],
+    "PERSON_WORKAT_ORGANISATION": ["$type", "$from", "$to", "workFrom"]
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "storageBackends": ["Neo4J", "ArangoDB", "PostgreSQL"],
+  "nodeSources": {
+    "Person": "Neo4J",
+    "Forum": "Neo4J",
+    "Post": "ArangoDB",
+    "Comment": "ArangoDB",
+    "Tag": "ArangoDB",
+    "Organisation": "PostgreSQL",
+    "Place": "PostgreSQL",
+    "TagClass": "PostgreSQL"
+  },
+  "relationshipSources": {
+    "FORUM_HASMEMBER_PERSON": "Neo4J",
+    "FORUM_HASMODERATOR_PERSON": "Neo4J",
+    "PERSON_KNOWS_PERSON": "Neo4J",
+    "PERSON_STUDYAT_ORGANISATION": "Neo4J",
+    "PERSON_WORKAT_ORGANISATION": "Neo4J",
+
+    "COMMENT_HASCREATOR_PERSON": "ArangoDB",
+    "COMMENT_HASTAG_TAG": "ArangoDB",
+    "COMMENT_REPLYOF_COMMENT": "ArangoDB",
+    "COMMENT_REPLYOF_POST": "ArangoDB",
+    "FORUM_CONTAINEROF_POST": "ArangoDB",
+    "FORUM_HASTAG_TAG": "ArangoDB",
+    "PERSON_HASINTEREST_TAG": "ArangoDB",
+    "PERSON_LIKES_COMMENT": "ArangoDB",
+    "PERSON_LIKES_POST": "ArangoDB",
+    "POST_HASCREATOR_PERSON": "ArangoDB",
+    "POST_HASTAG_TAG": "ArangoDB",
+
+    "COMMENT_ISLOCATEDIN_PLACE": "PostgreSQL",
+    "ORGANISATION_ISLOCATEDIN_PLACE": "PostgreSQL",
+    "PERSON_ISLOCATEDIN_PLACE": "PostgreSQL",
+    "POST_ISLOCATEDIN_PLACE": "PostgreSQL",
+    "TAG_HASTYPE_TAGCLASS": "PostgreSQL",
+    "TAGCLASS_ISSUBCLASSOF_TAGCLASS": "PostgreSQL",
+    "PLACE_ISPARTOF_PLACE": "PostgreSQL"
+  }
+}

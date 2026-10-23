@@ -1,0 +1,101 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+}
+
+discovery.relabel "docker_logs" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service_name"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+}
+
+loki.source.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.relabel.docker_logs.output
+  refresh_interval = "5s"
+  forward_to       = [loki.process.docker.receiver]
+}
+
+loki.process "docker" {
+  stage.docker {}
+  stage.static_labels {
+    values = {
+      source = "docker",
+    }
+  }
+  forward_to = [loki.write.local.receiver]
+}
+
+local.file_match "polygraph_json" {
+  path_targets = [{
+    "__path__"     = "/var/log/polygraph/*.jsonl",
+    "job"          = "polygraph-file",
+    "service_name" = "polygraph",
+  }]
+  sync_period = "5s"
+}
+
+loki.source.file "polygraph_json" {
+  targets    = local.file_match.polygraph_json.targets
+  forward_to = [loki.process.polygraph_json.receiver]
+}
+
+loki.process "polygraph_json" {
+  stage.json {
+    expressions = {
+      event        = "event",
+      level        = "level",
+      service_name       = "service",
+      timestamp_unix_ns  = "timestamp_unix_ns",
+    }
+  }
+
+  // Keep only bounded labels. The event name stays in the JSON body and can be
+  // queried with `| json | event="..."` without creating a large Loki index.
+  stage.timestamp {
+    source               = "timestamp_unix_ns"
+    format               = "UnixNs"
+    action_on_failure    = "skip"
+    action_on_duplicate_timestamp = "keep"
+  }
+
+  stage.labels {
+    values = {
+      level        = "",
+      service_name = "",
+    }
+  }
+
+  stage.static_labels {
+    values = {
+      source = "polygraph-json-file",
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

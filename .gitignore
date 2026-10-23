@@ -204,4 +204,4 @@ Thumbs.db
 # Remove them once reviewed. Public tests are highly recommended for CI.
 /tests/
 /include/insertion/
-/src/insertion/
+/src/insertion//.polygraph/
