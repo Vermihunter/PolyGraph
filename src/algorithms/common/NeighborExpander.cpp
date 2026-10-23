@@ -3,6 +3,7 @@
 //
 
 #include "algorithms/common/NeighborExpander.hpp"
+#include "analysis/AlgorithmAnalyzer.hpp"
 
 #include <future>
 
@@ -28,7 +29,16 @@ namespace polygraph {
 
         if (plan.backend_frontiers.size() == 1) {
             const auto &[backend_id, backend_frontier] = *plan.backend_frontiers.begin();
+#if POLYGRAPH_ENABLE_ALGORITHM_ANALYZER
+            auto &analyzer = algorithm_analysis::AlgorithmAnalyzer::instance();
+            const auto owner_of = [this](const GlobalId id) { return catalog_.owner_backend(id); };
+            analyzer.record_node_batch(options.scheduler_query_id, "source", backend_id, backend_frontier, owner_of);
+            auto rows = catalog_.store(backend_id)->get_minimal_neighbors_batch(backend_frontier, spec, depth, options);
+            analyzer.record_destination_rows(options.scheduler_query_id, backend_id, rows, owner_of);
+            return rows;
+#else
             return catalog_.store(backend_id)->get_minimal_neighbors_batch(backend_frontier, spec, depth, options);
+#endif
         }
 
         std::vector<std::future<std::vector<MinimalAdjacencyRow>>> futures;
@@ -37,10 +47,21 @@ namespace polygraph {
         for (const auto &[backend_id, backend_frontier]: plan.backend_frontiers) {
             auto store = catalog_.store(backend_id);
             const auto *frontier_ptr = &backend_frontier;
-            futures.push_back(
-                    std::async(std::launch::async, [store = std::move(store), frontier_ptr, spec, depth, options] {
-                        return store->get_minimal_neighbors_batch(*frontier_ptr, spec, depth, options);
-                    }));
+#if POLYGRAPH_ENABLE_ALGORITHM_ANALYZER
+            algorithm_analysis::AlgorithmAnalyzer::instance().record_node_batch(
+                    options.scheduler_query_id, "source", backend_id, backend_frontier,
+                    [this](const GlobalId id) { return catalog_.owner_backend(id); });
+#endif
+            futures.push_back(std::async(std::launch::async, [this, store = std::move(store), frontier_ptr, backend_id,
+                                                              spec, depth, options] {
+                auto rows = store->get_minimal_neighbors_batch(*frontier_ptr, spec, depth, options);
+#if POLYGRAPH_ENABLE_ALGORITHM_ANALYZER
+                algorithm_analysis::AlgorithmAnalyzer::instance().record_destination_rows(
+                        options.scheduler_query_id, backend_id, rows,
+                        [this](const GlobalId id) { return catalog_.owner_backend(id); });
+#endif
+                return rows;
+            }));
         }
 
         std::vector<MinimalAdjacencyRow> merged;
@@ -69,7 +90,19 @@ namespace polygraph {
 
         if (plan.backend_frontiers.size() == 1) {
             const auto &[backend_id, backend_frontier] = *plan.backend_frontiers.begin();
+#if POLYGRAPH_ENABLE_ALGORITHM_ANALYZER
+            auto &analyzer = algorithm_analysis::AlgorithmAnalyzer::instance();
+            const auto owner_of = [this](const GlobalId id) { return catalog_.owner_backend(id); };
+            analyzer.record_node_batch(options.scheduler_query_id, "source", backend_id, backend_frontier, owner_of);
+            const NeighborBatchConsumer instrumented = [&, backend_id](const std::span<const NodeRef> candidates) {
+                analyzer.record_node_batch(options.scheduler_query_id, "destination", backend_id, candidates, owner_of);
+                consumer(candidates);
+            };
+            catalog_.store(backend_id)
+                    ->stream_neighbor_candidates(backend_frontier, spec, depth, options, instrumented);
+#else
             catalog_.store(backend_id)->stream_neighbor_candidates(backend_frontier, spec, depth, options, consumer);
+#endif
             return;
         }
 
@@ -78,10 +111,26 @@ namespace polygraph {
         for (const auto &[backend_id, backend_frontier]: plan.backend_frontiers) {
             auto store = catalog_.store(backend_id);
             const auto *frontier_ptr = &backend_frontier;
-            futures.push_back(std::async(
-                    std::launch::async, [store = std::move(store), frontier_ptr, spec, depth, options, consumer] {
+#if POLYGRAPH_ENABLE_ALGORITHM_ANALYZER
+            algorithm_analysis::AlgorithmAnalyzer::instance().record_node_batch(
+                    options.scheduler_query_id, "source", backend_id, backend_frontier,
+                    [this](const GlobalId id) { return catalog_.owner_backend(id); });
+#endif
+            futures.push_back(std::async(std::launch::async, [this, store = std::move(store), frontier_ptr, backend_id,
+                                                              spec, depth, options, consumer] {
+#if POLYGRAPH_ENABLE_ALGORITHM_ANALYZER
+                auto &analyzer = algorithm_analysis::AlgorithmAnalyzer::instance();
+                const auto owner_of = [this](const GlobalId id) { return catalog_.owner_backend(id); };
+                const NeighborBatchConsumer instrumented = [&, backend_id](const std::span<const NodeRef> candidates) {
+                    analyzer.record_node_batch(options.scheduler_query_id, "destination", backend_id, candidates,
+                                               owner_of);
+                    consumer(candidates);
+                };
+                store->stream_neighbor_candidates(*frontier_ptr, spec, depth, options, instrumented);
+#else
                         store->stream_neighbor_candidates(*frontier_ptr, spec, depth, options, consumer);
-                    }));
+#endif
+            }));
         }
 
         for (auto &future: futures) {

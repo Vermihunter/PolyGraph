@@ -32,6 +32,10 @@ set(POLYGRAPH_CORE_SOURCES
     "${PROJECT_SOURCE_DIR}/src/utilities/ThreadPool.cpp"
 )
 
+if(POLYGRAPH_ENABLE_ALGORITHM_ANALYZER)
+    list(APPEND POLYGRAPH_CORE_SOURCES "${PROJECT_SOURCE_DIR}/src/analysis/AlgorithmAnalyzer.cpp")
+endif()
+
 add_library(polygraph_core STATIC ${POLYGRAPH_CORE_SOURCES})
 add_library(polygraph::core ALIAS polygraph_core)
 

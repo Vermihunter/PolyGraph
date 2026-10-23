@@ -1,35 +1,207 @@
-build/
+# ============================================================================
+# PolyGraph | C++ / CUDA / CMake / Python / Database / Benchmarking
+# ============================================================================
+# Track source, tests (when ready), example configurations, and documentation.
+# Ignore generated state, private configuration, local datasets, and outputs.
+# Deliberately DO NOT ignore all *.json, *.txt, *.csv, or *.jsonl files:
+#   - Grafana dashboards, graph configurations, fixtures and docs need them.
 
-**/*.env
-*.json
-!CMakePresets.json
-**/*.csv
-*.txt
-!CMakeLists.txt
-*.log
-*.jsonl
-
-/logs/*.log
-/logs/*.jsonl
+# ---------------------------------------------------------------------------
+# 1. Build directories and CMake-generated files
+# ---------------------------------------------------------------------------
 /build/
-/observability/.env
-*.heap
-
-tools/my-venv/
-.idea/
-
-**/node_modules/
-
-/build*/
+/build-*/
+/cmake-build-*/
 /out/
-/logs/
+/install/
+
+CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+cmake_install.cmake
+CTestTestfile.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
 compile_commands.json
+.ninja_deps
+.ninja_log
+
+# Compiled C++ / CUDA artifacts
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.lib
+*.exe
+*.pdb
+*.ilk
+*.dSYM/
+*.cubin
+*.fatbin
+*.ptx
+*.cudafe*
+
+# ---------------------------------------------------------------------------
+# 2. Python: caches, environments, packaging, and test artifacts
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+.venv/
+venv/
+env/
+tools/my-venv/
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# 3. Local graph datasets and generated storage/cache files
+# ---------------------------------------------------------------------------
+# LDBC SNB generated datasets (e.g. sf0_1 = 750 MB, sf1_0 = 35 GB).
+# Leave data/ldbc-snb/Data.md and placement.config.json trackable.
+/data/ldbc-snb/sf*/
+/data/social_network-*/
+
+# Generated cache and on-disk database artifacts, wherever produced.
+*.bin
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-wal
+*.db-shm
+
+# Keep small source-controlled fixtures and graph examples in data/university/.
+
+# ---------------------------------------------------------------------------
+# 4. Benchmark output, runtime logs, and local reports
+# ---------------------------------------------------------------------------
+/measurements/
+/results/
+/reports/
+/logs/
+
+*.log
+*.heap
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+*.nsys-rep
+*.qdrep
+*.ncu-rep
+*.nvvp
+core
+core.*
+
+# One-off outputs at repository root (not documentation/fixtures elsewhere)
+/output.txt
+/results.txt
+/tree.txt
+/project.zip
+
+# ---------------------------------------------------------------------------
+# 5. Credentials and machine-specific configuration
+# ---------------------------------------------------------------------------
+.env
+.env.*
+*.env
+*.env.*
+
+# Publish templates, never values from local environment files.
+!.env.example
+!.env.sample
+!*.env.example
+!*.example.env
+!*.env.sample
+!*.sample.env
+!*.env.template
+
+/observability/secrets/
+**/secrets/
+/storage_layer/environments.json
+*.local.json
+*.secret.json
+*.secrets.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# Docker volumes / runtime state, not Dockerfiles or Compose definitions
+/storage_layer/**/volumes/
+/storage_layer/**/db-data/
+/observability/**/data/
+
+# ---------------------------------------------------------------------------
+# 6. Node / frontend (gRPC browser viewer)
+# ---------------------------------------------------------------------------
+node_modules/
+dist/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# ---------------------------------------------------------------------------
+# 7. LaTeX / documentation build artifacts
+# ---------------------------------------------------------------------------
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.synctex.gz
+*.toc
+*.run.xml
+
+# ---------------------------------------------------------------------------
+# 8. Editors, OS, temporary files, and archives
+# ---------------------------------------------------------------------------
+.idea/
 .vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+*.bak
+*.backup
+*.orig
+*.rej
+*.tmp
+*.temp
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
 
-tests/
-include/insertion/
-src/insertion/
-measurements/
-results/
-
-.polygraph/
+# ---------------------------------------------------------------------------
+# 9. Existing intentionally-unpublished code (temporary)
+# ---------------------------------------------------------------------------
+# IMPORTANT: These exclusions were present in the original .gitignore.
+# Remove them once reviewed. Public tests are highly recommended for CI.
+/tests/
+/include/insertion/
+/src/insertion/

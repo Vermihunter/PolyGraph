@@ -1,0 +1,180 @@
+% Requires: \usepackage{listings}
+\subsection{Separation of Event Gathering and Operational Logging}
+\label{subsec:event-gathering-logging}
+
+PolyGraph distinguishes between \emph{execution events} used for measurement and
+profiling, and \emph{operational log messages} intended for developers and
+operators.  The two concerns previously shared the same event-logging interface:
+an \texttt{EVENT\_*} call constructed structured event data and immediately routed
+it through the logging subsystem.  This made instrumentation and ordinary logging
+conceptually indistinguishable and, more importantly, meant that instrumentation
+remained part of the program even when measurements were not required.
+
+The revised design exposes two independent interfaces. Structured execution
+instrumentation is provided by the \texttt{events} subsystem, while ordinary
+human-readable messages are provided by the \texttt{logging} subsystem.  Both may
+internally use spdlog-backed sinks, but they do not share their public API,
+configuration, or lifecycle.
+
+\subsubsection{Execution-event gathering}
+
+Execution events describe measurable points or intervals in the execution of an
+algorithm. A point event can attach structured fields to a stable event name:
+
+\begin{lstlisting}[language=C++]
+#include "events/Events.hpp"
+
+EVENT_INFO("bfs.frontier.expanded",
+           {"depth", depth},
+           {"frontier_size", frontier.size()},
+           {"neighbors", neighbors.size()});
+\end{lstlisting}
+
+Timed intervals use an RAII scope. The scope emits a
+\texttt{<name>.start} event when it is created and a \texttt{<name>.end} event
+when it leaves scope. Additional fields can be attached to the end event:
+
+\begin{lstlisting}[language=C++]
+EVENT_SCOPE_INFO(expand_span,
+                 "bfs.frontier.expand",
+                 {"depth", depth},
+                 {"frontier_size", frontier.size()});
+
+const auto rows = store.get_minimal_neighbors(frontier, depth);
+
+EVENT_SCOPE_INFO_FIELD(expand_span, "rows", rows.size());
+\end{lstlisting}
+
+At runtime, enabled events are forwarded to an \texttt{EventCollector}. The
+collector applies the configured severity and prefix filters, adds common metadata
+such as the sequence number, timestamp, elapsed time, service name and thread ID,
+and forwards the resulting event to one or more event sinks. In the benchmark
+configuration, the principal sink serializes the event as JSON and writes it to
+\texttt{logs/polygraph.events.jsonl}. These JSONL records are the input to the
+existing event-log reconstruction and timeline tooling.
+
+Event gathering also has a build-time switch:
+
+\begin{lstlisting}[language=bash]
+cmake -S . -B build/release \
+  -DPOLYGRAPH_ENABLE_EVENT_GATHERING=OFF
+\end{lstlisting}
+
+When \texttt{POLYGRAPH\_ENABLE\_EVENT\_GATHERING=OFF}, every
+\texttt{EVENT\_*} and \texttt{EVENT\_SCOPE\_*} macro expands to
+\texttt{((void)0)}. Consequently, event names, JSON field construction, field
+expressions, collector lookups, timers and scope objects are not present at the
+instrumented call site. Event implementation source files are also omitted from
+the observability target. Thus a performance-sensitive statement such as
+
+\begin{lstlisting}[language=C++]
+EVENT_INFO("bfs.layer.completed",
+           {"expensive_field", compute_expensive_statistic()});
+\end{lstlisting}
+
+does not evaluate \texttt{compute\_expensive\_statistic()} in a build where event
+gathering is disabled. This is stronger than a runtime
+\texttt{if (events\_enabled)} check because the instrumentation is removed during
+preprocessing and cannot contribute runtime work to the measured algorithm.
+
+When event gathering is compiled in, individual events may still be controlled at
+runtime through the \texttt{events} section of the observability configuration.
+For example:
+
+\begin{lstlisting}
+"events": {
+  "enabled": true,
+  "minimum_level": "debug",
+  "periodic_flush_ms": 1000,
+  "selection": {
+    "include_prefixes": ["bfs.", "neo4j.", "arango."]
+  },
+  "sinks": [{
+    "name": "events-json",
+    "type": "rotating_file",
+    "format": "json",
+    "path": "logs/polygraph.events.jsonl"
+  }]
+}
+\end{lstlisting}
+
+\subsubsection{Operational logging}
+
+Operational logging is independent from execution-event gathering. It is intended
+for diagnostic statements that a developer or operator should read, rather than
+for benchmark reconstruction. The interface uses format-style messages:
+
+\begin{lstlisting}[language=C++]
+#include "logging/Log.hpp"
+
+LOG_INFO("Starting BFS from {} with max depth {}", source_uuid, max_depth);
+LOG_DEBUG("Selected backend {} for {} frontier vertices",
+          backend_name, frontier.size());
+LOG_WARN("Backend {} returned an empty batch", backend_name);
+LOG_ERROR("BFS request failed: {}", error.what());
+\end{lstlisting}
+
+These messages do not create structured benchmark events and do not appear in the
+event timeline. They are routed through the independently configured application
+logger. The default configuration writes informational messages to the console and
+writes debug-and-higher messages to a rotating file at
+\texttt{logs/polygraph.log}:
+
+\begin{lstlisting}
+"logging": {
+  "enabled": true,
+  "minimum_level": "debug",
+  "periodic_flush_ms": 1000,
+  "sinks": [
+    {
+      "name": "console",
+      "type": "stdout",
+      "minimum_level": "info"
+    },
+    {
+      "name": "application-log",
+      "type": "rotating_file",
+      "minimum_level": "debug",
+      "path": "logs/polygraph.log"
+    }
+  ]
+}
+\end{lstlisting}
+
+The distinction is visible at call sites. For example, the BFS executable records
+one machine-readable lifecycle event and one human-readable log message for the
+same operation:
+
+\begin{lstlisting}[language=C++]
+LOG_INFO("BFS completed with {} discovered vertices",
+         result.distance.size());
+
+EVENT_INFO("bfs.cli.completed",
+           {"vertices", result.distance.size()});
+\end{lstlisting}
+
+The first statement is operational output. The second statement belongs to the
+measurement data model. Disabling event gathering at compile time removes only the
+second statement; ordinary application logging remains available.
+
+\subsubsection{Independent lifecycle}
+
+The two facilities are installed and shut down separately:
+
+\begin{lstlisting}[language=C++]
+const auto observability =
+    polygraph::cli::parse_observability_config(args);
+
+polygraph::logging::install_logger(observability.logging);
+polygraph::events::install_collector(observability.events);
+
+// ... run application ...
+
+polygraph::events::shutdown();
+polygraph::logging::shutdown();
+\end{lstlisting}
+
+This separation allows PolyGraph to be built with no execution instrumentation for
+clean performance measurements while retaining normal operational logging, or to
+compile event gathering in and select the desired event set at runtime for detailed
+profiling runs.

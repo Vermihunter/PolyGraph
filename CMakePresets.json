@@ -166,6 +166,17 @@
         "POLYGRAPH_ENABLE_CLANG_FORMAT": "OFF",
         "POLYGRAPH_ENABLE_CLANG_TIDY": "OFF"
       }
+    },
+    {
+      "name": "http-server-analysis",
+      "displayName": "Drogon HTTP server + algorithm analyzer",
+      "inherits": "http-server",
+      "binaryDir": "${sourceDir}/build/http-server-analysis",
+      "cacheVariables": {
+        "POLYGRAPH_ENABLE_ALGORITHM_ANALYZER": "ON",
+        "POLYGRAPH_ENABLE_METRICS": "OFF",
+        "POLYGRAPH_BUILD_TESTS": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -178,7 +189,8 @@
     { "name": "http-server-observability", "configurePreset": "http-server-observability", "jobs": 2 },
     { "name": "grpc-server", "configurePreset": "grpc-server", "jobs": 2 },
     { "name": "full-cpu", "configurePreset": "full-cpu", "jobs": 2 },
-    { "name": "docs", "configurePreset": "docs", "targets": ["docs"], "jobs": 2 }
+    { "name": "docs", "configurePreset": "docs", "targets": ["docs"], "jobs": 2 },
+    { "name": "http-server-analysis", "configurePreset": "http-server-analysis", "jobs": 2 }
   ],
   "testPresets": [
     { "name": "cpu-core", "configurePreset": "cpu-core", "output": { "outputOnFailure": true } },

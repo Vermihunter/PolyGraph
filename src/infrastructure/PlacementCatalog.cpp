@@ -89,6 +89,8 @@ namespace polygraph {
         return locations;
     }
 
+    BackendId PlacementCatalog::owner_backend(const GlobalId id) const { return authoritative_owner(id); }
+
     NodeRef PlacementCatalog::node_ref(const GlobalId &id) const {
         if (id_routing_backends_.empty()) {
             throw std::runtime_error("PlacementCatalog has no ID routing layout");

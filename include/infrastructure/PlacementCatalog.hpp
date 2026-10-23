@@ -64,6 +64,8 @@ class PlacementCatalog {
      * validated immediately, so an invalid/disabled backend still fails fast.
      */
     [[nodiscard]] NodeRef node_ref(const GlobalId& id) const;
+    /** @brief Returns the authoritative backend that owns a canonical vertex ID. */
+    [[nodiscard]] BackendId owner_backend(GlobalId id) const;
     /** @brief Adds an optional replica/cache placement rule. */
     void register_placement(Placement placement);
     /** @brief Resolves @p id to a live graph store. */

@@ -9,6 +9,7 @@
 //
 
 #include "cli/GraphRuntimeBuilder.hpp"
+#include "analysis/AlgorithmAnalyzer.hpp"
 #include "cli/NativeNodeIdResolver.hpp"
 #include "insertion/BackendEncodedUuid.hpp"
 #include "logging/Log.hpp"
@@ -908,6 +909,7 @@ namespace polygraph::cli {
         LoadedSchema loaded_schema = load_logical_graph_schema(config.logical_graph_schema_path);
 
         ctx->schema = std::move(loaded_schema.schema);
+        ALGORITHM_ANALYZER_REGISTER_SCHEMA(*ctx->schema);
         ctx->current_graph_version = config.graph_version;
 
         LOG_INFO("Runtime load: reading backend configuration");

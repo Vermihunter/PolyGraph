@@ -132,6 +132,9 @@ class Placement:
     default_relationship_source: str | None = None
     node_sources: dict[str, str] | None = None
     relationship_sources: dict[str, str] | None = None
+    strategy: str = "auto"
+    node_hash_attributes: dict[str, tuple[str, ...]] | None = None
+    relationship_hash_attributes: dict[str, tuple[str, ...]] | None = None
     _layout: BackendLayout = field(init=False, repr=False, compare=False)
     _node_prefix_codes: dict[tuple[str, int], int] = field(init=False, repr=False, compare=False)
 
@@ -139,6 +142,17 @@ class Placement:
         layout = BackendLayout(tuple(self.storage_backends))
         object.__setattr__(self, "_layout", layout)
         object.__setattr__(self, "_node_prefix_codes", {})
+        strategy = self.strategy.lower().replace("_", "-")
+        if strategy not in {"auto", "explicit", "identity-hash", "attribute-hash", "label-striped"}:
+            raise ValueError(f"Unsupported LDBC placement strategy: {self.strategy}")
+        object.__setattr__(self, "strategy", strategy)
+        for type_name, attributes in (self.node_hash_attributes or {}).items():
+            unsupported = set(attributes) - {"$id", "$type", "ldbc_id"}
+            if unsupported:
+                raise ValueError(
+                    "Streaming attribute-hash node placement currently supports only "
+                    f"$id, $type and ldbc_id; {type_name} requested {sorted(unsupported)}"
+                )
         for source in (
             self.default_node_source,
             self.default_relationship_source,
@@ -151,31 +165,106 @@ class Placement:
     def routing_layout(self) -> BackendLayout:
         return self._layout
 
-    def node_route(self, type_name: str, external_id: str) -> tuple[int, str]:
+    @staticmethod
+    def _attributes_for(
+        mapping: dict[str, tuple[str, ...]] | None,
+        type_name: str,
+        defaults: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        values = mapping or {}
+        configured = values.get(type_name, values.get("*"))
+        return tuple(configured) if configured else defaults
+
+    @staticmethod
+    def _hash_identity(
+        entity_kind: str,
+        type_name: str,
+        attributes: tuple[str, ...],
+        properties: dict[str, Any] | None,
+        specials: dict[str, Any],
+    ) -> str:
+        props = properties or {}
+        values: list[tuple[str, Any]] = []
+        for attribute in attributes:
+            if attribute in specials:
+                value = specials[attribute]
+            else:
+                value = props.get(attribute)
+            values.append((attribute, value))
+        payload = json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return f"{entity_kind}:{type_name}:{payload}"
+
+    def node_route(
+        self,
+        type_name: str,
+        external_id: str,
+        properties: dict[str, Any] | None = None,
+    ) -> tuple[int, str]:
         explicit = (self.node_sources or {}).get(type_name, self.default_node_source)
-        identity = f"node:{type_name}:{external_id}"
-        source = (
-            self._layout.source_for_identity(identity)
-            if explicit is None
-            else self._layout.source_for_code(self._layout.code_for(explicit))
-        )
+        if explicit is not None:
+            source = self._layout.source_for_code(self._layout.code_for(explicit))
+        elif self.strategy == "attribute-hash":
+            attributes = self._attributes_for(
+                self.node_hash_attributes, type_name, ("$type", "ldbc_id")
+            )
+            identity = self._hash_identity(
+                "node-attributes",
+                type_name,
+                attributes,
+                properties,
+                {"$id": external_id, "$type": type_name, "ldbc_id": int(external_id)},
+            )
+            source = self._layout.source_for_identity(identity)
+        elif self.strategy == "label-striped":
+            # The type is deliberately part of the hash domain. Each label is
+            # independently striped over all N configured backends rather than
+            # one global stream accidentally favouring a backend for a label.
+            source = self._layout.source_for_identity(f"label-node:{type_name}:{external_id}")
+        else:
+            source = self._layout.source_for_identity(f"node:{type_name}:{external_id}")
+
         numeric_id = int(external_id)
         prefix_code = self.register_node_prefix(type_name, numeric_id)
         local_component = numeric_id & NODE_LOCAL_ID_MASK
         payload = (prefix_code << NODE_LOCAL_ID_BITS) | local_component
         return self._layout.encode_local(payload, source), source
 
-    def relationship_source(self, type_name: str, identity: str | None = None) -> str:
+    def relationship_source(
+        self,
+        type_name: str,
+        identity: str | None = None,
+        *,
+        properties: dict[str, Any] | None = None,
+        from_id: str | None = None,
+        to_id: str | None = None,
+    ) -> str:
         explicit = (self.relationship_sources or {}).get(
             type_name, self.default_relationship_source
         )
         if explicit is not None:
             return self._layout.source_for_code(self._layout.code_for(explicit))
+
+        if self.strategy == "attribute-hash":
+            attributes = self._attributes_for(
+                self.relationship_hash_attributes,
+                type_name,
+                ("$type", "$from", "$to"),
+            )
+            hashed = self._hash_identity(
+                "relationship-attributes",
+                type_name,
+                attributes,
+                properties,
+                {"$type": type_name, "$from": from_id, "$to": to_id},
+            )
+            return self._layout.source_for_identity(hashed)
+
         if identity is None:
             raise ValueError(
                 f"Relationship identity is required for hash placement of {type_name}"
             )
-        return self._layout.source_for_identity(f"relationship:{type_name}:{identity}")
+        prefix = "label-relationship" if self.strategy == "label-striped" else "relationship"
+        return self._layout.source_for_identity(f"{prefix}:{type_name}:{identity}")
 
     def relationship_uuid(self, type_name: str, source: str, sequence: int) -> int:
         if sequence < 0 or sequence > RELATIONSHIP_SEQUENCE_MASK:
@@ -280,6 +369,10 @@ class Placement:
 
     @property
     def strategy_name(self) -> str:
+        if self.strategy == "attribute-hash":
+            return "attribute-hash-v1"
+        if self.strategy == "label-striped":
+            return f"label-striped-{len(self.storage_backends)}-v1"
         has_explicit = bool(
             self.default_node_source
             or self.default_relationship_source
@@ -311,6 +404,19 @@ def load_placement(
         raw.get("relationshipSources", raw.get("relationship_sources", {}))
     )
     legacy_fallback = default_source if node_sources or relationship_sources else None
+    def attribute_map(*names: str) -> dict[str, tuple[str, ...]]:
+        value: Any = {}
+        for name in names:
+            if name in raw:
+                value = raw[name]
+                break
+        if not isinstance(value, dict):
+            raise ValueError(f"Placement attribute map must be an object: {names[0]}")
+        return {
+            str(type_name): tuple(str(attribute) for attribute in attributes)
+            for type_name, attributes in value.items()
+        }
+
     return Placement(
         storage_backends=configured_backends,
         default_node_source=raw.get(
@@ -322,6 +428,11 @@ def load_placement(
         ),
         node_sources=node_sources,
         relationship_sources=relationship_sources,
+        strategy=str(raw.get("strategy", "auto")),
+        node_hash_attributes=attribute_map("nodeHashAttributes", "node_hash_attributes"),
+        relationship_hash_attributes=attribute_map(
+            "relationshipHashAttributes", "relationship_hash_attributes"
+        ),
     )
 
 
@@ -461,7 +572,6 @@ def iter_nodes(
                 external_id = row[0].strip()
                 if not external_id:
                     continue
-                node_uuid, source = placement.node_route(spec.type_name, external_id)
                 properties = row_properties(header, row, skip=1)
                 properties["ldbc_id"] = parse_scalar(external_id, "ldbc_id")
                 if auxiliary is not None:
@@ -469,6 +579,7 @@ def iter_nodes(
                         values = auxiliary[property_name].get(external_id)
                         if values:
                             properties[property_name] = values
+                node_uuid, source = placement.node_route(spec.type_name, external_id, properties)
                 yield NodeRecord(
                     uuid=node_uuid,
                     type=spec.type_name,
@@ -498,13 +609,23 @@ def iter_relationships(grouped: dict[str, list[Path]], placement: Placement) -> 
                 properties = row_properties(header, row, skip=2)
                 configured_source = placement.configured_relationship_source(spec.type_name)
                 identity = None if configured_source is not None else edge_identity(from_id, to_id, row[2:])
-                source = placement.relationship_source(spec.type_name, identity)
+                source = placement.relationship_source(
+                    spec.type_name,
+                    identity,
+                    properties=properties,
+                    from_id=from_id,
+                    to_id=to_id,
+                )
                 sequence_key = (spec.type_name, source)
                 sequence = sequence_by_type_and_source[sequence_key]
                 sequence_by_type_and_source[sequence_key] += 1
                 relationship_uuid = placement.relationship_uuid(spec.type_name, source, sequence)
-                from_uuid, _ = placement.node_route(spec.from_type, from_id)
-                to_uuid, _ = placement.node_route(spec.to_type, to_id)
+                from_uuid, _ = placement.node_route(
+                    spec.from_type, from_id, {"ldbc_id": int(from_id)}
+                )
+                to_uuid, _ = placement.node_route(
+                    spec.to_type, to_id, {"ldbc_id": int(to_id)}
+                )
                 yield RelationshipRecord(
                     uuid=relationship_uuid,
                     type=spec.type_name,

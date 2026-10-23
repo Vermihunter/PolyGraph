@@ -4,6 +4,7 @@
  */
 
 #include "algorithms/bfs/BfsExecutor.hpp"
+#include "analysis/AlgorithmAnalyzer.hpp"
 #include "utilities/uuid.hpp"
 
 #include "events/EventContext.hpp"
@@ -66,6 +67,7 @@ namespace polygraph {
     BfsResult BfsExecutor::run(const NodeRef &source, const ExpandSpec &spec, const BfsOptions &options) const {
         const BfsOptions effective_options = with_scheduler_query_id(options);
         [[maybe_unused]] events::ScopedQueryExecutionContext event_context(effective_options.scheduler_query_id);
+        ALGORITHM_ANALYZER_QUERY_SCOPE(algorithm_analysis_scope, effective_options.scheduler_query_id, source);
         if (effective_options.allow_native_pushdown) {
             if (const auto backend = catalog_.choose_native_bfs_backend(source, spec, effective_options)) {
                 return catalog_.store(*backend)->run_bfs(source, spec, effective_options);
@@ -87,6 +89,7 @@ namespace polygraph {
         }
         const BfsOptions effective_options = with_scheduler_query_id(options);
         [[maybe_unused]] events::ScopedQueryExecutionContext event_context(effective_options.scheduler_query_id);
+        ALGORITHM_ANALYZER_QUERY_SCOPE(algorithm_analysis_scope, effective_options.scheduler_query_id, source);
         if (effective_options.execution_policy == BfsExecutionPolicy::DirectionOptimized) {
             return run_direction_optimized_bfs(source, spec, effective_options, on_layer);
         }

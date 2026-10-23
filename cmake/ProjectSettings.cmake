@@ -24,6 +24,7 @@ target_compile_definitions(polygraph_project_options INTERFACE
 
         # Structured execution events. 0 makes EVENT_* disappear at preprocessing time.
         POLYGRAPH_ENABLE_EVENT_GATHERING=$<BOOL:${POLYGRAPH_ENABLE_EVENT_GATHERING}>
+        POLYGRAPH_ENABLE_ALGORITHM_ANALYZER=$<BOOL:${POLYGRAPH_ENABLE_ALGORITHM_ANALYZER}>
 
         # Compile-time event severity threshold (only relevant when gathering is enabled).
         $<$<CONFIG:Debug>:POLYGRAPH_EVENT_COMPILED_LEVEL=0>

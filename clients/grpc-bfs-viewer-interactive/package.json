@@ -1,0 +1,22 @@
+{
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "npm run gen && vite build",
+    "preview": "vite preview",
+    "gen": "mkdir -p src/gen && protoc -I=../../proto ../../proto/bfs_stream.proto --plugin=protoc-gen-ts=./node_modules/.bin/protoc-gen-ts --ts_out=src/gen --ts_opt=long_type_string"
+  },
+  "dependencies": {
+    "@protobuf-ts/grpcweb-transport": "^2.11.1",
+    "@protobuf-ts/runtime": "^2.11.1",
+    "@protobuf-ts/runtime-rpc": "^2.11.1",
+    "d3-force": "^3.0.0",
+    "pixi.js": "^8.10.0"
+  },
+  "devDependencies": {
+    "@protobuf-ts/plugin": "^2.11.1",
+    "@types/d3-force": "^3.0.10",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
