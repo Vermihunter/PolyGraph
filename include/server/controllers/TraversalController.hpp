@@ -13,21 +13,21 @@
 
 namespace polygraph::http::api::v1 {
 
-class TraversalController final : public drogon::HttpController<TraversalController> {
-  public:
-    METHOD_LIST_BEGIN
-    ADD_METHOD_TO(TraversalController::runBfs, "/api/v1/graphs/{1}/bfs", drogon::Post);
-    ADD_METHOD_TO(TraversalController::getNeighbors, "/api/v1/graphs/{1}/neighbors", drogon::Post);
-    METHOD_LIST_END
+    class TraversalController final : public drogon::HttpController<TraversalController> {
+    public:
+        METHOD_LIST_BEGIN
+        ADD_METHOD_TO(TraversalController::runBfs, "/api/v1/graphs/{1}/bfs", drogon::Post);
+        ADD_METHOD_TO(TraversalController::getNeighbors, "/api/v1/graphs/{1}/neighbors", drogon::Post);
+        METHOD_LIST_END
 
-    static void runBfs(const drogon::HttpRequestPtr& request,
-                std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-                const std::string& source_vertex_uuid);
+        static void runBfs(const drogon::HttpRequestPtr &request,
+                           std::function<void(const drogon::HttpResponsePtr &)> &&callback,
+                           const std::string &source_vertex_uuid);
 
-    static void getNeighbors(const drogon::HttpRequestPtr& request,
-                      std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-                      const std::string& source_vertex_uuid);
-};
+        static void getNeighbors(const drogon::HttpRequestPtr &request,
+                                 std::function<void(const drogon::HttpResponsePtr &)> &&callback,
+                                 const std::string &source_vertex_uuid);
+    };
 
 } // namespace polygraph::http::api::v1
 

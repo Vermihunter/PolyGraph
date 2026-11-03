@@ -13,10 +13,10 @@
 #include "Node.hpp"
 
 namespace polygraph {
-struct AdjacencyRow {
-    NodeRef source;
-    std::vector<NeighborRef> neighbors;
-};
+    struct AdjacencyRow {
+        NodeRef source;
+        std::vector<NeighborRef> neighbors;
+    };
 
 } // namespace polygraph
 

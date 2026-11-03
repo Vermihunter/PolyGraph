@@ -11,11 +11,11 @@
 
 namespace polygraph {
 
-struct GpuRuntime {
-    int device_id = 0;
+    struct GpuRuntime {
+        int device_id = 0;
 #ifdef POLYGRAPH_ENABLE_GPU
-    raft::handle_t handle;
+        raft::handle_t handle;
 #endif
-};
+    };
 
 } // namespace polygraph

@@ -8,38 +8,34 @@
 
 namespace polygraph::events {
 
-namespace detail {
-inline thread_local std::uint64_t query_execution_id = 0;
-}
-
-/**
- * @brief Installs a query-execution ID for events emitted by the current thread.
- *
- * Contexts are nestable. Destruction restores the previous value, which makes
- * the helper safe around scheduler operations and backend worker tasks.
- */
-class ScopedQueryExecutionContext final {
-  public:
-    explicit ScopedQueryExecutionContext(const std::uint64_t query_execution_id) noexcept
-        : previous_(detail::query_execution_id) {
-        detail::query_execution_id = query_execution_id;
+    namespace detail {
+        inline thread_local std::uint64_t query_execution_id = 0;
     }
 
-    ScopedQueryExecutionContext(const ScopedQueryExecutionContext&) = delete;
-    ScopedQueryExecutionContext& operator=(const ScopedQueryExecutionContext&) = delete;
-    ScopedQueryExecutionContext(ScopedQueryExecutionContext&&) = delete;
-    ScopedQueryExecutionContext& operator=(ScopedQueryExecutionContext&&) = delete;
+    /**
+     * @brief Installs a query-execution ID for events emitted by the current thread.
+     *
+     * Contexts are nestable. Destruction restores the previous value, which makes
+     * the helper safe around scheduler operations and backend worker tasks.
+     */
+    class ScopedQueryExecutionContext final {
+    public:
+        explicit ScopedQueryExecutionContext(const std::uint64_t query_execution_id) noexcept :
+            previous_(detail::query_execution_id) {
+            detail::query_execution_id = query_execution_id;
+        }
 
-    ~ScopedQueryExecutionContext() noexcept {
-        detail::query_execution_id = previous_;
-    }
+        ScopedQueryExecutionContext(const ScopedQueryExecutionContext &) = delete;
+        ScopedQueryExecutionContext &operator=(const ScopedQueryExecutionContext &) = delete;
+        ScopedQueryExecutionContext(ScopedQueryExecutionContext &&) = delete;
+        ScopedQueryExecutionContext &operator=(ScopedQueryExecutionContext &&) = delete;
 
-  private:
-    std::uint64_t previous_{};
-};
+        ~ScopedQueryExecutionContext() noexcept { detail::query_execution_id = previous_; }
 
-[[nodiscard]] inline std::uint64_t current_query_execution_id() noexcept {
-    return detail::query_execution_id;
-}
+    private:
+        std::uint64_t previous_{};
+    };
+
+    [[nodiscard]] inline std::uint64_t current_query_execution_id() noexcept { return detail::query_execution_id; }
 
 } // namespace polygraph::events

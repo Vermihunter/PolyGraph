@@ -18,12 +18,12 @@
 #include <vector>
 
 namespace polygraph::domain {
-struct NodeType {
-    TypeId id;
-    std::string name;
-    // DatabaseTypes source;
-    std::vector<Property> properties;
-};
+    struct NodeType {
+        TypeId id;
+        std::string name;
+        // DatabaseTypes source;
+        std::vector<Property> properties;
+    };
 } // namespace polygraph::domain
 
 #endif // POLYGRAPH_NODE_HPP

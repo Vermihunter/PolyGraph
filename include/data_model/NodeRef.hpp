@@ -14,12 +14,12 @@
 #include "domain/graph/TypeId.hpp"
 
 namespace polygraph {
-struct NodeRef {
-    GlobalId global_id;
-    // An ID-only API entry point leaves this unresolved. Storage adapters
-    // return concrete logical types for discovered neighbors.
-    TypeId type = unresolved_type_id;
-};
+    struct NodeRef {
+        GlobalId global_id;
+        // An ID-only API entry point leaves this unresolved. Storage adapters
+        // return concrete logical types for discovered neighbors.
+        TypeId type = unresolved_type_id;
+    };
 
 } // namespace polygraph
 

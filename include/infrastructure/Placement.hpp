@@ -15,17 +15,17 @@
 
 namespace polygraph {
 
-struct Placement {
-    BackendId backend_id;
-    PlacementKind kind;
-    std::unordered_set<TypeId> source_node_types;
-    std::unordered_set<TypeId> edge_types;
-    std::unordered_set<TypeId> target_node_types;
-    bool authoritative = false;
-    int priority = 100;
+    struct Placement {
+        BackendId backend_id;
+        PlacementKind kind;
+        std::unordered_set<TypeId> source_node_types;
+        std::unordered_set<TypeId> edge_types;
+        std::unordered_set<TypeId> target_node_types;
+        bool authoritative = false;
+        int priority = 100;
 
-    [[nodiscard]] bool can_expand_from(const NodeRef& source, const ExpandSpec& spec) const;
-};
+        [[nodiscard]] bool can_expand_from(const NodeRef &source, const ExpandSpec &spec) const;
+    };
 
 } // namespace polygraph
 

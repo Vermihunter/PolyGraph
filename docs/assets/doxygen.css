@@ -1,0 +1,25 @@
+/* PolyGraph wiki theme: lightweight Doxygen defaults + intentional hierarchy. */
+:root { --pg-ink: #17283e; --pg-accent: #2364aa; --pg-border: #dbe5f2; }
+html, body { font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif; }
+#projectname, #projectbrief { font-family: inherit; }
+#projectname { font-weight: 750; letter-spacing: -.035em; }
+#projectbrief { opacity: .85; }
+#side-nav, #nav-tree, #nav-tree-contents { background: #f5f8fc; }
+#nav-tree .selected { background: #dfeefa; text-shadow: none; }
+#doc-content, div.contents { color: var(--pg-ink); }
+div.contents { max-width: 1100px; margin: 0 auto; padding: 8px 28px 60px; line-height: 1.65; }
+div.contents h1 { font-size: 2.25rem; letter-spacing: -.04em; padding-bottom: 10px; }
+div.contents h2 { margin-top: 2.2rem; font-size: 1.5rem; border-bottom: 1px solid var(--pg-border); padding-bottom: .45rem; }
+div.contents h3 { font-size: 1.14rem; margin-top: 1.45rem; }
+a, a.el, a.code { color: var(--pg-accent); }
+a:hover { text-decoration: underline; }
+.contents table, .contents .markdownTable { border-collapse: collapse; width: 100%; margin: 1.35rem 0; }
+.contents table th, .contents table td { padding: .85rem 1.05rem; border: 1px solid var(--pg-border); }
+.contents table th { background: #edf4fb; text-align: left; }
+.contents table tr:nth-child(2n) td { background: #fafcff; }
+.contents blockquote { border-left: 4px solid #3a7ec3; background: #f1f7ff; padding: .75rem 1.1rem; margin: 1.3rem 0; border-radius: 0 8px 8px 0; }
+.contents pre, .contents div.fragment { background: #f4f7fb; border: 1px solid var(--pg-border); border-radius: 9px; padding: .9rem; overflow-x: auto; }
+.contents code { border-radius: 4px; }
+.contents .memitem { border-radius: 8px; overflow: hidden; }
+#MSearchBox { border-radius: 8px; }
+@media (max-width: 768px) { div.contents { padding: 8px 15px 40px; } div.contents h1 { font-size: 1.75rem; } }

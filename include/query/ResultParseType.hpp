@@ -7,6 +7,6 @@
 
 namespace polygraph {
 
-enum class ResultParseType { Node, Relationship, AdjacencyRow };
+    enum class ResultParseType { Node, Relationship, AdjacencyRow };
 
 } // namespace polygraph

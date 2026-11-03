@@ -10,11 +10,11 @@
 
 namespace polygraph {
 
-class GetAllEdgesQuery final : public Query {
-  public:
-    query_result_t accept(QueryVisitor& visitor) const override;
-    [[nodiscard]] query_t clone() const override;
-};
+    class GetAllEdgesQuery final : public Query {
+    public:
+        query_result_t accept(QueryVisitor &visitor) const override;
+        [[nodiscard]] query_t clone() const override;
+    };
 
 } // namespace polygraph
 

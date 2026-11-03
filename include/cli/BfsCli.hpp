@@ -18,14 +18,13 @@
 
 namespace polygraph::cli {
 
-void add_runtime_arguments(CommandLine& program);
-void add_bfs_arguments(CommandLine& program);
+    void add_runtime_arguments(CommandLine &program);
+    void add_bfs_arguments(CommandLine &program);
 
-[[nodiscard]] GraphRuntimeConfig parse_runtime_config(const CommandLine& args);
-[[nodiscard]] NodeRef parse_source(const CommandLine& args, const DatabaseContext& context);
-[[nodiscard]] ExpandSpec parse_expand_spec(const CommandLine& args,
-                                           const domain::LogicalGraphSchema& schema);
-[[nodiscard]] BfsOptions parse_bfs_options(const CommandLine& args);
-void write_bfs_distances_csv(std::ostream& output, const BfsResult& result);
+    [[nodiscard]] GraphRuntimeConfig parse_runtime_config(const CommandLine &args);
+    [[nodiscard]] NodeRef parse_source(const CommandLine &args, const DatabaseContext &context);
+    [[nodiscard]] ExpandSpec parse_expand_spec(const CommandLine &args, const domain::LogicalGraphSchema &schema);
+    [[nodiscard]] BfsOptions parse_bfs_options(const CommandLine &args);
+    void write_bfs_distances_csv(std::ostream &output, const BfsResult &result);
 
 } // namespace polygraph::cli

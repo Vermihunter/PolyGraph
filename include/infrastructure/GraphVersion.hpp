@@ -13,7 +13,7 @@
 #include <cstdint>
 
 namespace polygraph {
-using GraphVersion = std::uint64_t;
+    using GraphVersion = std::uint64_t;
 
 } // namespace polygraph
 

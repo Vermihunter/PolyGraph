@@ -15,15 +15,15 @@
 #include "NodeType.hpp"
 
 namespace polygraph::domain {
-struct EdgeType {
-    TypeId type;
-    TypeId from;
-    TypeId to;
-    // DatabaseTypes source;
-    Direction direction;
-    std::string name;
-    std::vector<Property> properties;
-};
+    struct EdgeType {
+        TypeId type;
+        TypeId from;
+        TypeId to;
+        // DatabaseTypes source;
+        Direction direction;
+        std::string name;
+        std::vector<Property> properties;
+    };
 } // namespace polygraph::domain
 
 #endif // POLYGRAPH_EDGE_HPP

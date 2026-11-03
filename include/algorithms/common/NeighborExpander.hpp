@@ -4,39 +4,31 @@
 
 #ifndef POLYGRAPH_NEIGHBOREXPANDER_HPP
 #define POLYGRAPH_NEIGHBOREXPANDER_HPP
-#include "infrastructure/PlacementCatalog.hpp"
 #include "data_access/NeighborBatchConsumer.hpp"
+#include "infrastructure/PlacementCatalog.hpp"
 
 namespace polygraph {
-class NeighborExpander {
+    class NeighborExpander {
 
-  public:
-    explicit NeighborExpander(const PlacementCatalog& catalog)
-        : catalog_(catalog) {}
+    public:
+        explicit NeighborExpander(const PlacementCatalog &catalog) : catalog_(catalog) {}
 
-    [[nodiscard]] std::vector<MinimalAdjacencyRow>
-    expand_layer(const std::vector<NodeRef>& frontier,
-                 const ExpandSpec& spec,
-                 int depth,
-                 const BfsOptions& options) const;
+        [[nodiscard]] std::vector<MinimalAdjacencyRow> expand_layer(const std::vector<NodeRef> &frontier,
+                                                                    const ExpandSpec &spec, int depth,
+                                                                    const BfsOptions &options) const;
 
-    /** @brief Streams candidate neighbor IDs without materializing complete adjacency rows. */
-    void expand_layer_candidates(const std::vector<NodeRef>& frontier,
-                                 const ExpandSpec& spec,
-                                 int depth,
-                                 const BfsOptions& options,
-                                 const NeighborBatchConsumer& consumer) const;
+        /** @brief Streams candidate neighbor IDs without materializing complete adjacency rows. */
+        void expand_layer_candidates(const std::vector<NodeRef> &frontier, const ExpandSpec &spec, int depth,
+                                     const BfsOptions &options, const NeighborBatchConsumer &consumer) const;
 
-  private:
-    [[nodiscard]] std::vector<MinimalAdjacencyRow> expand_layer_parallel(
-        const PlacementCatalog::LayerExpansionPlan& plan,
-        const ExpandSpec& spec,
-        int depth,
-        const BfsOptions& options) const;
+    private:
+        [[nodiscard]] std::vector<MinimalAdjacencyRow>
+        expand_layer_parallel(const PlacementCatalog::LayerExpansionPlan &plan, const ExpandSpec &spec, int depth,
+                              const BfsOptions &options) const;
 
-  private:
-    const PlacementCatalog& catalog_;
-};
+    private:
+        const PlacementCatalog &catalog_;
+    };
 } // namespace polygraph
 
 #endif // POLYGRAPH_NEIGHBOREXPANDER_HPP

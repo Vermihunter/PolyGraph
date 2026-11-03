@@ -14,12 +14,12 @@
 #include "domain/graph/TypeId.hpp"
 
 namespace polygraph {
-struct EdgeRef {
-    GlobalId global_id;
-    TypeId type;
-    GlobalId from;
-    GlobalId to;
-};
+    struct EdgeRef {
+        GlobalId global_id;
+        TypeId type;
+        GlobalId from;
+        GlobalId to;
+    };
 
 } // namespace polygraph
 

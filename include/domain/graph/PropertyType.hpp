@@ -11,14 +11,14 @@
 #define POLYGRAPH_PROPERTYTYPE_HPP
 
 namespace polygraph::domain {
-enum class PropertyType {
-    string,
-    integer,
-    boolean,
-    _float,
-    date,
-    datetime // ...
-};
+    enum class PropertyType {
+        string,
+        integer,
+        boolean,
+        _float,
+        date,
+        datetime // ...
+    };
 }
 
 #endif // POLYGRAPH_PROPERTYTYPE_HPP

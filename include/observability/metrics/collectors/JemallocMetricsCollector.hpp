@@ -4,11 +4,11 @@
 
 namespace polygraph::observability::metrics {
 
-class JemallocMetricsCollector final : public IMetricsCollector {
-  public:
-    [[nodiscard]] std::string_view name() const noexcept override { return "jemalloc"; }
-    [[nodiscard]] bool available() const noexcept override;
-    [[nodiscard]] MetricValues collect(std::span<const std::string> requested) override;
-};
+    class JemallocMetricsCollector final : public IMetricsCollector {
+    public:
+        [[nodiscard]] std::string_view name() const noexcept override { return "jemalloc"; }
+        [[nodiscard]] bool available() const noexcept override;
+        [[nodiscard]] MetricValues collect(std::span<const std::string> requested) override;
+    };
 
 } // namespace polygraph::observability::metrics

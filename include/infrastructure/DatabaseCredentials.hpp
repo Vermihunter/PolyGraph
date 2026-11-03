@@ -13,10 +13,10 @@
 #include <string>
 
 namespace polygraph {
-struct DatabaseCredentials {
-    std::string username;
-    std::string password;
-};
+    struct DatabaseCredentials {
+        std::string username;
+        std::string password;
+    };
 
 } // namespace polygraph
 

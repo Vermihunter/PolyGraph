@@ -13,14 +13,14 @@
 
 namespace polygraph {
 
-/**
- * @brief Consumes a transient batch of neighbor candidates.
- *
- * Implementations may invoke the callback concurrently from multiple backend or
- * request workers. The span is valid only for the duration of the call and the
- * consumer must copy any values it wants to retain.
- */
-using NeighborBatchConsumer = std::function<void(std::span<const NodeRef>)>;
+    /**
+     * @brief Consumes a transient batch of neighbor candidates.
+     *
+     * Implementations may invoke the callback concurrently from multiple backend or
+     * request workers. The span is valid only for the duration of the call and the
+     * consumer must copy any values it wants to retain.
+     */
+    using NeighborBatchConsumer = std::function<void(std::span<const NodeRef>)>;
 
 } // namespace polygraph
 

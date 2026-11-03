@@ -9,8 +9,8 @@
 
 namespace polygraph {
 
-void to_json(json& value, const MinimalAdjacencyRow& adj_row);
-// void from_json(const json& value, MinimalAdjacencyRow& node);
+    void to_json(json &value, const MinimalAdjacencyRow &adj_row);
+    // void from_json(const json& value, MinimalAdjacencyRow& node);
 } // namespace polygraph
 
 #endif // POLYGRAPH_MINIMALADJACENCYROWJSONSERIALIZER_HPP

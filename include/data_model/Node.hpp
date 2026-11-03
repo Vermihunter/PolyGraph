@@ -15,13 +15,13 @@
 
 namespace polygraph {
 
-struct Value;
+    struct Value;
 
-struct Node {
-    GlobalId global_id;
-    TypeId type;
-    std::vector<std::string> labels;
-    std::unordered_map<std::string, std::unique_ptr<Value>> properties;
-};
+    struct Node {
+        GlobalId global_id;
+        TypeId type;
+        std::vector<std::string> labels;
+        std::unordered_map<std::string, std::unique_ptr<Value>> properties;
+    };
 
 } // namespace polygraph

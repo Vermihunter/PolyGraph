@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "cpp-coding-standards": {
+      "source": "affaan-m/ECC",
+      "sourceType": "github",
+      "skillPath": "skills/cpp-coding-standards/SKILL.md",
+      "computedHash": "e8c59d13fe23b088e24dcf6b77845823c5b5636b5c52434550f9b1837bc44ac3"
+    },
+    "cpp-concurrency": {
+      "source": "inference-gateway/skills",
+      "sourceType": "github",
+      "skillPath": "skills/cpp-concurrency/SKILL.md",
+      "computedHash": "893b985e06fc4680b969d1b92e8f078ca8f610845d87317f3098c6e11dc4b449"
+    },
+    "cpp-testing": {
+      "source": "affaan-m/ECC",
+      "sourceType": "github",
+      "skillPath": "skills/cpp-testing/SKILL.md",
+      "computedHash": "fbe37695056aa5cf9454f8cf6d883f38c3bca0324ca7aeb288db2fe3b887e97d"
+    },
+    "linux-perf": {
+      "source": "intel/skills",
+      "sourceType": "github",
+      "skillPath": "skills/linux-perf/SKILL.md",
+      "computedHash": "141df5af374f425c8ccc8d858b17a06ea6bd64546ecddc1e777ce5e710cd2936"
+    },
+    "optimize-for-gpu": {
+      "source": "K-Dense-AI/scientific-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/optimize-for-gpu/SKILL.md",
+      "computedHash": "88fe01ff17768037809470e94fbe74950ef067f35b42e3fb46f8cf9ae75f23de"
+    },
+    "performance-patterns": {
+      "source": "intel/skills",
+      "sourceType": "github",
+      "skillPath": "skills/performance-patterns/SKILL.md",
+      "computedHash": "fbc03d29e217f2fb204707568ae40a9ead6be388997a79778195c6674f4c7f08"
+    }
+  }
+}

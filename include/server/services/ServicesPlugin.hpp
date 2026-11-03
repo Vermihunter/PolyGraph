@@ -12,23 +12,23 @@
 #include <memory>
 
 namespace polygraph::observability::metrics {
-class MetricsService;
+    class MetricsService;
 }
 
 namespace polygraph::services {
 
-class ServicesPlugin final : public drogon::Plugin<ServicesPlugin> {
-  public:
-    void initAndStart(const Json::Value& config) override;
-    void shutdown() override;
+    class ServicesPlugin final : public drogon::Plugin<ServicesPlugin> {
+    public:
+        void initAndStart(const Json::Value &config) override;
+        void shutdown() override;
 
-    [[nodiscard]] TraversalService& traversalService();
-    [[nodiscard]] const DatabaseContext& dbContext() const;
+        [[nodiscard]] TraversalService &traversalService();
+        [[nodiscard]] const DatabaseContext &dbContext() const;
 
-  private:
-    std::shared_ptr<DatabaseContext> context_;
-    std::unique_ptr<TraversalService> traversal_service_;
-    std::shared_ptr<observability::metrics::MetricsService> metrics_service_;
-};
+    private:
+        std::shared_ptr<DatabaseContext> context_;
+        std::unique_ptr<TraversalService> traversal_service_;
+        std::shared_ptr<observability::metrics::MetricsService> metrics_service_;
+    };
 
 } // namespace polygraph::services

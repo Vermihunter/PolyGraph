@@ -7,14 +7,14 @@
 #include <cstdint>
 
 namespace polygraph {
-enum class EventLevel : std::uint8_t {
-    Trace = 0,
-    Debug = 1,
-    Info = 2,
-    Warn = 3,
-    Error = 4,
-    Off = 5,
-};
+    enum class EventLevel : std::uint8_t {
+        Trace = 0,
+        Debug = 1,
+        Info = 2,
+        Warn = 3,
+        Error = 4,
+        Off = 5,
+    };
 }
 
 #endif // POLYGRAPH_EVENTLEVEL_HPP

@@ -13,18 +13,18 @@
 
 namespace polygraph {
 
-struct QueryResult;
-/// Owning pointer used by query and visitor interfaces.
-using query_result_t = std::unique_ptr<QueryResult>;
+    struct QueryResult;
+    /// Owning pointer used by query and visitor interfaces.
+    using query_result_t = std::unique_ptr<QueryResult>;
 
-/** @brief Sequence of move-only heterogeneous records returned by a graph store. */
-struct QueryResult {
-    /// Result rows in backend/query-defined column order.
-    std::vector<record_t> data;
+    /** @brief Sequence of move-only heterogeneous records returned by a graph store. */
+    struct QueryResult {
+        /// Result rows in backend/query-defined column order.
+        std::vector<record_t> data;
 
-    /** @brief Appends all rows from @p other, consuming the supplied result. */
-    void combine(query_result_t other);
-};
+        /** @brief Appends all rows from @p other, consuming the supplied result. */
+        void combine(query_result_t other);
+    };
 
 } // namespace polygraph
 

@@ -8,13 +8,13 @@
 
 namespace polygraph::runtime {
 
-class CurlGlobalGuard {
-  public:
-    CurlGlobalGuard();
-    CurlGlobalGuard(const CurlGlobalGuard&) = delete;
-    CurlGlobalGuard& operator=(const CurlGlobalGuard&) = delete;
-    ~CurlGlobalGuard();
-};
+    class CurlGlobalGuard {
+    public:
+        CurlGlobalGuard();
+        CurlGlobalGuard(const CurlGlobalGuard &) = delete;
+        CurlGlobalGuard &operator=(const CurlGlobalGuard &) = delete;
+        ~CurlGlobalGuard();
+    };
 
 } // namespace polygraph::runtime
 

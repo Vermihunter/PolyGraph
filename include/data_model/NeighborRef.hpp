@@ -15,10 +15,10 @@
 #include <optional>
 
 namespace polygraph {
-struct NeighborRef {
-    NodeRef vertex;
-    std::optional<EdgeRef> via_edge;
-};
+    struct NeighborRef {
+        NodeRef vertex;
+        std::optional<EdgeRef> via_edge;
+    };
 
 } // namespace polygraph
 

@@ -13,10 +13,10 @@
 #include <cstdint>
 
 namespace polygraph {
-/**
- * Stable id of a logical backend, e.g. 1 = Neo4jMain, 2 = MemgraphHotCache
- */
-using BackendId = std::uint32_t;
+    /**
+     * Stable id of a logical backend, e.g. 1 = Neo4jMain, 2 = MemgraphHotCache
+     */
+    using BackendId = std::uint32_t;
 
 } // namespace polygraph
 

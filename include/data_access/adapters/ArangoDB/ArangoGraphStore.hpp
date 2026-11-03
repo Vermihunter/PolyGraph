@@ -15,33 +15,29 @@
 
 namespace polygraph {
 
-class ArangoGraphStore final : public IGraphStore {
-  public:
-    ArangoGraphStore(BackendDescriptor descriptor, std::shared_ptr<QueryVisitor> visitor);
+    class ArangoGraphStore final : public IGraphStore {
+    public:
+        ArangoGraphStore(BackendDescriptor descriptor, std::shared_ptr<QueryVisitor> visitor);
 
-    [[nodiscard]] BackendKind kind() const override;
-    [[nodiscard]] const BackendDescriptor& descriptor() const override;
-    query_result_t execute(const Query& query) override;
-    std::vector<AdjacencyRow> get_neighbors_batch(std::span<const NodeRef> frontier,
-                                                  const ExpandSpec& spec,
-                                                  int depth) override;
-    std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch(
-        std::span<const NodeRef> frontier,
-        const ExpandSpec& spec,
-        int depth,
-        const BfsOptions& options) override;
-    void stream_neighbor_candidates(
-        std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth, const BfsOptions& options,
-        const NeighborBatchConsumer& consumer) override;
+        [[nodiscard]] BackendKind kind() const override;
+        [[nodiscard]] const BackendDescriptor &descriptor() const override;
+        query_result_t execute(const Query &query) override;
+        std::vector<AdjacencyRow> get_neighbors_batch(std::span<const NodeRef> frontier, const ExpandSpec &spec,
+                                                      int depth) override;
+        std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch(std::span<const NodeRef> frontier,
+                                                                     const ExpandSpec &spec, int depth,
+                                                                     const BfsOptions &options) override;
+        void stream_neighbor_candidates(std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth,
+                                        const BfsOptions &options, const NeighborBatchConsumer &consumer) override;
 
-  private:
-    [[nodiscard]] static NodeRef node_to_ref(const Node& node);
-    [[nodiscard]] static EdgeRef edge_to_ref(const Edge& edge);
-    [[nodiscard]] static std::vector<AdjacencyRow> parse_adjacency_rows(const QueryResult& raw);
+    private:
+        [[nodiscard]] static NodeRef node_to_ref(const Node &node);
+        [[nodiscard]] static EdgeRef edge_to_ref(const Edge &edge);
+        [[nodiscard]] static std::vector<AdjacencyRow> parse_adjacency_rows(const QueryResult &raw);
 
-    BackendDescriptor descriptor_;
-    std::shared_ptr<QueryVisitor> visitor_;
-};
+        BackendDescriptor descriptor_;
+        std::shared_ptr<QueryVisitor> visitor_;
+    };
 
 } // namespace polygraph
 

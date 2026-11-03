@@ -16,7 +16,7 @@
 /install/
 /tests/fixtures/ldbc_snb/social_network/static/
 /tests/fixtures/ldbc_snb/social_network/dynamic/
-
+/config/
 
 CMakeFiles/
 CMakeCache.txt
@@ -73,8 +73,9 @@ tools/my-venv/
 # ---------------------------------------------------------------------------
 # LDBC SNB generated datasets (e.g. sf0_1 = 750 MB, sf1_0 = 35 GB).
 # Leave data/ldbc-snb/Data.md and placement.config.json trackable.
-/data/ldbc-snb/sf*/
+/data/ldbc-snb/
 /data/social_network-*/
+/data/university/
 
 # Generated cache and on-disk database artifacts, wherever produced.
 *.bin
@@ -205,3 +206,5 @@ Thumbs.db
 # 9. Local workflow state
 # ---------------------------------------------------------------------------
 /.polygraph/
+
+.agents/

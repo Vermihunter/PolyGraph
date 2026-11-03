@@ -24,27 +24,24 @@
 
 namespace polygraph::config {
 
-[[nodiscard]] std::string backend_id_to_string(BackendId id);
-[[nodiscard]] BackendId backend_id_from_string(const std::string& value);
-[[nodiscard]] BackendKind backend_kind_from_string(const std::string& value);
-[[nodiscard]] std::string backend_kind_to_string(BackendKind kind);
-[[nodiscard]] BackendConnectionConfig
-parse_connection_config(const json& backend_json, BackendId id, BackendKind kind);
-[[nodiscard]] BackendDescriptor
-parse_descriptor(const json& backend_json,
-                 BackendId id,
-                 BackendKind kind,
-                 const domain::LogicalGraphSchema& schema,
-                 const std::unordered_map<BackendId, std::unordered_set<TypeId>>& nodes_by_backend,
-                 const std::unordered_map<BackendId, std::unordered_set<TypeId>>& edges_by_backend,
-                 std::uint64_t graph_version);
+    [[nodiscard]] std::string backend_id_to_string(BackendId id);
+    [[nodiscard]] BackendId backend_id_from_string(const std::string &value);
+    [[nodiscard]] BackendKind backend_kind_from_string(const std::string &value);
+    [[nodiscard]] std::string backend_kind_to_string(BackendKind kind);
+    [[nodiscard]] BackendConnectionConfig parse_connection_config(const json &backend_json, BackendId id,
+                                                                  BackendKind kind);
+    [[nodiscard]] BackendDescriptor
+    parse_descriptor(const json &backend_json, BackendId id, BackendKind kind, const domain::LogicalGraphSchema &schema,
+                     const std::unordered_map<BackendId, std::unordered_set<TypeId>> &nodes_by_backend,
+                     const std::unordered_map<BackendId, std::unordered_set<TypeId>> &edges_by_backend,
+                     std::uint64_t graph_version);
 
-[[nodiscard]] bool backend_json_enabled(const json& backend_json);
-[[nodiscard]] json load_backend_config_file_or_default(const std::optional<std::string>& path);
-[[nodiscard]] const json& backend_array_or_throw(const json& root);
-[[nodiscard]] std::vector<BackendId> id_routing_backends(const json& root);
-[[nodiscard]] bool backend_enabled(const DatabaseContext& context, BackendId id);
-void print_backend_summary(const DatabaseContext& context, std::ostream& output);
+    [[nodiscard]] bool backend_json_enabled(const json &backend_json);
+    [[nodiscard]] json load_backend_config_file_or_default(const std::optional<std::string> &path);
+    [[nodiscard]] const json &backend_array_or_throw(const json &root);
+    [[nodiscard]] std::vector<BackendId> id_routing_backends(const json &root);
+    [[nodiscard]] bool backend_enabled(const DatabaseContext &context, BackendId id);
+    void print_backend_summary(const DatabaseContext &context, std::ostream &output);
 
 } // namespace polygraph::config
 

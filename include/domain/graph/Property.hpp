@@ -15,11 +15,11 @@
 #include <string>
 
 namespace polygraph::domain {
-struct Property {
-    std::string name;
-    PropertyType type;
-    bool indexed = false;
-};
+    struct Property {
+        std::string name;
+        PropertyType type;
+        bool indexed = false;
+    };
 } // namespace polygraph::domain
 
 #endif // POLYGRAPH_PROPERTY_HPP

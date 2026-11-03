@@ -15,17 +15,17 @@
 
 namespace polygraph {
 
-class BackendSchedulerRegistry final {
-  public:
-    [[nodiscard]] std::shared_ptr<BackendRequestScheduler>
-    get_or_create(BackendId id, std::string backend_name, const BackendSchedulerConfig& config);
+    class BackendSchedulerRegistry final {
+    public:
+        [[nodiscard]] std::shared_ptr<BackendRequestScheduler> get_or_create(BackendId id, std::string backend_name,
+                                                                             const BackendSchedulerConfig &config);
 
-    [[nodiscard]] std::shared_ptr<BackendRequestScheduler> get(BackendId id) const;
+        [[nodiscard]] std::shared_ptr<BackendRequestScheduler> get(BackendId id) const;
 
-  private:
-    mutable std::mutex mutex_;
-    std::unordered_map<BackendId, std::shared_ptr<BackendRequestScheduler>> schedulers_;
-};
+    private:
+        mutable std::mutex mutex_;
+        std::unordered_map<BackendId, std::shared_ptr<BackendRequestScheduler>> schedulers_;
+    };
 
 } // namespace polygraph
 

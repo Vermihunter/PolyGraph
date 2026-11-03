@@ -15,18 +15,18 @@
 #include <vector>
 
 namespace polygraph {
-/*
- * Minimal one-hop expansion result for graph algorithms.
- *
- * This intentionally does not carry EdgeRef, properties, labels, or full Node
- * objects. BFS/PageRank/WCC-style algorithms usually need only the reached
- * vertex references. Rich AdjacencyRow remains available for queries that need
- * edge metadata.
- */
-struct MinimalAdjacencyRow {
-    NodeRef source;
-    std::vector<NodeRef> neighbors;
-};
+    /*
+     * Minimal one-hop expansion result for graph algorithms.
+     *
+     * This intentionally does not carry EdgeRef, properties, labels, or full Node
+     * objects. BFS/PageRank/WCC-style algorithms usually need only the reached
+     * vertex references. Rich AdjacencyRow remains available for queries that need
+     * edge metadata.
+     */
+    struct MinimalAdjacencyRow {
+        NodeRef source;
+        std::vector<NodeRef> neighbors;
+    };
 
 } // namespace polygraph
 

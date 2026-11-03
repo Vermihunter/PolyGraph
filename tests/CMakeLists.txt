@@ -84,3 +84,41 @@ if(TARGET polygraph_runtime)
     polygraph_add_unit_test(polygraph_command_line_test command_line_test.cpp polygraph::runtime)
     polygraph_add_unit_test(polygraph_public_headers_test public_headers_test.cpp polygraph::runtime)
 endif()
+
+# Phase 3 uses real core objects and a one-hop fake; no database adapters.
+set(executor_fixtures "${CMAKE_CURRENT_BINARY_DIR}/executor_oracle_fixtures.json")
+add_custom_command(
+    OUTPUT "${executor_fixtures}"
+    COMMAND "${Python3_EXECUTABLE}" -m tests.generate_executor_fixtures "${executor_fixtures}"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    DEPENDS generate_executor_fixtures.py reference/bfs.py reference/model.py reference/schema.py
+    VERBATIM
+)
+add_custom_target(polygraph_executor_oracle_fixtures DEPENDS "${executor_fixtures}")
+add_library(polygraph_scripted_graph_store STATIC support/ScriptedGraphStore.cpp)
+target_link_libraries(polygraph_scripted_graph_store PUBLIC polygraph::core Threads::Threads)
+target_include_directories(polygraph_scripted_graph_store PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+polygraph_enable_project_checks(polygraph_scripted_graph_store)
+polygraph_add_unit_test(polygraph_scripted_graph_store_test scripted_graph_store_test.cpp polygraph_scripted_graph_store)
+
+function(polygraph_add_executor_contract_test target source)
+    add_executable(${target} ${source})
+    target_link_libraries(${target} PRIVATE polygraph_scripted_graph_store GTest::gtest_main)
+    target_compile_definitions(${target} PRIVATE POLYGRAPH_EXECUTOR_FIXTURES="${executor_fixtures}")
+    add_dependencies(${target} polygraph_executor_oracle_fixtures)
+    # Parameter names come from JSON at --gtest_list_tests time. Regenerating it
+    # must relink and rerun discovery, including when case names/count change.
+    set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS "${executor_fixtures}")
+    polygraph_enable_project_checks(${target})
+    gtest_discover_tests(${target}
+        TEST_PREFIX "contract."
+        NO_PRETTY_VALUES
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES TIMEOUT 20
+    )
+endfunction()
+polygraph_add_executor_contract_test(polygraph_bfs_contract_test bfs_contract_test.cpp)
+polygraph_add_executor_contract_test(polygraph_bfs_concurrency_test bfs_concurrency_test.cpp)
+
+# Applied after discovery: preserve list-valued labels across CMake versions.
+set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/executor_test_labels.cmake")
