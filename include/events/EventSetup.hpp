@@ -11,18 +11,17 @@
 #endif
 
 #if POLYGRAPH_ENABLE_EVENT_GATHERING
-#include "events/EventCollector.hpp"
 #include <memory>
+#include "events/EventCollector.hpp"
 
 namespace polygraph::events {
-[[nodiscard]] std::unique_ptr<EventCollector>
-create_collector(const observability::EventGatheringOptions& options);
-void install_collector(const observability::EventGatheringOptions& options);
-void shutdown() noexcept;
+    [[nodiscard]] std::unique_ptr<EventCollector> create_collector(const observability::EventGatheringOptions &options);
+    void install_collector(const observability::EventGatheringOptions &options);
+    void shutdown() noexcept;
 } // namespace polygraph::events
 #else
 namespace polygraph::events {
-inline void install_collector(const observability::EventGatheringOptions&) noexcept {}
-inline void shutdown() noexcept {}
+    inline void install_collector(const observability::EventGatheringOptions &) noexcept {}
+    inline void shutdown() noexcept {}
 } // namespace polygraph::events
 #endif

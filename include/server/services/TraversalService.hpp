@@ -18,27 +18,23 @@
 
 namespace polygraph::services {
 
-class TraversalService {
-  public:
-    explicit TraversalService(DatabaseContext& context) noexcept;
+    class TraversalService {
+    public:
+        explicit TraversalService(DatabaseContext &context) noexcept;
 
-    [[nodiscard]] BfsResult runBfs(const std::string& source_vertex_uuid, const dto::BfsRequest& request) const;
+        [[nodiscard]] BfsResult runBfs(const std::string &source_vertex_uuid, const dto::BfsRequest &request) const;
 
-    [[nodiscard]] std::vector<MinimalAdjacencyRow>
-    getNeighbors(const std::string& source_vertex_uuid) const;
+        [[nodiscard]] std::vector<MinimalAdjacencyRow> getNeighbors(const std::string &source_vertex_uuid) const;
 
-    [[nodiscard]] BfsResult streamBfs(const std::string& graph_id,
-                                      const std::string& source_vertex_id,
-                                      std::uint32_t max_depth,
-                                      bool return_predecessors,
-                                      bool allow_native_pushdown,
-                                      bool allow_partial_acceleration,
-                                      const std::function<void(const BfsLayerEvent&)>& on_layer) const;
+        [[nodiscard]] BfsResult streamBfs(const std::string &graph_id, const std::string &source_vertex_id,
+                                          std::uint32_t max_depth, bool return_predecessors, bool allow_native_pushdown,
+                                          bool allow_partial_acceleration,
+                                          const std::function<void(const BfsLayerEvent &)> &on_layer) const;
 
-  private:
-    DatabaseContext& context_;
-    NeighborExpander expander_;
-};
+    private:
+        DatabaseContext &context_;
+        NeighborExpander expander_;
+    };
 
 } // namespace polygraph::services
 

@@ -10,9 +10,9 @@
 
 namespace polygraph {
 
-class DataModelJsonSerializer {
-  public:
-    [[nodiscard]] static value_t json_primitive_to_value(const json& value);
-};
+    class DataModelJsonSerializer {
+    public:
+        [[nodiscard]] static value_t json_primitive_to_value(const json &value);
+    };
 
 } // namespace polygraph

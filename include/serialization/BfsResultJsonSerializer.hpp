@@ -10,6 +10,6 @@
 
 namespace polygraph {
 
-void to_json(json& json, const BfsResult& result);
+    void to_json(json &json, const BfsResult &result);
 
 } // namespace polygraph

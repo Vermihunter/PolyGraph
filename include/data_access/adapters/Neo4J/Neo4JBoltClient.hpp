@@ -13,23 +13,20 @@
 
 namespace polygraph {
 
-class Neo4JBoltClient {
-  public:
-    Neo4JBoltClient(std::string endpoint,
-                    std::string username,
-                    std::string password,
-                    std::string database_name);
-    ~Neo4JBoltClient();
+    class Neo4JBoltClient {
+    public:
+        Neo4JBoltClient(std::string endpoint, std::string username, std::string password, std::string database_name);
+        ~Neo4JBoltClient();
 
-    Neo4JBoltClient(const Neo4JBoltClient&) = delete;
-    Neo4JBoltClient& operator=(const Neo4JBoltClient&) = delete;
+        Neo4JBoltClient(const Neo4JBoltClient &) = delete;
+        Neo4JBoltClient &operator=(const Neo4JBoltClient &) = delete;
 
-    [[nodiscard]] json run(const std::string& cypher, const json& parameters);
+        [[nodiscard]] json run(const std::string &cypher, const json &parameters);
 
-  private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
-};
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
 
 } // namespace polygraph
 

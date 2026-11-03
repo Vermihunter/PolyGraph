@@ -14,20 +14,19 @@
 
 namespace polygraph {
 
-class DatabaseContext;
+    class DatabaseContext;
 
-class LocallyDeployedNeo4JResponseProcessor final : public Neo4JResponseProcessor {
-  public:
-    explicit LocallyDeployedNeo4JResponseProcessor(DatabaseContext& database_context);
-    ~LocallyDeployedNeo4JResponseProcessor() override;
+    class LocallyDeployedNeo4JResponseProcessor final : public Neo4JResponseProcessor {
+    public:
+        explicit LocallyDeployedNeo4JResponseProcessor(DatabaseContext &database_context);
+        ~LocallyDeployedNeo4JResponseProcessor() override;
 
-    [[nodiscard]] query_result_t process(const json& response,
-                                         ResultParseType parse_type) const override;
+        [[nodiscard]] query_result_t process(const json &response, ResultParseType parse_type) const override;
 
-  private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
-};
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
 
 } // namespace polygraph
 

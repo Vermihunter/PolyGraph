@@ -11,7 +11,7 @@
 #define POLYGRAPH_DIRECTION_HPP
 
 namespace polygraph {
-enum class Direction { Directed, Undirected, Both };
+    enum class Direction { Directed, Undirected, Both };
 
 } // namespace polygraph
 

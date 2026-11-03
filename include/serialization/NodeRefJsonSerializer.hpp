@@ -9,7 +9,7 @@
 
 namespace polygraph {
 
-void to_json(json& value, const NodeRef& node);
+    void to_json(json &value, const NodeRef &node);
 }
 
 #endif // POLYGRAPH_NODEREFJSONSERIALIZER_HPP

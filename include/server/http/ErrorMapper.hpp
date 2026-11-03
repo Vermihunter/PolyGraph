@@ -14,28 +14,28 @@
 
 namespace polygraph::http {
 
-enum class ErrorCode { BadRequest, ValidationError, NotFound, InternalError };
+    enum class ErrorCode { BadRequest, ValidationError, NotFound, InternalError };
 
-[[nodiscard]] std::string toString(ErrorCode code);
+    [[nodiscard]] std::string toString(ErrorCode code);
 
-class HttpError : public std::runtime_error {
-  public:
-    HttpError(drogon::HttpStatusCode status, ErrorCode code, const std::string& message);
+    class HttpError : public std::runtime_error {
+    public:
+        HttpError(drogon::HttpStatusCode status, ErrorCode code, const std::string &message);
 
-    [[nodiscard]] drogon::HttpStatusCode status() const noexcept;
-    [[nodiscard]] ErrorCode code() const noexcept;
+        [[nodiscard]] drogon::HttpStatusCode status() const noexcept;
+        [[nodiscard]] ErrorCode code() const noexcept;
 
-  private:
-    drogon::HttpStatusCode status_;
-    ErrorCode code_;
-};
+    private:
+        drogon::HttpStatusCode status_;
+        ErrorCode code_;
+    };
 
-class BadRequest final : public HttpError {
-  public:
-    explicit BadRequest(const std::string& message);
-};
+    class BadRequest final : public HttpError {
+    public:
+        explicit BadRequest(const std::string &message);
+    };
 
-[[nodiscard]] drogon::HttpResponsePtr mapExceptionToResponse(const std::exception& exception);
-[[nodiscard]] drogon::HttpResponsePtr mapUnknownExceptionToResponse();
+    [[nodiscard]] drogon::HttpResponsePtr mapExceptionToResponse(const std::exception &exception);
+    [[nodiscard]] drogon::HttpResponsePtr mapUnknownExceptionToResponse();
 
 } // namespace polygraph::http

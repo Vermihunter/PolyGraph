@@ -8,7 +8,7 @@
 
 namespace polygraph::logging {
 
-void install_logger(const observability::LoggingOptions& options);
-void shutdown() noexcept;
+    void install_logger(const observability::LoggingOptions &options);
+    void shutdown() noexcept;
 
 } // namespace polygraph::logging

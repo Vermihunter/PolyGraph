@@ -10,11 +10,11 @@
 
 namespace polygraph {
 
-class GetAllVerticesQuery final : public Query {
-  public:
-    query_result_t accept(QueryVisitor& visitor) const override;
-    [[nodiscard]] query_t clone() const override;
-};
+    class GetAllVerticesQuery final : public Query {
+    public:
+        query_result_t accept(QueryVisitor &visitor) const override;
+        [[nodiscard]] query_t clone() const override;
+    };
 
 } // namespace polygraph
 

@@ -14,19 +14,19 @@
 
 namespace polygraph {
 
-class GetNeighborsBatchQuery final : public Query {
-  public:
-    GetNeighborsBatchQuery(std::vector<NodeRef> frontier, ExpandSpec spec);
+    class GetNeighborsBatchQuery final : public Query {
+    public:
+        GetNeighborsBatchQuery(std::vector<NodeRef> frontier, ExpandSpec spec);
 
-    [[nodiscard]] const std::vector<NodeRef>& frontier() const noexcept;
-    [[nodiscard]] const ExpandSpec& spec() const noexcept;
-    query_result_t accept(QueryVisitor& visitor) const override;
-    [[nodiscard]] query_t clone() const override;
+        [[nodiscard]] const std::vector<NodeRef> &frontier() const noexcept;
+        [[nodiscard]] const ExpandSpec &spec() const noexcept;
+        query_result_t accept(QueryVisitor &visitor) const override;
+        [[nodiscard]] query_t clone() const override;
 
-  private:
-    std::vector<NodeRef> frontier_;
-    ExpandSpec spec_;
-};
+    private:
+        std::vector<NodeRef> frontier_;
+        ExpandSpec spec_;
+    };
 
 } // namespace polygraph
 

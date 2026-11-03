@@ -10,6 +10,6 @@
 
 namespace polygraph::http::parse {
 
-[[nodiscard]] const Json::Value& jsonBody(const drogon::HttpRequestPtr& request);
+    [[nodiscard]] const Json::Value &jsonBody(const drogon::HttpRequestPtr &request);
 
 } // namespace polygraph::http::parse

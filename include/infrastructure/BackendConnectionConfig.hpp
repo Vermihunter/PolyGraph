@@ -18,26 +18,26 @@
 #include <vector>
 
 namespace polygraph {
-struct BackendConnectionConfig {
-    BackendId id;
-    BackendKind kind;
+    struct BackendConnectionConfig {
+        BackendId id;
+        BackendKind kind;
 
-    std::string name;
+        std::string name;
 
-    std::string endpoint;
-    std::string database_name;
+        std::string endpoint;
+        std::string database_name;
 
-    std::optional<DatabaseCredentials> credentials;
+        std::optional<DatabaseCredentials> credentials;
 
-    // Neo4j can use either HTTP transaction API or Bolt.
-    // transport: "http" or "bolt".  Environment variable
-    // POLYGRAPH_NEO4J_TRANSPORT=bolt overrides this field.
-    std::string transport = "http";
-    std::string bolt_endpoint;
+        // Neo4j can use either HTTP transaction API or Bolt.
+        // transport: "http" or "bolt".  Environment variable
+        // POLYGRAPH_NEO4J_TRANSPORT=bolt overrides this field.
+        std::string transport = "http";
+        std::string bolt_endpoint;
 
-    // For Neo4j/Arango/Memgraph clusters or replicas
-    std::vector<std::string> replica_endpoints;
-};
+        // For Neo4j/Arango/Memgraph clusters or replicas
+        std::vector<std::string> replica_endpoints;
+    };
 
 } // namespace polygraph
 

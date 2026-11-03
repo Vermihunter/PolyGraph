@@ -7,19 +7,19 @@
 #define DATABASE_TYPES_HPP
 
 namespace polygraph {
-enum class BackendKind {
-    Neo4j,
-    Arango,
-    PostgreSQL,
-    Memgraph,
-    RamCache,
-    CuGraph,
-    RedisCache,
-    MemoryMapped,
-    Janus,
+    enum class BackendKind {
+        Neo4j,
+        Arango,
+        PostgreSQL,
+        Memgraph,
+        RamCache,
+        CuGraph,
+        RedisCache,
+        MemoryMapped,
+        Janus,
 
-    COUNT
-};
+        COUNT
+    };
 
 } // namespace polygraph
 

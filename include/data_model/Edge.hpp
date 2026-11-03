@@ -14,14 +14,14 @@
 
 namespace polygraph {
 
-struct Value;
+    struct Value;
 
-struct Edge {
-    GlobalId global_id;
-    TypeId type;
-    GlobalId src;
-    GlobalId dst;
-    std::unordered_map<std::string, std::unique_ptr<Value>> properties;
-};
+    struct Edge {
+        GlobalId global_id;
+        TypeId type;
+        GlobalId src;
+        GlobalId dst;
+        std::unordered_map<std::string, std::unique_ptr<Value>> properties;
+    };
 
 } // namespace polygraph

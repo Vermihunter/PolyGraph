@@ -11,16 +11,15 @@
 
 namespace polygraph {
 
-class Neo4JResponseProcessor {
-  public:
-    Neo4JResponseProcessor();
-    virtual ~Neo4JResponseProcessor();
+    class Neo4JResponseProcessor {
+    public:
+        Neo4JResponseProcessor();
+        virtual ~Neo4JResponseProcessor();
 
-    Neo4JResponseProcessor(const Neo4JResponseProcessor&) = delete;
-    Neo4JResponseProcessor& operator=(const Neo4JResponseProcessor&) = delete;
+        Neo4JResponseProcessor(const Neo4JResponseProcessor &) = delete;
+        Neo4JResponseProcessor &operator=(const Neo4JResponseProcessor &) = delete;
 
-    [[nodiscard]] virtual query_result_t process(const json& response,
-                                                 ResultParseType parse_type) const = 0;
-};
+        [[nodiscard]] virtual query_result_t process(const json &response, ResultParseType parse_type) const = 0;
+    };
 
 } // namespace polygraph

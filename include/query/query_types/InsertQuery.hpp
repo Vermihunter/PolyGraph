@@ -11,20 +11,20 @@
 
 namespace polygraph {
 
-/** @brief Visitor-dispatched write query containing exactly one insertion item. */
-class InsertQuery final : public Query {
-  public:
-    /** @brief Creates a query owning @p item. */
-    explicit InsertQuery(insertion::InsertionItem item);
+    /** @brief Visitor-dispatched write query containing exactly one insertion item. */
+    class InsertQuery final : public Query {
+    public:
+        /** @brief Creates a query owning @p item. */
+        explicit InsertQuery(insertion::InsertionItem item);
 
-    /** @brief Returns the immutable insertion payload. */
-    [[nodiscard]] const insertion::InsertionItem& item() const noexcept;
-    query_result_t accept(QueryVisitor& visitor) const override;
-    [[nodiscard]] query_t clone() const override;
+        /** @brief Returns the immutable insertion payload. */
+        [[nodiscard]] const insertion::InsertionItem &item() const noexcept;
+        query_result_t accept(QueryVisitor &visitor) const override;
+        [[nodiscard]] query_t clone() const override;
 
-  private:
-    insertion::InsertionItem item_;
-};
+    private:
+        insertion::InsertionItem item_;
+    };
 
 } // namespace polygraph
 

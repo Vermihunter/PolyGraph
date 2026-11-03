@@ -11,7 +11,7 @@
 #define POLYGRAPH_PLACEMENTKIND_HPP
 
 namespace polygraph {
-enum class PlacementKind { Primary, Cache, GpuProjection, Replica };
+    enum class PlacementKind { Primary, Cache, GpuProjection, Replica };
 
 } // namespace polygraph
 

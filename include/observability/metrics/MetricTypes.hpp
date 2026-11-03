@@ -10,6 +10,6 @@
 
 namespace polygraph::observability::metrics {
 
-using MetricValues = std::unordered_map<std::string, double>;
+    using MetricValues = std::unordered_map<std::string, double>;
 
 } // namespace polygraph::observability::metrics

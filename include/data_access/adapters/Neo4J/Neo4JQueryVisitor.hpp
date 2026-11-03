@@ -20,36 +20,32 @@
 
 namespace polygraph {
 
-class Neo4JQueryVisitor final : public QueryVisitor {
-  public:
-    Neo4JQueryVisitor(DatabaseContext& database_context, const BackendConnectionConfig& config,
-                      std::shared_ptr<BackendRequestScheduler> scheduler);
-    ~Neo4JQueryVisitor() override;
+    class Neo4JQueryVisitor final : public QueryVisitor {
+    public:
+        Neo4JQueryVisitor(DatabaseContext &database_context, const BackendConnectionConfig &config,
+                          std::shared_ptr<BackendRequestScheduler> scheduler);
+        ~Neo4JQueryVisitor() override;
 
-    query_result_t visit(const GetAllVerticesQuery& query) override;
-    query_result_t visit(const GetAllEdgesQuery& query) override;
-    query_result_t visit(const GetNeighborsForVertexQuery& query) override;
-    query_result_t visit(const GetVertexByIdQuery& query) override;
-    query_result_t visit(const GetNeighborsBatchQuery& query) override;
-    query_result_t visit(const InsertQuery& query) override;
-    query_result_t visit(const InsertBatchQuery& query) override;
+        query_result_t visit(const GetAllVerticesQuery &query) override;
+        query_result_t visit(const GetAllEdgesQuery &query) override;
+        query_result_t visit(const GetNeighborsForVertexQuery &query) override;
+        query_result_t visit(const GetVertexByIdQuery &query) override;
+        query_result_t visit(const GetNeighborsBatchQuery &query) override;
+        query_result_t visit(const InsertQuery &query) override;
+        query_result_t visit(const InsertBatchQuery &query) override;
 
-    [[nodiscard]] std::vector<AdjacencyRow> get_neighbors_batch_fast(
-        std::span<const NodeRef> frontier, const ExpandSpec& spec, int depth) const;
-    [[nodiscard]] std::vector<MinimalAdjacencyRow> get_minimal_neighbors_batch_fast(
-        std::span<const NodeRef> frontier,
-        const ExpandSpec& spec,
-        int depth,
-        std::size_t batch_size,
-        std::size_t max_concurrent_requests,
-        std::size_t request_retries,
-        std::size_t retry_delay_ms,
-        const BackendRequestScheduling& scheduling) const;
+        [[nodiscard]] std::vector<AdjacencyRow> get_neighbors_batch_fast(std::span<const NodeRef> frontier,
+                                                                         const ExpandSpec &spec, int depth) const;
+        [[nodiscard]] std::vector<MinimalAdjacencyRow>
+        get_minimal_neighbors_batch_fast(std::span<const NodeRef> frontier, const ExpandSpec &spec, int depth,
+                                         std::size_t batch_size, std::size_t max_concurrent_requests,
+                                         std::size_t request_retries, std::size_t retry_delay_ms,
+                                         const BackendRequestScheduling &scheduling) const;
 
-  private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
-};
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
 
 } // namespace polygraph
 

@@ -11,16 +11,16 @@
 
 namespace polygraph {
 
-class GetVertexByIdQuery final : public Query {
-  public:
-    explicit GetVertexByIdQuery(Node& node) noexcept;
-    [[nodiscard]] Node& node() const noexcept;
-    query_result_t accept(QueryVisitor& visitor) const override;
-    [[nodiscard]] query_t clone() const override;
+    class GetVertexByIdQuery final : public Query {
+    public:
+        explicit GetVertexByIdQuery(Node &node) noexcept;
+        [[nodiscard]] Node &node() const noexcept;
+        query_result_t accept(QueryVisitor &visitor) const override;
+        [[nodiscard]] query_t clone() const override;
 
-  private:
-    Node& node_;
-};
+    private:
+        Node &node_;
+    };
 
 } // namespace polygraph
 

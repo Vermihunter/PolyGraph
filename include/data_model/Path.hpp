@@ -10,12 +10,12 @@
 
 namespace polygraph {
 
-struct Edge;
-struct Node;
+    struct Edge;
+    struct Node;
 
-struct Path {
-    std::vector<std::unique_ptr<Node>> nodes;
-    std::vector<std::unique_ptr<Edge>> edges;
-};
+    struct Path {
+        std::vector<std::unique_ptr<Node>> nodes;
+        std::vector<std::unique_ptr<Edge>> edges;
+    };
 
 } // namespace polygraph
