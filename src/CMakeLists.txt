@@ -11,17 +11,17 @@ if(POLYGRAPH_BUILD_RUNTIME)
     include(cmake/Runtime.cmake)
 endif()
 
-if(POLYGRAPH_BUILD_HTTP OR POLYGRAPH_BUILD_GRPC)
+if(POLYGRAPH_BUILD_HTTP)
     include(cmake/Services.cmake)
 endif()
 
 
-# Optional standalone MPI/CUDA experiments used to benchmark native cuGraph
-# multi-GPU execution and CUDA-aware MPI / GPUDirect RDMA infrastructure.
-# Enable with -DPOLYGRAPH_BUILD_DISTRIBUTED_GPU_EXPERIMENTS=ON.
-if(POLYGRAPH_ENABLE_GPU AND POLYGRAPH_BUILD_DISTRIBUTED_GPU_EXPERIMENTS)
-    add_subdirectory(
-        "${PROJECT_SOURCE_DIR}/experiments/distributed_gpu"
-        "${PROJECT_BINARY_DIR}/experiments/distributed_gpu"
-    )
+# Opt-in standalone distributed-GPU research programs. These do not provide
+# an IGraphStore backend or alter the production BFS execution path.
+if(POLYGRAPH_BUILD_DISTRIBUTED_GPU_EXPERIMENTS)
+    if(NOT POLYGRAPH_ENABLE_GPU)
+        message(FATAL_ERROR
+            "Distributed GPU research targets require POLYGRAPH_ENABLE_GPU=ON")
+    endif()
+    add_subdirectory(gpu/distributed)
 endif()

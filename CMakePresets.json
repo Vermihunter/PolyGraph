@@ -15,9 +15,7 @@
         "POLYGRAPH_FETCH_DEPENDENCIES": "ON",
         "POLYGRAPH_FETCH_TEST_DEPENDENCIES": "ON",
         "POLYGRAPH_ENABLE_CLANG_FORMAT": "ON",
-        "POLYGRAPH_ENABLE_CLANG_TIDY": "ON",
-        "POLYGRAPH_CLANG_FORMAT_EXECUTABLE": "/usr/bin/clang-format-21",
-        "POLYGRAPH_CLANG_TIDY_EXECUTABLE": "/usr/bin/clang-tidy-21"
+        "POLYGRAPH_ENABLE_CLANG_TIDY": "ON"
       }
     },
     {
@@ -31,7 +29,6 @@
         "POLYGRAPH_BUILD_BACKENDS": "OFF",
         "POLYGRAPH_BUILD_BFS": "OFF",
         "POLYGRAPH_BUILD_HTTP": "OFF",
-        "POLYGRAPH_BUILD_GRPC": "OFF",
         "POLYGRAPH_BUILD_TESTS": "ON",
         "POLYGRAPH_BUILD_DOCS": "OFF"
       }
@@ -59,7 +56,6 @@
         "POLYGRAPH_BUILD_BACKENDS": "ON",
         "POLYGRAPH_BUILD_BFS": "ON",
         "POLYGRAPH_BUILD_HTTP": "OFF",
-        "POLYGRAPH_BUILD_GRPC": "OFF",
         "POLYGRAPH_BUILD_TESTS": "OFF",
         "POLYGRAPH_BUILD_DOCS": "OFF"
       }
@@ -80,9 +76,7 @@
       "binaryDir": "${sourceDir}/build/gpu-bfs-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "POLYGRAPH_ENABLE_GPU": "ON",
-        "POLYGRAPH_DEPENDENCY_PREFIX": "/home/akos/miniconda3/envs/rapids-cpp",
-        "CMAKE_CUDA_COMPILER": "/usr/local/cuda/bin/nvcc"
+        "POLYGRAPH_ENABLE_GPU": "ON"
       }
     },
     {
@@ -92,9 +86,7 @@
       "binaryDir": "${sourceDir}/build/gpu-bfs",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "POLYGRAPH_ENABLE_GPU": "ON",
-        "POLYGRAPH_DEPENDENCY_PREFIX": "/home/akos/miniconda3/envs/rapids-cpp",
-        "CMAKE_CUDA_COMPILER": "/usr/local/cuda/bin/nvcc"
+        "POLYGRAPH_ENABLE_GPU": "ON"
       }
     },
     {
@@ -108,12 +100,9 @@
         "POLYGRAPH_BUILD_BACKENDS": "ON",
         "POLYGRAPH_BUILD_BFS": "OFF",
         "POLYGRAPH_BUILD_HTTP": "ON",
-        "POLYGRAPH_BUILD_GRPC": "OFF",
         "POLYGRAPH_BUILD_TESTS": "ON",
         "POLYGRAPH_BUILD_DOCS": "OFF",
         "POLYGRAPH_ENABLE_METRICS": "ON",
-        "POLYGRAPH_DEPENDENCY_PREFIX": "/home/akos/miniconda3/envs/rapids-cpp",
-        "CMAKE_CUDA_COMPILER": "/usr/local/cuda/bin/nvcc",
         "POLYGRAPH_USE_JEMALLOC": "ON"
       }
     },
@@ -129,22 +118,6 @@
       }
     },
     {
-      "name": "grpc-server",
-      "displayName": "gRPC streaming server",
-      "inherits": "base",
-      "binaryDir": "${sourceDir}/build/grpc-server",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "POLYGRAPH_ENABLE_GPU": "OFF",
-        "POLYGRAPH_BUILD_BACKENDS": "ON",
-        "POLYGRAPH_BUILD_BFS": "OFF",
-        "POLYGRAPH_BUILD_HTTP": "OFF",
-        "POLYGRAPH_BUILD_GRPC": "ON",
-        "POLYGRAPH_BUILD_TESTS": "ON",
-        "POLYGRAPH_BUILD_DOCS": "OFF"
-      }
-    },
-    {
       "name": "full-cpu",
       "displayName": "All CPU applications",
       "inherits": "base",
@@ -155,7 +128,6 @@
         "POLYGRAPH_BUILD_BACKENDS": "ON",
         "POLYGRAPH_BUILD_BFS": "ON",
         "POLYGRAPH_BUILD_HTTP": "ON",
-        "POLYGRAPH_BUILD_GRPC": "ON",
         "POLYGRAPH_BUILD_TESTS": "ON",
         "POLYGRAPH_BUILD_DOCS": "OFF",
         "POLYGRAPH_ENABLE_METRICS": "ON"
@@ -172,11 +144,11 @@
         "POLYGRAPH_BUILD_BACKENDS": "OFF",
         "POLYGRAPH_BUILD_BFS": "OFF",
         "POLYGRAPH_BUILD_HTTP": "OFF",
-        "POLYGRAPH_BUILD_GRPC": "OFF",
         "POLYGRAPH_BUILD_TESTS": "OFF",
         "POLYGRAPH_BUILD_DOCS": "ON",
         "POLYGRAPH_ENABLE_CLANG_FORMAT": "OFF",
-        "POLYGRAPH_ENABLE_CLANG_TIDY": "OFF"
+        "POLYGRAPH_ENABLE_CLANG_TIDY": "OFF",
+        "POLYGRAPH_DOCS_ONLY": "ON"
       }
     },
     {
@@ -200,7 +172,6 @@
     { "name": "gpu-bfs-debug", "configurePreset": "gpu-bfs-debug", "jobs": 2 },
     { "name": "http-server", "configurePreset": "http-server", "jobs": 2 },
     { "name": "http-server-observability", "configurePreset": "http-server-observability", "jobs": 2 },
-    { "name": "grpc-server", "configurePreset": "grpc-server", "jobs": 2 },
     { "name": "full-cpu", "configurePreset": "full-cpu", "jobs": 2 },
     { "name": "docs", "configurePreset": "docs", "targets": ["docs"], "jobs": 2 },
     { "name": "http-server-analysis", "configurePreset": "http-server-analysis", "jobs": 2 }
@@ -214,7 +185,6 @@
     { "name": "gpu-bfs-debug", "configurePreset": "gpu-bfs-debug", "output": { "outputOnFailure": true } },
     { "name": "http-server", "configurePreset": "http-server", "output": { "outputOnFailure": true } },
     { "name": "http-server-observability", "configurePreset": "http-server-observability", "output": { "outputOnFailure": true } },
-    { "name": "grpc-server", "configurePreset": "grpc-server", "output": { "outputOnFailure": true } },
     { "name": "full-cpu", "configurePreset": "full-cpu", "output": { "outputOnFailure": true } }
   ]
 }

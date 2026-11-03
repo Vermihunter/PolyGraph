@@ -9,7 +9,3 @@ endif()
 if(POLYGRAPH_BUILD_HTTP)
     add_subdirectory(http_server)
 endif()
-
-if(POLYGRAPH_BUILD_GRPC)
-    add_subdirectory(grpc_server)
-endif()

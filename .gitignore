@@ -153,7 +153,7 @@ id_ed25519.*
 /observability/**/data/
 
 # ---------------------------------------------------------------------------
-# 6. Node / frontend (gRPC browser viewer)
+# 6. Node / optional web tooling
 # ---------------------------------------------------------------------------
 node_modules/
 dist/
@@ -175,6 +175,7 @@ coverage/
 *.synctex.gz
 *.toc
 *.run.xml
+*.out
 
 # ---------------------------------------------------------------------------
 # 8. Editors, OS, temporary files, and archives
