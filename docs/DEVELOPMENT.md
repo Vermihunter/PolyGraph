@@ -1,293 +1,235 @@
 # Developer quality gates
 
-GitHub tests are **manual only**. Open Actions → CPU CI → Run workflow, choose a
-branch and `full`, `unit`, `correctness`, `concurrency`, or `oracle` (or `format` for formatting only). `full` keeps
-all existing build/test/oracle checks; concurrency remains a 50-repeat manual
-stress check. Nothing runs automatically on push, pull request, or a schedule.
-See [CI.md](CI.md) for dependencies, diagnostics, caching and reproduction.
+Normal pushes use the **fast** CPU profile: changed-file formatting checks,
+content-cached clang-tidy, one incremental Ninja build, and ten required smoke
+tests. It is a development feedback gate, not complete regression coverage.
+Run the **full** profile and explicitly dispatch **CPU CI → full** for every
+change before merging. Local hooks do not dispatch workflows or enforce GitHub
+branch protection; configure required CI checks in repository settings.
 
-Local commits use the version-controlled [pre-commit hook](../.githooks/pre-commit)
-to automatically format eligible staged files and include that formatting in the
-index. Local pushes use the read-only [pre-push hook](../.githooks/pre-push).
-Terminal Git and CLion invoke the respective hooks after installation. CLion must
-use this Git checkout and have the same Python/CMake/LLVM tools available in its
-process PATH; restart the IDE after changing PATH. This is a local safeguard,
-not mandatory remote enforcement.
+## Setup and commands
 
-## Setup
-
-Use Linux, Git, Python 3.10+, CMake 3.27+, Ninja, a C++23 compiler, and the CPU
-libraries listed in [CI.md](CI.md). Install **clang-format 21 and clang-tidy 21**
-from your distribution or the [official LLVM apt repository](https://apt.llvm.org/)
-if your distribution supplies an older version. The script defaults to the
-versioned executable names. `CLANG_FORMAT` and `CLANG_TIDY` may select alternative
-executable paths, but both must report major version 21. Paths containing spaces
-are supported (quote such paths on the command line). No CUDA SDK is needed for the CPU gate.
+Ubuntu/Linux needs Python 3.10+, Git, CMake 3.27+, Ninja, a C++23 compiler, and
+LLVM 21 `clang-format`/`clang-tidy`. See [CI.md](CI.md) for CPU dependencies.
+`CLANG_FORMAT` and `CLANG_TIDY` may name LLVM 21 executables. The existing root
+`.clang-format` is retained. `tools/dev/clang-tidy.yaml` is the existing focused,
+warnings-as-errors analyzer policy; the broader root `.clang-tidy` remains the
+IDE policy. “Full tidy” means every CPU translation unit under the focused policy.
 
 ```bash
-clang-format-21 --version
-clang-tidy-21 --version
 ./tools/dev/install-hooks.sh
-# Equivalent activation:
-git config --local core.hooksPath .githooks
 python3 tools/dev/quality.py hook-status
-```
 
-The installer refuses to overwrite another effective `core.hooksPath`; integrate
-any existing hooks first. It changes only local Git configuration, not the
-index, sources, commits or remotes. Both hooks and the installer must retain their
-executable file modes. Installation is per clone; Git does not activate hooks
-merely by checking them out. Use `git config --show-origin --get core.hooksPath`
-to diagnose another configuration overriding it.
+# Default git pre-push profile; Git provides the actual outgoing refs on stdin.
+git push
 
-## Individual developer commands
+# While editing: upstream/HEAD changes, index/worktree edits and untracked files.
+python3 tools/dev/quality.py fast
+python3 tools/dev/quality.py fast --base origin/master
+python3 tools/dev/quality.py fast --files tests/command_line_test.cpp
+python3 tools/dev/quality.py fast --files include/cli/CommandLine.hpp
 
-Run from the repository root (or invoke the driver by its absolute path from
-another directory inside the same checkout):
+# Explicitly inspect every tracked file, still allowing valid tidy cache hits.
+python3 tools/dev/quality.py fast --all
 
-```bash
-# Format and stage ONLY eligible staged changes (same as pre-commit):
-python3 tools/dev/quality.py format-staged
-# Read-only formatting audit of tracked, project-owned sources:
-python3 tools/dev/quality.py format --all
-# Narrow scope while editing; filenames are repository-relative:
-python3 tools/dev/quality.py format --files src/cli/CommandLine.cpp
-# Explicit, opt-in modification; never called by the hook:
-python3 tools/dev/quality.py format-fix --files src/cli/CommandLine.cpp include/cli/CommandLine.hpp
-# Or format every tracked project source deliberately:
-python3 tools/dev/quality.py format-fix --all
+# Full format audit, fresh full CPU tidy, incremental complete CPU build,
+# every registered test, then 50 until-fail repetitions of concurrency tests.
+python3 tools/dev/quality.py full
+POLYGRAPH_QUALITY_PROFILE=full git push
 
-# Configure CPU tests and export the actual compilation database:
+# Separate ASan+UBSan and TSan configurations/builds, then complete CTest suites.
+python3 tools/dev/quality.py sanitizers
+
+# Individual commands; verify --all is a backwards-compatible full profile.
 python3 tools/dev/quality.py configure
-# Audit all CPU translation units with the focused gate profile:
-python3 tools/dev/quality.py tidy --all
-# Incremental analysis: sources changed between a local commit/ref and HEAD:
-python3 tools/dev/quality.py tidy --base origin/master
-# Explicit source/header selection for uncommitted editing work:
-python3 tools/dev/quality.py tidy --files include/cli/CommandLine.hpp
-
-# Incremental build and fast tests:
 python3 tools/dev/quality.py build
-python3 tools/dev/quality.py test
-# Entire sequence, stopping at the first failure:
+python3 tools/dev/quality.py test             # smoke tests
+python3 tools/dev/quality.py tidy --all       # full tidy, never accepts cache hits
+python3 tools/dev/quality.py tidy --files tests/command_line_test.cpp
+python3 tools/dev/quality.py format --all
+python3 tools/dev/quality.py format-fix --files tests/command_line_test.cpp
 python3 tools/dev/quality.py verify --all
-# Or verify the committed range relative to a locally available base:
-python3 tools/dev/quality.py verify --base origin/master
+```
 
-# Regression tests for the gate itself (no pushes or commits are made):
+`full` rejects `--files`/`--base`; a requested full profile cannot silently become
+a targeted check. `fast --base` compares committed revisions; use `--files` or
+bare `fast` to include edits. Without a known upstream, bare `fast` reports its
+all-files fallback. Normal `pre-push` requires a clean index/worktree (including
+untracked files), so it verifies the pushed revision rather than different local
+edits. Ignored build/data files are permitted. A dirty checkout fails before
+checks with commit/stash guidance. Every stage prints its duration, including
+failures, and the driver prints total elapsed time.
+
+## Pre-commit formatting
+
+The existing transactional staged formatter is reused. It formats only staged,
+project-owned C++/CUDA files in `include/`, `src/`, `app/`, and `tests/`, then stages
+exact formatted blobs. Generated/protobuf code, vendored dependencies, build/data
+files, and `include/utilities/json.hpp` are excluded. `.clang-format-ignore` is
+respected. There is no repository-wide formatting during commit.
+
+**Partially staged eligible files are rejected before any write**, as are
+unstaged formatter-policy changes. Unstaged edits are preserved. Stage the whole
+file or temporarily stash unstaged edits with `git stash push --keep-index`, then
+restore them and resolve conflicts afterward. Index locks, executable modes,
+symlink checks, alternate indexes and editor-save checks remain intact. Push
+formatting is always read-only.
+
+## Pushed ranges and analysis
+
+The hook consumes **every** pre-push input row, groups identical commit tips, and
+uses the remote OID supplied by Git. It includes paths touched by **every
+introduced commit**, even reverted changes, plus the final tree diff for force
+updates. Rename detection is disabled for path discovery so both old and new
+names are retained; deletions have no file to format/analyze. Paths are NUL
+separated, including spaces and newlines. Ref deletions need no source checks.
+
+A new ref has no authoritative base. Local tracking refs may be stale after
+remote deletion or force-push, so new refs conservatively select all tracked
+files. An unavailable remote OID uses the same visible fallback, without fetching
+while the connection is open. Cached tidy results still apply. Multiple distinct
+tips use persistent, isolated local clones/builds under
+`.polygraph/revisions/<commit>/`; they never reset the developer's checkout or
+share build trees with different absolute source paths. Their first builds may
+be expensive. Tags that peel to commits follow the same verification rules;
+objects that cannot peel to commits fail clearly.
+
+CMake's existing `build/cpu-tests` is reused. Only missing/incompatible
+configuration or changed presets trigger explicit configuration. Ninja regenerates
+for changed CMake inputs and compiles only stale targets. Existing dependencies
+are retained; FetchContent updates are disconnected. A cold build can still need
+to download missing pinned dependencies. Build-time formatting/tidy remain off,
+so compilation does not duplicate the analysis stage. No build tree is deleted.
+
+The build runs **once before tidy**, refreshing generated inputs and Ninja's
+transitive dependency records. Changed sources select their CPU compilation
+commands; changed project headers add their consumers. Missing/incomplete header
+records or headers without known consumers visibly select all CPU units. Object
+paths are read from `output` or parsed from `-o` in the database. Duplicate sources
+are analyzed once. Changes to CMake, developer policy/scripts or analysis policy
+also select all units. A formatting-policy change audits all project sources.
+
+Each successful TU analysis is keyed by its source and transitive dependency
+contents (including generated, external and system headers), compilation database,
+CMake cache/build rules, developer/configuration files, tool versions/executable
+contents, linked implementation libraries and LLVM resource headers, relevant process environment and project/build header file inventory.
+Only successful completed analyses with complete Ninja records are cached;
+failures/interruption cannot add a success. Corrupt/missing cache data is a miss.
+Changing an input invalidates its result even if its timestamp is restored.
+Cache state is ignored local data in `.polygraph/`; removing that directory is
+safe but makes the next analysis cold. Concurrent gates sharing a build fail
+clearly instead of racing.
+
+The CPU preset excludes CUDA, HTTP server, metrics and some optional analysis
+sources. Changes there produce explicit coverage diagnostics; unexpected missing
+CPU sources fail. The fast and full CPU profiles do **not** provide GPU/HTTP
+build or runtime validation; use the appropriate feature presets separately.
+
+## Smoke, full, and sanitizer coverage
+
+The ten smoke tests are named explicitly in `SMOKE_TESTS` in the driver: dense-ID
+mapping and rejection, CLI defaults and required arguments, BFS classic and
+push/pull policy transitions, filtered pull, and independent-oracle diamond and
+cycle cases. Discovery must find **every** required enabled test; missing,
+disabled or unbuilt tests fail. Execution JUnit results must also contain every
+required test with no runtime skips, failures or errors (CTest alone treats skips
+as success). CTest uses `--no-tests=error` and propagates errors.
+The selection deliberately omits Redis socket tests, the remaining unit/oracle
+cases, and repeated concurrency stress. A bug outside the smoke selection can
+pass `fast`; the mandatory pre-merge manual full workflow closes that coverage
+gap. There are no expected-failure markers or silent retries.
+
+`full` analyzes every CPU TU afresh, requires nonempty enabled unit/correctness/
+concurrency registrations, runs all CTest tests, and repeats concurrency 50 times.
+GitHub Actions' manual `full` selection includes full-repository formatting,
+fresh full CPU tidy, all CPU tests, correctness, repeated concurrency and the
+isolated Python oracle. No success cache can weaken explicit full tidy.
+
+This checkout had no existing sanitizer gate/presets. `cpu-asan` (ASan+UBSan) and
+`cpu-tsan` (TSan) now provide separate Ninja directories. Both require a supported
+GCC/Clang Linux runtime. TSan cannot be combined with ASan; address-space
+restrictions, incompatible prebuilt libraries or unavailable runtime support
+cause a reported failure, not a skipped success. These profiles are optional
+manual verification and are not part of ordinary pushes.
+
+## Verify before opening SSH
+
+Git's native pre-push hook runs after remote contact, which can leave an SSH
+connection idle during a cold build/analysis. For long checks use:
+
+```bash
+python3 tools/dev/quality.py verified-push origin
+python3 tools/dev/quality.py verified-push origin HEAD:refs/heads/my-branch
+python3 tools/dev/quality.py verified-push --profile full origin HEAD:refs/heads/my-branch
+```
+
+This intentionally pushes when invoked. With no refspec, the current branch is
+pushed to the same branch name. Explicit non-force `source:refs/heads/destination`
+refspecs and multiple refs are supported. Normal `git push` remains available for
+other options, tags, deletions and force-with-lease. The wrapper does not weaken
+Git's ref-update/fast-forward rules, add force flags or use `--no-verify`.
+
+The wrapper resolves immutable source OIDs and performs the gate **before**
+starting `git push`. Its temporary success certificate binds the exact commit,
+tree, validated file scope and profile to configuration, environment, tools,
+transitive dependencies, generated test discovery, fixtures and built outputs.
+State is checked before analysis/tests and again afterward. The enabled pre-push
+hook recomputes state and checks the **actual** server-advertised scope. If the
+remote moved so the preflight scope no longer covers it, or any relevant input
+changed, the hook fails promptly; it does not rebuild while SSH is connected.
+Refresh tracking refs (`git fetch --prune <remote>`) and rerun preflight. Fetching
+is explicit, so ordinary hooks never add network traffic. Certificates live only
+for that invocation and are removed afterward. Tidy caching alone never skips
+builds or tests in a normal push.
+
+## Regression checks and measurements
+
+```bash
 python3 -m unittest discover -s tools/dev -p 'test_*.py' -v
-```
-
-The manual commands inspect the working files, allowing checks during editing.
-`--base` only selects paths from the **committed** base-to-HEAD diff; use
-`--files` or `--all` to include uncommitted edits. The pre-push entry point does
-not expose these manual scope overrides. It always derives scope from Git's
-actual pre-push stdin and verifies a clean checked-out revision.
-
-## Automatic formatting before commits
-
-`pre-commit` considers only added, modified, copied, renamed or type-changed
-staged project sources with the existing C/C++/header extensions (including
-`.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`, `.ipp`) and CUDA `.cu`/`.cuh`. Deletions,
-untracked/unrelated files, generated/vendor/build/dataset paths and the vendored
-JSON header are excluded. Tracked `.clang-format-ignore` matches are skipped
-explicitly; empty formatter output for nonempty source is rejected. There is no automatic repository-wide format pass.
-CUDA files use the existing LLVM 21 kernel-launch compatibility probe; no CUDA
-compiler or GPU is used.
-
-The hook preflights **all selected files before writing anything**. If a file's
-working bytes differ from its staged blob, it fails with `partially staged`
-instructions. This conservative policy also rejects EOL/clean-filter conversions
-that make working/index bytes differ; it never guesses which hunks to stage.
-Unstaged changes in unrelated files are allowed and left untouched. Applicable
-`.clang-format`, `_clang-format` and `.clang-format-ignore` files must be tracked
-and match their staged versions, preventing an unstaged policy from controlling
-a commit. Newly staged policy changes are supported.
-
-For a partially staged source, either stage the whole file deliberately, or
-preserve unstaged edits before retrying. One possible manual flow is:
-
-```bash
-git stash push --keep-index --include-untracked
-# Review the remaining staged changes, then commit normally yourself.
-# After the commit, restore the stash yourself:
-git stash pop
-```
-
-Stash restoration can conflict with formatting; resolve conflicts explicitly.
-The hook does not stash, restore or commit for you. Do not edit or run another
-Git index operation while it runs. Like other local hooks, this is not a lock
-against an editor or an adversarial process modifying the working files.
-
-Formatting is prepared in memory. Already formatted files do not rewrite the
-worktree or index. Changed files preserve working permissions and staged
-executable modes. Git's active `GIT_INDEX_FILE` (including path-limited commits),
-alternate indexes and split indexes are supported. The driver owns the active
-index lock, prepares an updated private index, and atomically installs it. It
-stages exactly the formatted blobs using `update-index`, never a broad `git add`
-that could scoop up unrelated edits. Other staged entries are retained.
-Symlink sources are rejected rather than followed.
-
-If formatting or partial-staging preflight fails, neither index nor sources are
-changed. If a later filesystem/index write fails, the commit is blocked and the
-original index remains unless its final atomic replacement succeeded. Some
-formatted worktree files can remain unstaged; inspect `git diff`/`git diff
---cached`, stage deliberately and retry. Do not remove an existing index lock
-until you have confirmed its owning Git operation is no longer running.
-
-Regression scenarios use actual Git indexes and LLVM 21 in disposable
-repositories, reusing existing commit objects without creating commits:
-
-```bash
 python3 -m unittest discover -s tools/dev -p check_pre_commit_test.py -v
-# Existing pre-push stage-failure/selection tests (no formatter required):
-python3 -m unittest discover -s tools/dev -p 'test_*.py' -v
 ```
 
-## Push behavior and revision safety
+All **43 gate regressions** and **18 LLVM-backed staged-formatting regressions**
+passed. Full-repository formatting checked all 254 owned files; Actionlint and
+ShellCheck passed. Real certificate checks accepted unchanged state and rejected
+an added generated build input. A real certified gate plus a further state
+recheck passed in 11.24 seconds; the remote push itself was simulated only in
+regression fixtures.
 
-The hook reads every advertised update (`local ref`, `local object ID`, `remote
-ref`, `remote object ID`) before starting tools. For every non-deletion update,
-its peeled commit must equal checked-out `HEAD`. A push of another branch's tip,
-a tag pointing elsewhere, a non-commit object, or multiple distinct tips is
-rejected: check out and push each revision separately. Annotated tags pointing
-to HEAD are supported. Deletion-only/no-update pushes introduce no source and
-need no build.
+Tests use disposable repositories and synthetic commit objects. They exercise
+multiple commits and tips, new branches/stale tracking refs, missing remote
+objects, renames/deletions, filenames with spaces/newlines, header dependency
+selection, cache input changes, smoke discovery, failure propagation, and
+verified-push preflight/certificate reuse. They never push to a remote. CTest's
+`python.developer_quality` runs the gate regressions in full CPU CI; the separate
+formatting job runs LLVM-backed staged-formatting regressions.
 
-Tracked working files and the index must be clean; non-ignored untracked files
-must be committed or stashed too. Ignored build trees and datasets are allowed.
-This prevents testing unrelated uncommitted changes instead of the pushed
-revision. HEAD and cleanliness are rechecked between stages and at the end; if
-an editor or another Git operation changes them during verification, the push
-fails. Avoid editing files while a push gate runs. This is not an adversarial
-filesystem lock; ignored dependencies/toolchain configuration are trusted local
-inputs, not part of a hermetic build.
+Measured locally on 2026-11-03 with the existing CPU build, logs under ignored
+`build/quality-incremental/` (not GitHub-hosted measurements):
 
-For known remote objects, the union of remote-tip-to-local-tip changed paths is
-checked. No fetch/network mutation is performed. A new branch or unavailable
-remote object causes a conservative full tracked-source audit. Changes to build
-configuration, Clang configuration, or gate code also force full source/CPU
-analysis. The hook checks the final pushed tip, not every historical commit in
-the outgoing range. A successful run is not cached across pushes.
+| Scenario | Local elapsed | Result |
+| --- | ---: | --- |
+| Old configure / idle build | 0.73s / 0.13s | Unnecessary configure; build already incremental |
+| Old full tidy, 94 TUs | 439.78s | Passed |
+| Old “fast” tests, 468 tests | 21.37s | 467 passed; Redis fake-server socket unavailable in sandbox |
+| New gate, no source changes (`fast --base HEAD`) | 0.39s | Passed, build and ten smoke tests executed |
+| Actual modified `.cpp`, cold / warm tidy | 6.96s / 0.98s | One TU; measured during initial implementation |
+| Final driver, single `.cpp` scope, cold / warm tidy | 5.88s / 1.93s | Includes shared-library/resource fingerprinting and strict smoke results |
+| Actual modified `CommandLine.hpp`, cold / warm | 58.81s / 1.06s | Eight affected TUs, 13 build steps initially |
+| Changed CMake configuration | 417.40s | Ninja regenerated; all 94 TUs selected; smoke passed |
+| Complete tests plus 25 concurrency tests × 50 | 42.70s | All 468 tests passed with loopback sockets enabled |
+| Broken formatting | 0.11s | Rejected before build |
+| Broken compilation | 12.45s | Rejected at build; no tidy/tests |
+| Broken smoke assertion | 9.90s | Rejected at smoke tests |
 
-The order is:
-
-1. **Format validation**, with the root `.clang-format`, LLVM 21 `--dry-run
-   --Werror`, and no source writes. Failures list all affected files and an
-   explicit repair command. Sources/headers under `include`, `src`, `app` and
-   `tests` are included; vendored `include/utilities/json.hpp`, generated
-   protobuf files, generated/vendor/external/build/data directories are excluded.
-   The selected formatter must preserve a CUDA kernel-launch syntax probe before
-   `.cu`/`.cuh` formatting is allowed. CUDA files are not passed to a C++ compiler.
-2. **CMake configure**, reusing `cpu-tests` and `build/cpu-tests`. It explicitly
-   enables `CMAKE_EXPORT_COMPILE_COMMANDS`, disables CUDA and the CMake automatic
-   formatter/tidy integrations, and clears global `CMAKE_CXX_CLANG_TIDY` so a
-   push cannot trigger the repository's build-time source formatter. Existing
-   dependency locations in the build cache are retained; discovery errors fail.
-3. **Clang-tidy**, using that actual `compile_commands.json`. The small
-   [gate profile](../tools/dev/clang-tidy.yaml) leaves the broad root CLion
-   `.clang-tidy` unchanged. It enables focused analyzer/use-after-move/memory/RAII
-   checks and treats enabled diagnostics as errors. It never uses `--fix`.
-   External/generated translation units and header diagnostics are excluded.
-   Changed headers select consumers using valid Ninja dependency records. An
-   incomplete graph, fresh build, or header with no known consumer falls back
-   to all CPU translation units. A changed CPU source absent from the compilation
-   database fails; it is not silently ignored.
-4. **Incremental build**, via `cmake --build --preset cpu-tests`.
-5. **Fast tests**, the union of `unit` and deterministic `correctness` labels,
-   executed once. Both required selections are independently checked for
-   nonemptiness. Tests labeled integration/database/external/ldbc/slow/stress are
-   excluded; failure, missing executables or an empty selection blocks the push.
-   Deterministic concurrency tests run once; the 50-repeat stress run is manual.
-
-Every tool failure exits nonzero. Subprocesses cannot consume the push protocol
-from stdin and have a 15-minute upper bound; version/probe commands have a
-30-second bound. CTest's default per-test bound is 60 seconds, with existing
-20/30/60-second test properties retained. Compiler errors and the known CLI
-alias test are never suppressed.
-
-CPU static analysis does not cover optional HTTP/server, GPU, algorithm-analysis,
-or metrics translation
-units that are absent from this preset. Changed optional units/CUDA files print
-that limitation explicitly. A changed header without a CPU consumer causes the
-conservative CPU scan, but it cannot establish GPU/HTTP correctness. Use a
-suitable compilation database and toolchain for those optional targets. Formatting
-all owned files is independent of whether a CPU target builds them.
-
-## Bypass and later remote enforcement
-
-`git commit --no-verify` bypasses pre-commit and `git push --no-verify` bypasses
-pre-push; users can also change local Git
-configuration or hook files. Use that escape hatch deliberately and record why.
-CLion can likewise be configured to skip hooks. No local hook is tamper-proof.
-To require checks centrally later, add automatic CI events deliberately and
-configure branch protection/rulesets requiring those checks, or add a managed
-server-side gate. Manual-only workflows alone do not enforce every push/PR.
-
-## Verification and existing blockers
-
-Current pre-commit update, locally verified on 2026-11-03 (not GitHub-hosted):
-
-| Check | Result |
-| --- | --- |
-| `python3 -m unittest discover -s tools/dev -p check_pre_commit_test.py -v` | 18/18 passed with native LLVM 21 |
-| Same 18 tests with CI's exact hash-pinned formatter wheel | 18/18 passed |
-| `python3 -m unittest discover -s tools/dev -p 'test_*.py' -v` | 19/19 existing gate tests passed; injected format/configure/tidy/build/test failures block pre-push |
-| `python3 tools/dev/quality.py format --all` | Passed all 254 project source/header files, read-only; CUDA probe passed |
-| `python3 tools/dev/quality.py build` | All enabled CPU targets built |
-| `python3 tools/dev/quality.py test` | 468/469 passed; the unchanged CLI duplicate-alias regression fails and blocks pre-push |
-| `python3 tools/dev/quality.py hook-status` | Both executable hooks active under the existing `.githooks` setting |
-| actionlint 1.7.7 + ShellCheck 0.10.0 | Workflow and hook scripts passed |
-
-The 18 real-Git tests cover modified tracked source, already formatted files
-(no rewrite), unrelated files, partial staging, spaces, executable modes,
-generated/vendor/build/data exclusions, CUDA, staged/unstaged configuration,
-ignored files, empty formatter output, alternate/split indexes, symlinks,
-formatter errors, index locks, and saves/configuration appearing during
-preparation. Staging occurred only in disposable fixture repositories. No commit
-or push was executed. The developer checkout's index and all five pre-existing
-unstaged app edits were verified unchanged. Logs are retained in ignored
-`build/precommit-verification/`. The actual GitHub-hosted run, apt transaction,
-cache/artifact services, and IDE UI invocation were not executed locally.
-
-Earlier pre-push-gate validation on 2026-11-03 (historical, not a hosted run):
-
-| Command/check | Result |
-| --- | --- |
-| `python3 tools/dev/quality.py format --all` | Exit 1: five existing app-file formatting failures; CUDA probe passed; sources unchanged |
-| `python3 tools/dev/quality.py verify --all` | Exit 1 at format validation; no later stage was run |
-| `python3 tools/dev/quality.py configure` | Passed; populated the actual CPU compilation database |
-| `python3 tools/dev/quality.py tidy --all` | Passed all 94 CPU translation units with the focused profile |
-| `python3 tools/dev/quality.py build` | Passed every enabled CPU target |
-| `python3 tools/dev/quality.py test` | Exit 1, 468/469 passed; only the existing CLI alias test failed outside the socket-restricted sandbox |
-| `ctest --preset cpu-tests -L '^correctness$' --no-tests=error --parallel 2 --timeout 60` | 323/323 passed |
-| `python3 -I -S .github/scripts/run_oracle_tests.py` | 88/88 passed |
-| Same oracle runner with `--isolation-only` | 2/2 passed |
-| `python3 -m unittest discover -s tools/dev -p 'test_*.py' -v` | 19/19 passed; includes per-stage shell-hook failure injections without pushing |
-| Actual LLVM 21 null-dereference fixture with the gate profile | Exit 1 with `clang-analyzer-core.NullDereference` promoted to error |
-| Actual `.githooks/pre-push` with HEAD/new-branch stdin | Exit 1 on the dirty implementation working tree, before any check |
-| Actual hook with deletion-only stdin | Exit 0, no source checks/build |
-| `./tools/dev/install-hooks.sh` and `python3 tools/dev/quality.py hook-status` | Passed; this clone now has `core.hooksPath=.githooks` |
-| `actionlint -shellcheck=/path/to/shellcheck .github/workflows/cpu-ci.yml` | Passed (actionlint 1.7.7, ShellCheck 0.10.0) |
-| `shellcheck .githooks/pre-push tools/dev/install-hooks.sh` | Passed |
-
-The first sandboxed fast-test attempt also failed the existing loopback Redis
-fake at socket creation. Running with loopback sockets available isolated the
-sole genuine test failure to the CLI regression. No real database was used.
-Logs are retained under ignored `build/quality-verification/`. No GitHub manual
-run was dispatched. No existing C++/CUDA source was changed, and no files were
-staged, committed or pushed.
-The earlier full-format audit found five existing files (historical result):
-`app/bfs/main.cpp`, `app/bfs_benchmark/BfsBenchmark.cpp`,
-`app/bfs_benchmark/BfsBenchmark.hpp`, `app/bfs_benchmark/main.cpp`, and
-`app/http_server/main.cpp`. New-branch/full audits will block until those are
-formatted and staged via pre-commit, or explicitly formatted by a developer.
-Incremental pushes only audit their scope. The current update preserves the
-five pre-existing unstaged app-formatting edits in this working tree.
-
-The current checkout also still contains the known
-`CommandLineTest.RejectsUnknownAndDuplicateOptions` failure: duplicate aliases
-are accepted. A full or fast test run therefore fails and prevents a push.
-This gate implementation does not modify that production behavior or skip its
-test. The prior CI implementation report in `CI.md` referred to a local alias
-fix that was not included in the current committed source.
+The measured old stage sum is about **462 seconds** (not an observed 15-minute
+end-to-end push). A one-source cold check is about **66× faster** here. The
+5–20-second goal is met for that ordinary case; broad header fanout, changed
+configuration, an empty cache or initial builds can exceed it. Necessary work is
+reported, never silently omitted. Temporary probe edits were restored and the
+CPU build rebuilt afterward. No commit, remote push or workflow dispatch was
+performed during this implementation. Both sanitizer presets configured
+successfully using existing dependency sources;
+a minimal ASan+UBSan executable ran successfully. TSan exited 66 with
+`unexpected memory mapping` in this environment. Complete sanitizer builds/suites
+and hosted full CI have not been executed here and require supported runners.

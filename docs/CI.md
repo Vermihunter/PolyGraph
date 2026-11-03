@@ -2,7 +2,7 @@
 
 [`.github/workflows/cpu-ci.yml`](../.github/workflows/cpu-ci.yml) runs **only through
 `workflow_dispatch`** using Ubuntu 24.04. Choose `full`, `unit`, `correctness`,
-`concurrency`, or `oracle` (or `format` alone); `full` runs every existing check. There are no push,
+`concurrency`, or `oracle` (or `format`/`tidy` alone); `full` runs every existing check plus fresh full CPU clang-tidy. There are no push,
 pull-request, or scheduled triggers. See [DEVELOPMENT.md](DEVELOPMENT.md) for the
 automatic local pre-push gate. It uses the existing `cpu-tests`
 configure/build/test presets; it does not redefine their feature flags.
@@ -123,12 +123,15 @@ privileged service containers. Official actions are pinned to full commit SHAs
 with release comments. Update those pins together with their comments after
 reviewing upstream releases. Superseded manual runs of the same suite/ref are cancelled.
 
-The current committed CLI still accepts duplicate aliases. The original
-`RejectsUnknownAndDuplicateOptions` test remains active and correctly makes unit
-and fast local gates fail. No expected-failure marker, filter or skip hides it.
-The earlier local CI implementation included an alias fix/regression proposal,
-but that production change is absent from this checkout. Current quality-gate
-verification and blockers are documented in [DEVELOPMENT.md](DEVELOPMENT.md).
+Every change must receive an explicitly dispatched `full` workflow before merging.
+The local default now uses ten smoke tests and incremental cached tidy; it is not
+full CI coverage. The `static-analysis` job runs for `full` and `tidy`, installs
+LLVM 21 from [LLVM's package repository](https://apt.llvm.org/), configures/builds
+once through `quality.py tidy --all`, and analyzes every project CPU translation
+unit without success-cache reuse. The other jobs retain their full test,
+correctness, concurrency and isolated-oracle checks. No automatic event triggers
+were added. See [DEVELOPMENT.md](DEVELOPMENT.md) for profiles, coverage limitations,
+verified-push and current measurements.
 
 Historical local verification from the initial CI implementation (not results
 for the current committed CLI or a GitHub-hosted run):

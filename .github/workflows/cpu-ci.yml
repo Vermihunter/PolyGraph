@@ -15,6 +15,7 @@ on:
           - concurrency
           - oracle
           - format
+          - tidy
 
 permissions:
   contents: read
@@ -91,7 +92,7 @@ jobs:
           path: build/ci-logs/format/
 
   cpu:
-    if: inputs.suite != 'oracle' && inputs.suite != 'format'
+    if: inputs.suite != 'oracle' && inputs.suite != 'format' && inputs.suite != 'tidy'
     name: CPU / ${{ matrix.suite }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -179,6 +180,55 @@ jobs:
             build/cpu-tests/Testing/Temporary/
             build/cpu-tests/CMakeCache.txt
             build/cpu-tests/CMakeFiles/CMakeConfigureLog.yaml
+
+  static-analysis:
+    if: inputs.suite == 'full' || inputs.suite == 'tidy'
+    name: Full CPU clang-tidy (uncached)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out a clean source tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          clean: true
+          persist-credentials: false
+
+      - name: Install CPU dependencies and LLVM 21 from the LLVM apt repository
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mkdir -p build/ci-logs/tidy
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential cmake ninja-build pkg-config git ca-certificates wget gnupg \
+            libcurl4-openssl-dev libpq-dev libspdlog-dev libgtest-dev nlohmann-json3-dev python3
+          wget -qO "$RUNNER_TEMP/llvm.asc" https://apt.llvm.org/llvm-snapshot.gpg.key
+          gpg --batch --dearmor -o "$RUNNER_TEMP/llvm.gpg" "$RUNNER_TEMP/llvm.asc"
+          sudo install -m 644 "$RUNNER_TEMP/llvm.gpg" /usr/share/keyrings/llvm.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' \
+            | sudo tee /etc/apt/sources.list.d/llvm21.list
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang-tidy-21 clang-format-21
+
+      - name: Analyze every project CPU translation unit without success-cache reuse
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          python3 tools/dev/quality.py tidy --all 2>&1 | tee build/ci-logs/tidy/check.log
+          git diff --exit-code
+          git diff --cached --exit-code
+
+      - name: Upload static analysis failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tidy-diagnostics
+          retention-days: 14
+          if-no-files-found: warn
+          path: build/ci-logs/tidy/
 
   oracle:
     if: inputs.suite == 'full' || inputs.suite == 'oracle'

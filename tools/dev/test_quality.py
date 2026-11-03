@@ -123,9 +123,11 @@ if kind == 'git':
     elif args[0] == 'rev-parse':
         if mode == 'missing-remote' and args[-1].startswith('b'): sys.exit(1)
         print(args[-1].split('^')[0])
+    elif args[0] == 'clone':
+        (pathlib.Path(args[-1]) / '.git/info').mkdir(parents=True)
     elif args[0] == 'status':
         if mode == 'dirty': sys.stdout.write(' M src/unit.cpp\0')
-    elif args[0] in ('diff', 'ls-files'): sys.stdout.write('src/unit.cpp\0')
+    elif args[0] in ('diff', 'ls-files', 'ls-tree', 'diff-tree'): sys.stdout.write('src/unit.cpp\0')
     sys.exit(0)
 if '--version' in args:
     print('LLVM version 21.1.0')
@@ -138,9 +140,19 @@ if mode == stage:
 if kind == 'cmake' and '--preset' in args and '--build' not in args:
     build = root / 'build/cpu-tests'
     build.mkdir(parents=True, exist_ok=True)
-    (build / 'compile_commands.json').write_text(json.dumps([{'directory': str(build), 'file': str(root / 'src/unit.cpp')}]))
+    (build / 'compile_commands.json').write_text(json.dumps([{'directory': str(build), 'file': str(root / 'src/unit.cpp'), 'command': 'c++ -o unit.o -c unit.cpp'}]))
+if kind == 'ctest' and '--output-junit' in args:
+    import runpy, xml.etree.ElementTree as ET
+    names = runpy.run_path(str(root / 'tools/dev/quality.py'))['SMOKE_TESTS']
+    suite = ET.Element('testsuite')
+    for name in names:
+        case = ET.SubElement(suite, 'testcase', name=name)
+        if mode == 'skipped': ET.SubElement(case, 'skipped')
+    ET.ElementTree(suite).write(args[args.index('--output-junit') + 1])
 if kind == 'ctest' and '--show-only=json-v1' in args:
-    print(json.dumps({'tests': [] if mode == 'empty' else [{'name': 'unit.test'}]}))
+    import runpy
+    names = runpy.run_path(str(root / 'tools/dev/quality.py'))['SMOKE_TESTS']
+    print(json.dumps({'tests': [] if mode == 'empty' else [{'name': n} for n in names]}))
 '''
 
 
@@ -155,7 +167,7 @@ class HookTests(unittest.TestCase):
         shutil.copyfile(HERE.parents[1] / ".githooks/pre-push", self.root / ".githooks/pre-push")
         (self.root / ".githooks/pre-push").chmod(0o755)
         (self.root / "src/unit.cpp").write_text("int value;\n")
-        for name in ("git", "clang-format-21", "clang-tidy-21", "cmake", "ctest"):
+        for name in ("git", "clang-format-21", "clang-tidy-21", "cmake", "ctest", "ninja"):
             path = self.root / "bin" / name
             path.write_text(FAKE_TOOL)
             path.chmod(0o755)
@@ -163,6 +175,8 @@ class HookTests(unittest.TestCase):
                             "PATH": str(self.root / "bin") + os.pathsep + os.environ["PATH"]}
         self.environment.pop("CLANG_FORMAT", None)
         self.environment.pop("CLANG_TIDY", None)
+        self.environment.pop("POLYGRAPH_QUALITY_PROFILE", None)
+        self.environment.pop("POLYGRAPH_VERIFIED_DIRECTORY", None)
 
     def invoke(self, failure="", local=None, remote=None):
         env = {**self.environment, "QUALITY_TEST_FAILURE": failure}
@@ -173,8 +187,8 @@ class HookTests(unittest.TestCase):
                               input=protocol, capture_output=True, text=True, cwd=self.root, env=env, timeout=20)
 
     def test_every_failed_stage_blocks_push_and_stops(self):
-        stages = ["clang-format", "CMake configure", "clang-tidy", "CPU build", "fast tests"]
-        for index, failure in enumerate(("format", "configure", "tidy", "build", "test")):
+        stages = ["clang-format", "CMake configure", "CPU build", "clang-tidy", "smoke tests"]
+        for index, failure in enumerate(("format", "configure", "build", "tidy", "test")):
             with self.subTest(failure=failure):
                 result = self.invoke(failure)
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -192,16 +206,21 @@ class HookTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("selection is empty", result.stderr)
 
+    def test_runtime_skipped_smoke_blocks_push(self):
+        result = self.invoke("skipped")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("skipped", result.stderr)
+
     def test_dirty_worktree_blocks_before_checks(self):
         result = self.invoke("dirty")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Commit or stash", result.stderr)
         self.assertNotIn("[quality] clang-format", result.stdout)
 
-    def test_non_head_push_is_rejected(self):
+    def test_checkout_identity_mismatch_is_rejected(self):
         result = self.invoke(local='c' * 40)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not checked-out HEAD", result.stderr)
+        self.assertIn("HEAD changed", result.stderr)
 
     def test_malformed_ref_input_is_rejected(self):
         result = self.invoke(local="not-an-object-id")

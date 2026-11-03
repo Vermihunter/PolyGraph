@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CPU verification and staged-file formatting hooks. Only formatting/install commands mutate state."""
+"""Incremental CPU verification, explicit full/sanitizer profiles, and safe staged formatting."""
 from __future__ import annotations
 
 import argparse
@@ -13,6 +13,11 @@ import subprocess
 import sys
 import stat
 import tempfile
+import hashlib
+import time
+import fcntl
+import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 
 SOURCE_ROOTS = {"include", "src", "app", "tests"}
 EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".ipp", ".tpp", ".cu", ".cuh"}
@@ -83,32 +88,44 @@ def verify_clean_revision(root: Path, expected: str) -> None:
                         "(including untracked files) before pushing; ignored build/data files are allowed")
 
 
-def push_scope(root: Path, protocol: str) -> tuple[str | None, set[str]]:
-    head = git(root, "rev-parse", "HEAD").decode().strip()
-    changed: set[str] = set()
-    has_tip = False
-    full = False
+def revision_files(root: Path, tip: str, base: str | None) -> set[str]:
+    if base is None:
+        return decode_paths(git(root, "ls-tree", "-r", "--name-only", "-z", tip))
+    # Include paths touched in every introduced commit, even changes reverted at
+    # the tip, and both sides of renames. Final diff also covers force-push removals.
+    names = decode_paths(git(root, "diff", "--no-renames", "--name-only", "-z", base, tip, "--"))
+    commits = git(root, "rev-list", tip, "^" + base).decode().splitlines()
+    if commits:
+        names.update(decode_paths(git_input(root, ["diff-tree", "--stdin", "--root", "-r", "-m",
+                                                   "--no-commit-id", "--no-renames", "--name-only", "-z"],
+                                             ("\n".join(commits) + "\n").encode())))
+    return names
+
+
+def push_scopes(root: Path, protocol: str, remote_name: str = "origin") -> dict[str, set[str]]:
+    scopes: dict[str, set[str]] = {}
     for line in protocol.splitlines():
         fields = line.split()
         if len(fields) != 4 or not all(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", fields[i]) for i in (1, 3)):
             raise GateError("invalid Git pre-push ref input")
         _, local_oid, _, remote_oid = fields
-        if set(local_oid) == {"0"}:  # Deletion only: no source revision is introduced.
+        if set(local_oid) == {"0"}:
             continue
         tip = git(root, "rev-parse", "--verify", local_oid + "^{commit}").decode().strip()
-        if tip != head:
-            raise GateError("push blocked: a pushed tip is not checked-out HEAD. Check out that revision and "
-                            "push it separately; multi-tip pushes to different commits are unsupported")
-        has_tip = True
-        remote = run(["git", "rev-parse", "--verify", remote_oid + "^{commit}"], root, capture=True, check=False)
-        if set(remote_oid) == {"0"} or remote.returncode:
-            full = True
+        base = None
+        if set(remote_oid) != {"0"}:
+            result = run(["git", "rev-parse", "--verify", remote_oid + "^{commit}"], root, capture=True, check=False)
+            if result.returncode == 0:
+                base = result.stdout.decode().strip()
+            else:
+                print("[scope] Remote object unavailable; fallback to all files at " + tip, flush=True)
         else:
-            changed.update(changed_files(root, remote_oid))
-    if not has_tip:
-        return None, set()
-    verify_clean_revision(root, head)
-    return head, changed_files(root, None) if full else changed
+            # Tracking refs can retain history deleted/force-pushed on the server.
+            # Git supplies no authoritative base for a new ref: never use those
+            # hints to exclude files that may actually be new to this remote.
+            print("[scope] New ref has no authoritative base; fallback to all files at " + tip, flush=True)
+        scopes.setdefault(tip, set()).update(revision_files(root, tip, base))
+    return scopes
 
 
 def clang_tool(kind: str) -> str:
@@ -323,9 +340,10 @@ def format_staged(root: Path) -> None:
 
 
 def configure(root: Path) -> None:
-    run(["cmake", "--preset", "cpu-tests", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+    run(["cmake", "--preset", "cpu-tests", "-DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=ON",
          "-DPOLYGRAPH_ENABLE_GPU=OFF", "-DPOLYGRAPH_ENABLE_CLANG_FORMAT=OFF",
-         "-DPOLYGRAPH_ENABLE_CLANG_TIDY=OFF", "-DCMAKE_CXX_CLANG_TIDY="], root)
+         "-DPOLYGRAPH_ENABLE_CLANG_TIDY=OFF", "-DCMAKE_CXX_CLANG_TIDY=",
+         "-DFETCHCONTENT_UPDATES_DISCONNECTED=ON"], root)
     path = root / "build/cpu-tests/compile_commands.json"
     if not path.is_file() or not json.loads(path.read_text()):
         raise GateError("CMake produced no compilation database: " + str(path))
@@ -343,8 +361,12 @@ def compile_units(root: Path) -> list[tuple[Path, Path]]:
             continue
         if source.suffix not in TRANSLATION_UNITS:
             continue
-        # CMake's output field lets Ninja dependency records map exactly to TUs.
+        # Older CMake databases expose the object only in the command.
         output = entry.get("output")
+        if not output:
+            arguments = entry.get("arguments") or shlex.split(entry.get("command", ""))
+            if "-o" in arguments:
+                output = arguments[arguments.index("-o") + 1]
         if output:
             units.append((source, (directory / output).resolve()))
         else:
@@ -361,15 +383,20 @@ def ninja_dependencies(root: Path) -> dict[Path, set[Path]]:
     if result.returncode:
         return {}
     records: dict[Path, set[Path]] = {}
+    resolved = {}
+    def resolve(name: str) -> Path:
+        if name not in resolved:
+            resolved[name] = (build / name).resolve()
+        return resolved[name]
     current = None
     for line in os.fsdecode(result.stdout).splitlines():
         match = re.match(r"^(.*): #deps .* \((VALID|STALE)\)$", line)
         if match:
-            current = (build / match[1]).resolve() if match[2] == "VALID" else None
+            current = resolve(match[1]) if match[2] == "VALID" else None
             if current is not None:
                 records[current] = set()
         elif current is not None and line.startswith("    "):
-            records[current].add((build / line[4:]).resolve())
+            records[current].add(resolve(line[4:]))
         elif line:
             current = None
     return records
@@ -406,6 +433,125 @@ def selected_units(root: Path, names: set[str], full: bool) -> list[Path]:
     return sorted(selected)
 
 
+def content_key(values: list[str], paths: set[Path], memo: dict | None = None) -> str:
+    digest = hashlib.sha256()
+    for value in values:
+        digest.update(os.fsencode(value) + b"\0")
+    for path in sorted(paths):
+        digest.update(os.fsencode(path) + b"\0")
+        if path.is_file():
+            status = path.stat()
+            identity = (path, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
+            cached = memo.get(identity) if memo is not None else None
+            if cached is None:
+                contents = hashlib.sha256()
+                with path.open("rb") as stream:
+                    while chunk := stream.read(1024 * 1024):
+                        contents.update(chunk)
+                cached = contents.digest()
+                if memo is not None:
+                    memo[identity] = cached
+            digest.update(cached)
+        else:
+            digest.update(b"MISSING")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(data, stream, sort_keys=True)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, ValueError):
+        return {}  # A missing/corrupt cache is a miss, never a success.
+
+
+def configuration_paths(root: Path) -> set[Path]:
+    names = decode_paths(git(root, "ls-files", "-z"))
+    return {root / n for n in names if requires_full_analysis({n})} | {Path(__file__).resolve(), root / "CMakeUserPresets.json"}
+
+
+def tool_implementation(root: Path, executables: set[Path]) -> set[Path]:
+    paths = set(executables)
+    for executable in executables:
+        result = run(["ldd", str(executable)], root, capture=True, check=False)
+        diagnostic = os.fsdecode(result.stdout + result.stderr)
+        if result.returncode and not any(message in diagnostic for message in ("not a dynamic executable", "statically linked")):
+            raise GateError("cannot fingerprint shared implementation of " + str(executable) + ": " + diagnostic)
+        if "not found" in diagnostic:
+            raise GateError("tool shared library missing: " + diagnostic)
+        for line in diagnostic.splitlines():
+            match = re.search(r"(/.*) \(0x[0-9a-f]+\)", line)
+            if match:
+                paths.add(Path(match[1]).resolve())
+        # LLVM's resource headers are read by tidy but are absent from GCC's
+        # dependency files. Include them and their inventory in tool identity.
+        resources = executable.parent.parent / "lib/clang"
+        if resources.is_dir():
+            paths.update(p for p in resources.rglob("*") if p.is_file())
+    return paths
+
+
+def tool_state(root: Path) -> str:
+    paths = {Path(sys.executable).resolve()}
+    versions = []
+    for name in ("clang-format", "clang-tidy", "cmake", "ninja", "ctest"):
+        tool = clang_tool(name) if name.startswith("clang-") else shutil.which(name)
+        if not tool:
+            raise GateError("missing tool: " + name)
+        paths.add(Path(tool).resolve())
+        versions.append(os.fsdecode(run([tool, "--version"], root, capture=True).stdout))
+    # Compiler paths in the DB, not whichever c++ happens to be on PATH.
+    for entry in json.loads((root / "build/cpu-tests/compile_commands.json").read_text()):
+        args = entry.get("arguments") or shlex.split(entry["command"])
+        executable = shutil.which(args[0])
+        if not executable:
+            raise GateError("missing compilation tool: " + args[0])
+        paths.add(Path(executable).resolve())
+    # GCC's implementation lives in cc1plus, beyond its small driver binary.
+    for executable in list(paths):
+        if re.search(r"(c\+\+|g\+\+)(-[0-9]+)?$", executable.name):
+            result = run([str(executable), "-print-prog-name=cc1plus"], root, capture=True)
+            implementation = Path(os.fsdecode(result.stdout).strip())
+            if implementation.is_file():
+                paths.add(implementation.resolve())
+    paths = tool_implementation(root, paths)
+    environment = {k: v for k, v in os.environ.items()
+                   if not k.startswith(("GIT_", "POLYGRAPH_VERIFIED_")) and k not in {"_", "SHLVL", "PWD", "OLDPWD", "POLYGRAPH_QUALITY_PROFILE"}}
+    return content_key(versions + [json.dumps(environment, sort_keys=True)], paths)
+
+
+def analysis_state(root: Path) -> str:
+    build_dir = root / "build/cpu-tests"
+    # File-name inventory detects newly added headers that can shadow an old
+    # include. Contents are hashed per TU below, including external/system headers.
+    inventory = []
+    include_roots = {root / n for n in SOURCE_ROOTS} | {build_dir}
+    for entry in json.loads((build_dir / "compile_commands.json").read_text()):
+        arguments = entry.get("arguments") or shlex.split(entry.get("command", ""))
+        for index, argument in enumerate(arguments):
+            if argument in {"-I", "-isystem", "-iquote", "-idirafter"} and index + 1 < len(arguments):
+                include_roots.add((Path(entry["directory"]) / arguments[index + 1]).resolve())
+            elif argument.startswith("-I") and len(argument) > 2:
+                include_roots.add((Path(entry["directory"]) / argument[2:]).resolve())
+    for directory in include_roots:
+        if directory.exists():
+            inventory.extend(str(p) for p in directory.rglob("*") if p.suffix in EXTENSIONS and p.is_file())
+    return content_key([tool_state(root), *sorted(inventory)], configuration_paths(root) | {
+        build_dir / "CMakeCache.txt", build_dir / "compile_commands.json", build_dir / "build.ninja"})
+
+
 def check_tidy(root: Path, names: set[str], *, full: bool = False) -> None:
     for name in sorted(names):
         if project_source(name) and Path(name).suffix in {".cu", ".cuh"}:
@@ -415,53 +561,300 @@ def check_tidy(root: Path, names: set[str], *, full: bool = False) -> None:
         print("[tidy] No affected CPU translation units", flush=True)
         return
     tool = clang_tool("clang-tidy")
+    dependencies = ninja_dependencies(root)
+    outputs: dict[Path, set[Path]] = {}
+    complete = {}
+    for source, output in compile_units(root):
+        outputs.setdefault(source, set()).update(dependencies.get(output, set()))
+        complete[source] = complete.get(source, True) and output in dependencies
+    cache_file = root / ".polygraph/tidy-cache.json"
+    cache = read_json(cache_file)
+    state = analysis_state(root)
+    hits = 0
+    memo = {}
     for index, source in enumerate(units, 1):
-        print(f"[tidy] {index}/{len(units)} {source.relative_to(root)}", flush=True)
+        key = content_key([state], outputs[source] | {source}, memo) if complete[source] else None
+        relative = source.relative_to(root).as_posix()
+        if not full and key is not None and cache.get(relative) == key:
+            hits += 1
+            continue
+        print(f"[tidy] {index}/{len(units)} {relative}" + (" (uncacheable: missing Ninja dependencies)" if key is None else ""), flush=True)
+        # Remove an older success before starting: interruption/failure cannot
+        # leave a valid record for an unvalidated input.
+        cache.pop(relative, None)
+        write_json(cache_file, cache)
         run([tool, "-p", str(root / "build/cpu-tests"),
              "--config-file=" + str(root / "tools/dev/clang-tidy.yaml"),
              "--header-filter=^" + re.escape(str(root)) + r"/(include|src|app|tests)/",
              "--exclude-header-filter=" + re.escape(str(root / "include/utilities/json.hpp")) +
              r"|/(generated|third_party|third-party|vendor|external|_deps|build|data|datasets)/",
              str(source)], root)
+        if key is not None:
+            if content_key([state], outputs[source] | {source}) != key:
+                raise GateError("analysis inputs changed during clang-tidy: " + relative)
+            cache[relative] = key
+            write_json(cache_file, cache)
+    print(f"[tidy] {len(units)} selected; {hits} cache hits; {len(units) - hits} analyzed", flush=True)
+
+
+def ensure_configured(root: Path) -> None:
+    directory = root / "build/cpu-tests"
+    stamp = root / ".polygraph/configure.json"
+    key = content_key([], {root / "CMakePresets.json", root / "CMakeUserPresets.json"})
+    cache = directory / "CMakeCache.txt"
+    safe = cache.is_file() and all(re.search(pattern, cache.read_text()) for pattern in (
+        r"POLYGRAPH_ENABLE_GPU:BOOL=OFF", r"POLYGRAPH_ENABLE_CLANG_FORMAT:BOOL=OFF",
+        r"POLYGRAPH_ENABLE_CLANG_TIDY:BOOL=OFF", r"CMAKE_EXPORT_COMPILE_COMMANDS:[^=]+=ON",
+        r"CMAKE_GENERATOR:INTERNAL=Ninja", r"POLYGRAPH_BUILD_TESTS:BOOL=ON"))
+    if safe and re.search(r"^CMAKE_CXX_CLANG_TIDY:[^=]+=.+$", cache.read_text(), re.MULTILINE):
+        safe = False
+    if not safe or not (directory / "build.ninja").is_file() or not (directory / "compile_commands.json").is_file() or read_json(stamp).get("key") != key:
+        print("[configure] Initial/mismatched CPU configuration; configuring in place", flush=True)
+        configure(root)
+        write_json(stamp, {"key": key})
+    else:
+        print("[configure] Reusing CPU build; Ninja handles changed CMake inputs", flush=True)
 
 
 def build(root: Path) -> None:
     run(["cmake", "--build", "--preset", "cpu-tests"], root)
 
 
+SMOKE_TESTS = (
+    "unit.DenseIdMapperTest.SortsAndDeduplicatesIdsBeforeAssigningDenseIndices",
+    "unit.DenseIdMapperTest.RejectsMissingGlobalAndOutOfRangeDenseIds",
+    "unit.CommandLineTest.ParsesAliasesFlagsAndDefaults",
+    "unit.CommandLineTest.RejectsMissingRequiredOption",
+    "unit.BfsExecutorTest.DirectionOptimizedSwitchesFromSparsePushToBitmapPull",
+    "unit.BfsExecutorTest.ClassicPolicyNeverUsesPullExpansion",
+    "contract.BfsPolicyContractTest.ForcedPullHonorsRelationshipAndDestinationFilters",
+    "contract.BfsPolicyContractTest.ProvesPushPullPushForSparseAndBitmapMembership",
+    "contract.Oracle/BfsContractTest.MatchesIndependentOracleAcrossExecutionModes/diamond_outgoing_all_unlimited",
+    "contract.Oracle/BfsContractTest.MatchesIndependentOracleAcrossExecutionModes/cycle_both_all_unlimited",
+)
+
+
+def validate_smoke(tests: list[dict]) -> None:
+    found = {test["name"]: test for test in tests}
+    missing = set(SMOKE_TESTS) - found.keys()
+    if missing:
+        raise GateError("required smoke tests missing (selection is empty/incomplete): " + shlex.join(sorted(missing)))
+    for name in SMOKE_TESTS:
+        properties = {p["name"]: p["value"] for p in found[name].get("properties", [])}
+        if properties.get("DISABLED"):
+            raise GateError("required smoke test disabled: " + name)
+
+
+def run_test_suite(root: Path, args: list[str], expected: set[str] | None = None) -> None:
+    # CTest exits zero for runtime skips (including GTEST_SKIP). Mandatory gates
+    # must verify executed results, not merely a nonempty discovery list.
+    directory = root / ".polygraph"
+    directory.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="ctest-", dir=directory) as temporary:
+        report = Path(temporary) / "results.xml"
+        run([*args, "--output-junit", str(report)], root)
+        if not report.is_file():
+            raise GateError("CTest did not produce mandatory execution results")
+        cases = ET.parse(report).getroot().findall(".//testcase")
+        found = {case.get("name") for case in cases}
+        if not cases or expected is not None and not expected <= found:
+            raise GateError("CTest execution results missing expected tests")
+        invalid = [case.get("name", "unnamed") for case in cases
+                   if any(case.find(tag) is not None for tag in ("skipped", "failure", "error"))]
+        if invalid:
+            raise GateError("required tests skipped or failed at runtime: " + shlex.join(invalid))
+
+
 def fast_tests(root: Path) -> None:
-    # Validate both labels independently, then run their union once. Deterministic
-    # concurrency tests run once; integration/service/dataset/stress labels do not.
-    excluded = "^(integration|database|external|ldbc|slow|stress)$"
-    for label in ("unit", "correctness"):
-        listing = run(["ctest", "--preset", "cpu-tests", "-L", "^" + label + "$", "-LE", excluded,
-                       "--show-only=json-v1"], root, capture=True)
+    selection = "^(" + "|".join(re.escape(n) for n in SMOKE_TESTS) + ")$"
+    listing = run(["ctest", "--preset", "cpu-tests", "-R", selection, "--show-only=json-v1"], root, capture=True)
+    validate_smoke(json.loads(listing.stdout).get("tests", []))
+    print(f"[tests] {len(SMOKE_TESTS)} smoke tests; full unit/correctness/concurrency suite is explicit", flush=True)
+    run_test_suite(root, ["ctest", "--preset", "cpu-tests", "-R", selection, "--no-tests=error",
+         "--output-on-failure", "--timeout", "20", "--parallel", "2"], set(SMOKE_TESTS))
+
+
+def full_tests(root: Path) -> None:
+    for label in ("unit", "correctness", "concurrency"):
+        listing = run(["ctest", "--preset", "cpu-tests", "-L", "^" + label + "$", "--show-only=json-v1"], root, capture=True)
         tests = json.loads(listing.stdout).get("tests", [])
-        if not tests:
-            raise GateError(f"required fast test selection is empty: {label}")
-        for test in tests:
-            properties = {p["name"]: p["value"] for p in test.get("properties", [])}
-            if properties.get("DISABLED") or test["name"].endswith("_NOT_BUILT"):
-                raise GateError(f"required test is disabled or not built: {test['name']}")
-    run(["ctest", "--preset", "cpu-tests", "-L", "^(unit|correctness)$", "-LE", excluded,
-         "--no-tests=error", "--output-on-failure", "--timeout", "60", "--parallel", "2"], root)
+        if not tests or any(t["name"].endswith("_NOT_BUILT") or any(p["name"] == "DISABLED" and p["value"] for p in t.get("properties", [])) for t in tests):
+            raise GateError("full test selection missing, disabled or not built: " + label)
+    run_test_suite(root, ["ctest", "--preset", "cpu-tests", "--no-tests=error", "--output-on-failure", "--parallel", "2"])
+    run_test_suite(root, ["ctest", "--preset", "cpu-tests", "-L", "^concurrency$", "--no-tests=error",
+         "--output-on-failure", "--parallel", "2", "--repeat", "until-fail:50"])
 
 
-def sequence(root: Path, names: set[str], full: bool, expected: str | None = None) -> None:
+@contextmanager
+def timed(title: str):
+    start = time.monotonic()
+    print("[quality] " + title, flush=True)
+    try:
+        yield
+    finally:
+        print(f"[time] {title}: {time.monotonic() - start:.2f}s", flush=True)
+
+
+@contextmanager
+def gate_lock(root: Path):
+    directory = root / ".polygraph"
+    directory.mkdir(exist_ok=True)
+    with (directory / "quality.lock").open("w") as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise GateError("another quality gate is using this CPU build; retry when it completes") from error
+        yield
+
+
+def sequence(root: Path, names: set[str], full: bool, expected: str | None = None, *, certify: bool = False) -> str | None:
+    # Build once before analysis: Ninja refreshes both generated headers and the
+    # transitive dependency graph, including includes added in this push.
+    format_names = changed_files(root, None) if full or any(Path(n).name in {".clang-format", "_clang-format", ".clang-format-ignore"} for n in names) else names
+    certified_state = None
     for title, action in [
-        ("clang-format", lambda: check_format(root, names)),
-        ("CMake configure", lambda: configure(root)),
-        ("clang-tidy", lambda: check_tidy(root, names, full=full)),
+        ("clang-format", lambda: check_format(root, format_names)),
+        ("CMake configure", lambda: ensure_configured(root)),
         ("CPU build", lambda: build(root)),
-        ("fast tests", lambda: fast_tests(root)),
+        ("clang-tidy", lambda: check_tidy(root, names, full=full)),
+        ("full tests" if full else "smoke tests", lambda: full_tests(root) if full else fast_tests(root)),
     ]:
         if expected:
             verify_clean_revision(root, expected)
-        print(f"[quality] {title}", flush=True)
-        action()
+        with timed(title):
+            action()
+        if certify and title == "CPU build":
+            certified_state = verification_state(root)
     if expected:
         verify_clean_revision(root, expected)
+    if certify and verification_state(root) != certified_state:
+        raise GateError("verification inputs/build outputs changed during verification; retry")
     print("[quality] All selected checks passed", flush=True)
+    return certified_state
+
+
+def sanitizers(root: Path) -> None:
+    # No sanitizer gate existed in this checkout. Keep instrumentation in
+    # separate preset directories so everyday CPU objects are never rebuilt.
+    for preset in ("cpu-asan", "cpu-tsan"):
+        for title, args in (
+            ("configure", ["cmake", "--preset", preset, "-DFETCHCONTENT_UPDATES_DISCONNECTED=ON"]),
+            ("build", ["cmake", "--build", "--preset", preset]),
+            ("tests", ["ctest", "--preset", preset, "--no-tests=error", "--output-on-failure", "--parallel", "2"]),
+        ):
+            with timed(preset + " " + title):
+                if title == "tests":
+                    run_test_suite(root, args)
+                else:
+                    run(args, root)
+
+
+def verification_state(root: Path) -> str:
+    directory = root / "build/cpu-tests"
+    dependencies = ninja_dependencies(root)
+    units = compile_units(root)
+    if any(output not in dependencies for _, output in units):
+        raise GateError("cannot certify verification: incomplete Ninja dependency records")
+    paths = {root / n for n in decode_paths(git(root, "ls-files", "-z"))}
+    for output, deps in dependencies.items():
+        paths.add(output)
+        paths.update(deps)
+    # Include linked libraries/executables, generated test discovery and fixtures.
+    for path in directory.rglob("*"):
+        if path.is_file() and (path.suffix in {".a", ".so", ".cmake", ".json"} or os.access(path, os.X_OK)):
+            paths.add(path)
+    return content_key([analysis_state(root)], paths)
+
+
+def make_certificate(root: Path, tip: str, names: set[str], profile: str) -> dict:
+    return {"tip": tip, "tree": git(root, "rev-parse", tip + "^{tree}").decode().strip(),
+            "files": sorted(names), "profile": profile, "state": verification_state(root)}
+
+
+def certificate_valid(root: Path, record: dict, tip: str, names: set[str], profile: str) -> bool:
+    if (record.get("tip") != tip or record.get("profile") != profile or
+            not names <= set(record.get("files", []))):
+        return False
+    return record == make_certificate(root, tip, set(record["files"]), profile)
+
+
+def revision_checkout(root: Path, tip: str) -> Path:
+    if git(root, "rev-parse", "HEAD").decode().strip() == tip:
+        verify_clean_revision(root, tip)
+        return root
+    # Different tips get isolated persistent checkouts/builds; never reset the
+    # developer's index/worktree or reuse objects built with another source root.
+    target = root / ".polygraph/revisions" / tip
+    if not (target / ".git").exists():
+        target.mkdir(parents=True, exist_ok=True)
+        run(["git", "clone", "--shared", "--no-checkout", "--", str(root), str(target)], root)
+        run(["git", "-c", "core.hooksPath=/dev/null", "checkout", "--detach", tip], target)
+        with (target / ".git/info/exclude").open("a") as stream:
+            stream.write("\n/.polygraph/\n")
+    verify_clean_revision(target, tip)
+    print("[scope] Isolated build for additional pushed tip " + tip[:12] + ": " + str(target), flush=True)
+    return target
+
+
+def verify_push(root: Path, protocol: str, remote: str, profile: str) -> None:
+    scopes = push_scopes(root, protocol, remote)
+    if not scopes:
+        print("[quality] No non-deletion refs to verify", flush=True)
+    certificate_dir = os.environ.get("POLYGRAPH_VERIFIED_DIRECTORY")
+    for tip, names in scopes.items():
+        checkout = revision_checkout(root, tip)
+        with gate_lock(checkout):
+            if certificate_dir:
+                record = read_json(Path(certificate_dir) / (tip + ".json"))
+                if not certificate_valid(checkout, record, tip, names, profile):
+                    raise GateError("verified-push certificate is stale or remote scope changed; no in-connection rebuild. Refresh remote tracking refs and rerun verified-push")
+                verify_clean_revision(checkout, tip)
+                print("[quality] Exact revision/scope/toolchain/dependencies verified before connection: " + tip[:12], flush=True)
+            else:
+                sequence(checkout, names, profile == "full", tip)
+
+
+def verified_push(root: Path, remote: str, refspecs: list[str], profile: str) -> None:
+    hook_status(root)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", remote) or remote.startswith("-"):
+        raise GateError("verified-push requires a configured remote name")
+    git(root, "remote", "get-url", "--push", remote)  # Local lookup; no connection.
+    if not refspecs:
+        branch = git(root, "symbolic-ref", "--quiet", "HEAD").decode().strip()
+        refspecs = [branch + ":" + branch]
+    lines, exact = [], []
+    for refspec in refspecs:
+        if refspec.startswith(("-", "+")) or "*" in refspec or refspec.count(":") != 1:
+            raise GateError("use explicit non-force source:refs/heads/destination refspecs")
+        source, destination = refspec.split(":")
+        if not source or not destination.startswith("refs/heads/"):
+            raise GateError("verified-push supports branch updates; use normal git push for deletion/tag/force options")
+        git(root, "check-ref-format", destination)
+        tip = git(root, "rev-parse", "--verify", "--end-of-options", source + "^{commit}").decode().strip()
+        tracking = "refs/remotes/" + remote + "/" + destination.removeprefix("refs/heads/")
+        result = run(["git", "rev-parse", "--verify", tracking], root, capture=True, check=False)
+        base = result.stdout.decode().strip() if result.returncode == 0 else "0" * len(tip)
+        lines.append(f"{source} {tip} {destination} {base}\n")
+        exact.append(tip + ":" + destination)
+    scopes = push_scopes(root, "".join(lines), remote)
+    (root / ".polygraph").mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="verified-push-", dir=root / ".polygraph") as temporary:
+        for tip, names in scopes.items():
+            checkout = revision_checkout(root, tip)
+            with gate_lock(checkout):
+                state = sequence(checkout, names, profile == "full", tip, certify=True)
+                record = make_certificate(checkout, tip, names, profile)
+                if record["state"] != state:
+                    raise GateError("verification state changed before certificate creation; retry")
+                verify_clean_revision(checkout, tip)
+                write_json(Path(temporary) / (tip + ".json"), record)
+        # Hooks remain enabled; the hook checks the ACTUAL server advertisement
+        # against our covered scope/state. A mismatch fails quickly and asks for
+        # a new preflight; it never silently accepts a stale tracking range.
+        env = {**os.environ, "POLYGRAPH_VERIFIED_DIRECTORY": temporary, "POLYGRAPH_QUALITY_PROFILE": profile}
+        result = subprocess.run(["git", "-c", "core.hooksPath=.githooks", "push", "--", remote, *exact], cwd=root, env=env)
+        if result.returncode:
+            raise GateError(f"git push failed (exit {result.returncode}); see Git diagnostics")
 
 
 def install(root: Path) -> None:
@@ -483,49 +876,72 @@ def hook_status(root: Path) -> None:
 
 
 def main() -> int:
+    start = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("format", "format-fix", "configure", "tidy", "build", "test", "verify", "pre-commit", "format-staged", "pre-push", "install", "hook-status"))
+    parser.add_argument("command", choices=("fast", "full", "sanitizers", "verified-push", "format", "format-fix", "configure", "tidy", "build", "test", "verify", "pre-commit", "format-staged", "pre-push", "install", "hook-status"))
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--base", help="compare committed HEAD with this local commit/ref")
-    scope.add_argument("--all", action="store_true", help="audit all tracked project sources (default)")
-    scope.add_argument("--files", nargs="+", help="explicit repository-relative paths, useful while editing")
+    scope.add_argument("--all", action="store_true", help="all tracked project sources")
+    scope.add_argument("--files", nargs="+", help="explicit repository-relative paths")
+    parser.add_argument("--profile", choices=("fast", "full"), default=os.environ.get("POLYGRAPH_QUALITY_PROFILE", "fast"))
+    parser.add_argument("remote", nargs="?")
+    parser.add_argument("refspecs", nargs="*")
     args = parser.parse_args()
     try:
         root = Path(os.fsdecode(git(Path.cwd(), "rev-parse", "--show-toplevel")).removesuffix("\n")).resolve()
+        if args.profile not in {"fast", "full"}:
+            raise GateError("invalid verification profile: " + args.profile)
         if args.command in {"pre-commit", "format-staged"}:
             format_staged(root)
             return 0
         if args.command == "pre-push":
-            expected, names = push_scope(root, sys.stdin.read())
-            if expected is None:
-                print("[quality] No non-deletion refs to verify", flush=True)
-            else:
-                full = requires_full_analysis(names)
-                if full:
+            if args.profile not in {"fast", "full"}:
+                raise GateError("invalid push profile")
+            verify_push(root, sys.stdin.read(), args.remote or "origin", args.profile)
+            return 0
+        if args.command == "verified-push":
+            if not args.remote:
+                raise GateError("usage: quality.py verified-push [--profile full] REMOTE [source:refs/heads/destination ...]")
+            verified_push(root, args.remote, args.refspecs, args.profile)
+            return 0
+        if args.command in {"install", "hook-status"}:
+            {"install": install, "hook-status": hook_status}[args.command](root)
+            return 0
+        with gate_lock(root):
+            if args.command in {"configure", "build", "test", "sanitizers"}:
+                {"configure": configure, "build": build, "test": full_tests if args.profile == "full" else fast_tests, "sanitizers": sanitizers}[args.command](root)
+                return 0
+            if (args.command == "full" or args.profile == "full") and (args.files or args.base):
+                raise GateError("full always verifies the entire CPU profile; --files/--base are not allowed")
+            if args.command == "fast" and not (args.files or args.base or args.all):
+                result = run(["git", "rev-parse", "--verify", "@{upstream}"], root, capture=True, check=False)
+                if result.returncode:
+                    print("[scope] No upstream; fallback to all tracked files (use --base for an explicit range)", flush=True)
                     names = changed_files(root, None)
-                sequence(root, names, full, expected)
-            return 0
-        if args.command in {"configure", "build", "test", "install", "hook-status"}:
-            {"configure": configure, "build": build, "test": fast_tests,
-             "install": install, "hook-status": hook_status}[args.command](root)
-            return 0
-        names = set(args.files) if args.files is not None else changed_files(root, args.base)
-        for name in names:
-            if args.files is not None and not (root / name).is_file():
-                raise GateError("explicit file does not exist: " + name)
-            if Path(name).is_absolute() or ".." in Path(name).parts:
-                raise GateError("file paths must stay within the repository: " + name)
-        full = args.files is None and args.base is None or requires_full_analysis(names)
-        if args.command in {"format", "format-fix"}:
-            check_format(root, names, fix=args.command == "format-fix")
-        elif args.command == "tidy":
-            check_tidy(root, names, full=full)
-        else:
-            sequence(root, names, full)
+                else:
+                    names = revision_files(root, "HEAD", result.stdout.decode().strip())
+                names.update(decode_paths(git(root, "diff", "HEAD", "--name-only", "--no-renames", "-z", "--")))
+                names.update(decode_paths(git(root, "ls-files", "--others", "--exclude-standard", "-z")))
+            else:
+                names = set(args.files) if args.files is not None else changed_files(root, args.base)
+            for name in names:
+                if Path(name).is_absolute() or ".." in Path(name).parts:
+                    raise GateError("file paths must stay within the repository: " + name)
+            full = args.profile == "full" or args.command == "full" or args.command in {"verify", "tidy"} and args.files is None and args.base is None
+            if args.command in {"format", "format-fix"}:
+                check_format(root, names, fix=args.command == "format-fix")
+            elif args.command == "tidy":
+                ensure_configured(root)
+                build(root)
+                check_tidy(root, names, full=full)
+            else:
+                sequence(root, names, full)
         return 0
-    except (GateError, OSError, ValueError, subprocess.SubprocessError) as error:
+    except (GateError, OSError, ValueError, ET.ParseError, subprocess.SubprocessError) as error:
         print(f"[quality] FAILED: {error}", file=sys.stderr, flush=True)
         return 1
+    finally:
+        print(f"[time] total: {time.monotonic() - start:.2f}s", flush=True)
 
 
 if __name__ == "__main__":
