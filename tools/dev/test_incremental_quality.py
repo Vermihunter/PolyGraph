@@ -100,6 +100,72 @@ class IncrementalTests(unittest.TestCase):
                 full.assert_called_once()
                 smoke.assert_not_called()
 
+    def test_cpu_configuration_rejects_build_time_tidy_for_both_languages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root / 'build/cpu-tests'
+            directory.mkdir(parents=True)
+            (directory / 'build.ninja').touch()
+            (directory / 'compile_commands.json').write_text('[]')
+            key = q.content_key([], {root / 'CMakePresets.json', root / 'CMakeUserPresets.json'})
+            q.write_json(root / '.polygraph/configure.json', {'key': key})
+            cache = directory / 'CMakeCache.txt'
+            safe = '\n'.join(('POLYGRAPH_ENABLE_GPU:BOOL=OFF',
+                              'POLYGRAPH_ENABLE_CLANG_FORMAT:BOOL=OFF',
+                              'POLYGRAPH_ENABLE_CLANG_TIDY:BOOL=OFF',
+                              'CMAKE_EXPORT_COMPILE_COMMANDS:BOOL=ON',
+                              'CMAKE_GENERATOR:INTERNAL=Ninja', 'POLYGRAPH_BUILD_TESTS:BOOL=ON')) + '\n'
+            cache.write_text(safe)
+            with patch.object(q, 'configure') as configure:
+                q.ensure_configured(root)
+                configure.assert_not_called()
+            for language in ('C', 'CXX'):
+                cache.write_text(safe + f'CMAKE_{language}_CLANG_TIDY:STRING=clang-tidy-21\n')
+                with patch.object(q, 'configure') as configure:
+                    q.ensure_configured(root)
+                    configure.assert_called_once_with(root)
+
+    def test_explicit_tidy_commands_still_select_analysis(self):
+        for options, full in ((['--files', 'src/a.cpp'], False), (['--all'], True)):
+            with tempfile.TemporaryDirectory() as tmp:
+                with patch.object(q.sys, 'argv', ['quality.py', 'tidy', *options]), \
+                     patch.object(q, 'git', return_value=os.fsencode(tmp)), \
+                     patch.object(q, 'changed_files', return_value={'src/a.cpp'}), \
+                     patch.object(q, 'ensure_configured'), patch.object(q, 'build'), \
+                     patch.object(q, 'check_tidy') as tidy:
+                    self.assertEqual(q.main(), 0)
+                    tidy.assert_called_once_with(Path(tmp), {'src/a.cpp'}, full=full)
+
+    def test_fast_sequence_never_calls_tidy_or_analysis_state(self):
+        for names in ({'src/a.cpp'}, {'include/a.hpp'}, {'CMakeLists.txt', 'tools/dev/quality.py'}):
+            for certify in (False, True):
+                with self.subTest(names=names, certify=certify), \
+                     patch.object(q, 'check_format') as formatting, \
+                     patch.object(q, 'ensure_configured'), patch.object(q, 'build') as build, \
+                     patch.object(q, 'fast_tests') as smoke, \
+                     patch.object(q, 'check_tidy', side_effect=AssertionError('tidy invoked')), \
+                     patch.object(q, 'verification_state', return_value='state') as state:
+                    q.sequence(Path('/tmp/project'), names, False, certify=certify)
+                    formatting.assert_called_once_with(Path('/tmp/project'), names)
+                    build.assert_called_once()
+                    smoke.assert_called_once()
+                    if certify:
+                        state.assert_called_with(Path('/tmp/project'), include_tidy=False)
+
+    def test_fast_certificate_tool_state_does_not_resolve_tidy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root / 'build/cpu-tests'
+            directory.mkdir(parents=True)
+            (directory / 'compile_commands.json').write_text('[]')
+            def tool(name):
+                self.assertEqual(name, 'clang-format')
+                return '/usr/bin/true'
+            with patch.object(q, 'clang_tool', side_effect=tool), \
+                 patch.object(q, 'run', return_value=subprocess.CompletedProcess([], 0, b'version', b'')), \
+                 patch.object(q, 'tool_implementation', return_value=set()):
+                q.tool_state(root, include_tidy=False)
+
     def test_sequence_builds_once_before_tidy_and_full_never_uses_smoke(self):
         calls = []
         with patch.object(q, 'check_format'), patch.object(q, 'changed_files', return_value=set()), patch.object(q, 'ensure_configured'), \

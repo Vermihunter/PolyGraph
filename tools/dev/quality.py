@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Incremental CPU verification, explicit full/sanitizer profiles, and safe staged formatting."""
+"""Fast format/build/smoke hooks; opt-in tidy, full and sanitizer verification."""
 from __future__ import annotations
 
 import argparse
@@ -342,7 +342,7 @@ def format_staged(root: Path) -> None:
 def configure(root: Path) -> None:
     run(["cmake", "--preset", "cpu-tests", "-DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=ON",
          "-DPOLYGRAPH_ENABLE_GPU=OFF", "-DPOLYGRAPH_ENABLE_CLANG_FORMAT=OFF",
-         "-DPOLYGRAPH_ENABLE_CLANG_TIDY=OFF", "-DCMAKE_CXX_CLANG_TIDY=",
+         "-DPOLYGRAPH_ENABLE_CLANG_TIDY=OFF", "-DCMAKE_CXX_CLANG_TIDY=", "-DCMAKE_C_CLANG_TIDY=",
          "-DFETCHCONTENT_UPDATES_DISCONNECTED=ON"], root)
     path = root / "build/cpu-tests/compile_commands.json"
     if not path.is_file() or not json.loads(path.read_text()):
@@ -503,10 +503,13 @@ def tool_implementation(root: Path, executables: set[Path]) -> set[Path]:
     return paths
 
 
-def tool_state(root: Path) -> str:
+def tool_state(root: Path, *, include_tidy: bool = True) -> str:
     paths = {Path(sys.executable).resolve()}
     versions = []
-    for name in ("clang-format", "clang-tidy", "cmake", "ninja", "ctest"):
+    names = ["clang-format", "cmake", "ninja", "ctest"]
+    if include_tidy:
+        names.append("clang-tidy")
+    for name in names:
         tool = clang_tool(name) if name.startswith("clang-") else shutil.which(name)
         if not tool:
             raise GateError("missing tool: " + name)
@@ -532,7 +535,7 @@ def tool_state(root: Path) -> str:
     return content_key(versions + [json.dumps(environment, sort_keys=True)], paths)
 
 
-def analysis_state(root: Path) -> str:
+def analysis_state(root: Path, *, include_tidy: bool = True) -> str:
     build_dir = root / "build/cpu-tests"
     # File-name inventory detects newly added headers that can shadow an old
     # include. Contents are hashed per TU below, including external/system headers.
@@ -548,7 +551,7 @@ def analysis_state(root: Path) -> str:
     for directory in include_roots:
         if directory.exists():
             inventory.extend(str(p) for p in directory.rglob("*") if p.suffix in EXTENSIONS and p.is_file())
-    return content_key([tool_state(root), *sorted(inventory)], configuration_paths(root) | {
+    return content_key([tool_state(root, include_tidy=include_tidy), *sorted(inventory)], configuration_paths(root) | {
         build_dir / "CMakeCache.txt", build_dir / "compile_commands.json", build_dir / "build.ninja"})
 
 
@@ -606,7 +609,7 @@ def ensure_configured(root: Path) -> None:
         r"POLYGRAPH_ENABLE_GPU:BOOL=OFF", r"POLYGRAPH_ENABLE_CLANG_FORMAT:BOOL=OFF",
         r"POLYGRAPH_ENABLE_CLANG_TIDY:BOOL=OFF", r"CMAKE_EXPORT_COMPILE_COMMANDS:[^=]+=ON",
         r"CMAKE_GENERATOR:INTERNAL=Ninja", r"POLYGRAPH_BUILD_TESTS:BOOL=ON"))
-    if safe and re.search(r"^CMAKE_CXX_CLANG_TIDY:[^=]+=.+$", cache.read_text(), re.MULTILINE):
+    if safe and re.search(r"^CMAKE_C(?:XX)?_CLANG_TIDY:[^=]+=.+$", cache.read_text(), re.MULTILINE):
         safe = False
     if not safe or not (directory / "build.ninja").is_file() or not (directory / "compile_commands.json").is_file() or read_json(stamp).get("key") != key:
         print("[configure] Initial/mismatched CPU configuration; configuring in place", flush=True)
@@ -708,26 +711,28 @@ def gate_lock(root: Path):
 
 
 def sequence(root: Path, names: set[str], full: bool, expected: str | None = None, *, certify: bool = False) -> str | None:
-    # Build once before analysis: Ninja refreshes both generated headers and the
-    # transitive dependency graph, including includes added in this push.
+    # The automatic fast path contains only format/configure/build/smoke.
+    # Tidy is opt-in through the full profile or the standalone tidy command.
     format_names = changed_files(root, None) if full or any(Path(n).name in {".clang-format", "_clang-format", ".clang-format-ignore"} for n in names) else names
     certified_state = None
-    for title, action in [
+    stages = [
         ("clang-format", lambda: check_format(root, format_names)),
         ("CMake configure", lambda: ensure_configured(root)),
         ("CPU build", lambda: build(root)),
-        ("clang-tidy", lambda: check_tidy(root, names, full=full)),
-        ("full tests" if full else "smoke tests", lambda: full_tests(root) if full else fast_tests(root)),
-    ]:
+    ]
+    if full:
+        stages.append(("clang-tidy", lambda: check_tidy(root, names, full=True)))
+    stages.append(("full tests" if full else "smoke tests", lambda: full_tests(root) if full else fast_tests(root)))
+    for title, action in stages:
         if expected:
             verify_clean_revision(root, expected)
         with timed(title):
             action()
         if certify and title == "CPU build":
-            certified_state = verification_state(root)
+            certified_state = verification_state(root, include_tidy=full)
     if expected:
         verify_clean_revision(root, expected)
-    if certify and verification_state(root) != certified_state:
+    if certify and verification_state(root, include_tidy=full) != certified_state:
         raise GateError("verification inputs/build outputs changed during verification; retry")
     print("[quality] All selected checks passed", flush=True)
     return certified_state
@@ -749,7 +754,7 @@ def sanitizers(root: Path) -> None:
                     run(args, root)
 
 
-def verification_state(root: Path) -> str:
+def verification_state(root: Path, *, include_tidy: bool = True) -> str:
     directory = root / "build/cpu-tests"
     dependencies = ninja_dependencies(root)
     units = compile_units(root)
@@ -763,12 +768,12 @@ def verification_state(root: Path) -> str:
     for path in directory.rglob("*"):
         if path.is_file() and (path.suffix in {".a", ".so", ".cmake", ".json"} or os.access(path, os.X_OK)):
             paths.add(path)
-    return content_key([analysis_state(root)], paths)
+    return content_key([analysis_state(root, include_tidy=include_tidy)], paths)
 
 
 def make_certificate(root: Path, tip: str, names: set[str], profile: str) -> dict:
     return {"tip": tip, "tree": git(root, "rev-parse", tip + "^{tree}").decode().strip(),
-            "files": sorted(names), "profile": profile, "state": verification_state(root)}
+            "files": sorted(names), "profile": profile, "state": verification_state(root, include_tidy=profile == "full")}
 
 
 def certificate_valid(root: Path, record: dict, tip: str, names: set[str], profile: str) -> bool:

@@ -129,6 +129,9 @@ if kind == 'git':
         if mode == 'dirty': sys.stdout.write(' M src/unit.cpp\0')
     elif args[0] in ('diff', 'ls-files', 'ls-tree', 'diff-tree'): sys.stdout.write('src/unit.cpp\0')
     sys.exit(0)
+if kind.startswith('clang-tidy'):
+    with (root / 'tidy-calls').open('a') as log: log.write(repr(args) + '\n')
+    if mode == 'forbid-tidy': sys.exit(99)
 if '--version' in args:
     print('LLVM version 21.1.0')
     sys.exit(0)
@@ -187,8 +190,8 @@ class HookTests(unittest.TestCase):
                               input=protocol, capture_output=True, text=True, cwd=self.root, env=env, timeout=20)
 
     def test_every_failed_stage_blocks_push_and_stops(self):
-        stages = ["clang-format", "CMake configure", "CPU build", "clang-tidy", "smoke tests"]
-        for index, failure in enumerate(("format", "configure", "build", "tidy", "test")):
+        stages = ["clang-format", "CMake configure", "CPU build", "smoke tests"]
+        for index, failure in enumerate(("format", "configure", "build", "test")):
             with self.subTest(failure=failure):
                 result = self.invoke(failure)
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -200,6 +203,16 @@ class HookTests(unittest.TestCase):
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("All selected checks passed", result.stdout)
+
+    def test_normal_push_never_invokes_tidy_even_with_a_cold_cache(self):
+        for remote in ('b' * 40, '0' * 40):
+            with self.subTest(remote=remote):
+                result = self.invoke("forbid-tidy", remote=remote)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse((self.root / 'tidy-calls').exists())
+                self.assertNotIn("[quality] clang-tidy", result.stdout)
+                for stage in ("clang-format", "CPU build", "smoke tests"):
+                    self.assertIn("[time] " + stage, result.stdout)
 
     def test_empty_test_selection_blocks_push(self):
         result = self.invoke("empty")
@@ -237,7 +250,7 @@ class HookTests(unittest.TestCase):
             with self.subTest(failure=failure):
                 result = self.invoke(failure, remote=remote)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn("src/unit.cpp", result.stdout)
+                self.assertIn("[format] Validated 1 file(s)", result.stdout)
 
 
 if __name__ == "__main__":

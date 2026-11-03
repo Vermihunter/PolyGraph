@@ -124,7 +124,9 @@ with release comments. Update those pins together with their comments after
 reviewing upstream releases. Superseded manual runs of the same suite/ref are cancelled.
 
 Every change must receive an explicitly dispatched `full` workflow before merging.
-The local default now uses ten smoke tests and incremental cached tidy; it is not
+The local default checks changed-file formatting, the incremental CPU build and
+ten smoke tests. Clang-tidy is exclusively opt-in; it is not part of the fast
+automatic gate. This reduced selection is not
 full CI coverage. The `static-analysis` job runs for `full` and `tidy`, installs
 LLVM 21 from [LLVM's package repository](https://apt.llvm.org/), configures/builds
 once through `quality.py tidy --all`, and analyzes every project CPU translation
