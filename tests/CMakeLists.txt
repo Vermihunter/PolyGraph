@@ -49,7 +49,7 @@ if(TARGET polygraph_backends)
     )
 endif()
 
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
 add_test(
     NAME python.csv_compare
     COMMAND "${Python3_EXECUTABLE}" -m unittest tools.measurement.test_csv_compare
@@ -57,6 +57,15 @@ add_test(
 set_tests_properties(python.csv_compare PROPERTIES
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     LABELS "unit;python"
+    TIMEOUT 30
+)
+add_test(
+    NAME python.reference_oracle
+    COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tests/reference -t . -p "test_*.py"
+)
+set_tests_properties(python.reference_oracle PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    LABELS "unit;python;oracle"
     TIMEOUT 30
 )
 polygraph_add_unit_test(polygraph_insertion_item_query_test insertion_item_query_test.cpp polygraph::core)
