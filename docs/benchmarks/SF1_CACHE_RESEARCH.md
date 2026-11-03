@@ -191,4 +191,4 @@ steady-state statistics.
 
 ## Backend request scheduling
 
-HTTP benchmark runs share server-global Neo4j and ArangoDB schedulers. Configure hard limits in each backend's `scheduler` object and use `backendSchedulerPriority` / `backendSchedulerWeight` per scheduled HTTP request. See `docs/BACKEND_REQUEST_SCHEDULING.md`.
+HTTP benchmark runs share server-global Neo4j and ArangoDB schedulers. Configure hard limits in each backend's `scheduler` object and use `backendSchedulerPriority` / `backendSchedulerWeight` per scheduled HTTP request. See `docs/architecture/BACKEND_REQUEST_SCHEDULING.md`.

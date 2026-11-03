@@ -20,7 +20,7 @@ if(POLYGRAPH_ENABLE_CLANG_FORMAT)
     set(_polygraph_format_patterns)
     foreach(extension c cc cpp cxx h hh hpp hxx ipp tpp cu cuh)
         list(APPEND _polygraph_format_patterns
-            "../../../../Projects/diplomka/vermesa/include/*.${extension}"
+            "${PROJECT_SOURCE_DIR}/include/*.${extension}"
             "${PROJECT_SOURCE_DIR}/src/*.${extension}"
             "${PROJECT_SOURCE_DIR}/tests/*.${extension}"
         )

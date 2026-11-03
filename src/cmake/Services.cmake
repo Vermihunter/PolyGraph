@@ -35,27 +35,3 @@ if(POLYGRAPH_BUILD_HTTP)
     )
     polygraph_configure_target(polygraph_http_frontend)
 endif()
-
-if(POLYGRAPH_BUILD_GRPC)
-    include(GrpcProto)
-    polygraph_add_grpc_proto(
-        polygraph_grpc_proto
-        PROTO "${PROJECT_SOURCE_DIR}/proto/bfs_stream.proto"
-    )
-
-    add_library(
-        polygraph_grpc_frontend
-        STATIC
-            "${PROJECT_SOURCE_DIR}/src/server/grpc/GrpcTraversalService.cpp"
-    )
-    add_library(polygraph::grpc_frontend ALIAS polygraph_grpc_frontend)
-    target_link_libraries(
-        polygraph_grpc_frontend
-        PUBLIC
-            polygraph::runtime
-            polygraph::services
-            polygraph::grpc
-            polygraph_grpc_proto
-    )
-    polygraph_configure_target(polygraph_grpc_frontend)
-endif()

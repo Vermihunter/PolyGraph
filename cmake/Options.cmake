@@ -12,9 +12,10 @@ option(POLYGRAPH_USE_JEMALLOC "Link PolyGraph applications with jemalloc and exp
 option(POLYGRAPH_BUILD_BACKENDS "Build the persistent/cache backend adapters" ON)
 option(POLYGRAPH_BUILD_BFS "Build the BFS command-line executable" ON)
 option(POLYGRAPH_BUILD_HTTP "Build the Drogon HTTP server" OFF)
-option(POLYGRAPH_BUILD_GRPC "Build the gRPC streaming server" OFF)
 option(POLYGRAPH_BUILD_TESTS "Build unit and smoke tests" ON)
 option(POLYGRAPH_BUILD_DOCS "Build Doxygen documentation" OFF)
+option(POLYGRAPH_DOCS_ONLY "Configure documentation without runtime dependencies" OFF)
+option(POLYGRAPH_BUILD_DISTRIBUTED_GPU_EXPERIMENTS "Build standalone MPI/cuGraph research binaries (not used by runtime)" OFF)
 
 # Dependency acquisition
 option(
@@ -74,7 +75,7 @@ set(
 
 # Derived feature relationships
 set(POLYGRAPH_BUILD_RUNTIME OFF)
-if(POLYGRAPH_BUILD_BFS OR POLYGRAPH_BUILD_HTTP OR POLYGRAPH_BUILD_GRPC)
+if(POLYGRAPH_BUILD_BFS OR POLYGRAPH_BUILD_HTTP)
     set(POLYGRAPH_BUILD_RUNTIME ON)
 endif()
 

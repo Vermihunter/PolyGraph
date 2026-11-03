@@ -26,9 +26,3 @@ endif()
 if(POLYGRAPH_BUILD_HTTP)
     include(dependencies/Http)
 endif()
-
-if(POLYGRAPH_BUILD_GRPC)
-    include(dependencies/Grpc)
-endif()
-
-

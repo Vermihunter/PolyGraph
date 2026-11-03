@@ -9,12 +9,21 @@ project(
 
 list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+# Documentation is independently configurable (no CUDA, databases, or spdlog).
+include(Options)
+if(POLYGRAPH_DOCS_ONLY)
+    if(NOT POLYGRAPH_BUILD_DOCS)
+        message(FATAL_ERROR "POLYGRAPH_DOCS_ONLY requires POLYGRAPH_BUILD_DOCS=ON")
+    endif()
+    add_subdirectory(docs)
+    return()
+endif()
+
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
     set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 endif()
 
 
-include(Options)
 include(ProjectSettings)
 include(Dependencies)
 include(CodeQuality)
