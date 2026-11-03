@@ -7,6 +7,28 @@
   },
   "configurePresets": [
     {
+      "name": "cpu-tsan",
+      "inherits": "cpu-tests",
+      "binaryDir": "${sourceDir}/build/cpu-tsan",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer"
+      }
+    },
+    {
+      "name": "cpu-asan",
+      "inherits": "cpu-tests",
+      "binaryDir": "${sourceDir}/build/cpu-asan",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer"
+      }
+    },
+    {
       "name": "base",
       "hidden": true,
       "generator": "Ninja",
@@ -164,6 +186,8 @@
     }
   ],
   "buildPresets": [
+    { "name": "cpu-tsan", "configurePreset": "cpu-tsan", "jobs": 2 },
+    { "name": "cpu-asan", "configurePreset": "cpu-asan", "jobs": 2 },
     { "name": "cpu-core", "configurePreset": "cpu-core", "jobs": 2 },
     { "name": "cpu-tests", "configurePreset": "cpu-tests", "jobs": 2 },
     { "name": "cpu-bfs", "configurePreset": "cpu-bfs", "jobs": 2 },
@@ -177,6 +201,8 @@
     { "name": "http-server-analysis", "configurePreset": "http-server-analysis", "jobs": 2 }
   ],
   "testPresets": [
+    { "name": "cpu-tsan", "configurePreset": "cpu-tsan", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "cpu-asan", "configurePreset": "cpu-asan", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "cpu-core", "configurePreset": "cpu-core", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "cpu-tests", "configurePreset": "cpu-tests", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "cpu-bfs", "configurePreset": "cpu-bfs", "output": { "outputOnFailure": true } },

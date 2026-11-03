@@ -1,6 +1,13 @@
 {
   "version": 1,
   "skills": {
+    "arangodb-multi-model-database-operations": {
+      "source": "selvarajmurugesan90/ops-engineering-skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "plugins/database-operations/skills/arangodb-multi-model-database-operations/SKILL.md",
+      "computedHash": "70762b0d1bd24338ccb92755e972cdfe5b135038e240f3542610fce23f991f87"
+    },
     "cpp-coding-standards": {
       "source": "affaan-m/ECC",
       "sourceType": "github",
@@ -19,11 +26,48 @@
       "skillPath": "skills/cpp-testing/SKILL.md",
       "computedHash": "fbe37695056aa5cf9454f8cf6d883f38c3bca0324ca7aeb288db2fe3b887e97d"
     },
+    "distributed-systems-patterns": {
+      "source": "robsonrung/rar-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/lenses/distributed-systems-patterns/SKILL.md",
+      "computedHash": "060e5388144f7e3f472f46b8f95604701a4ad9e88bc23e9a069154e77b3ec49c"
+    },
+    "github-actions": {
+      "source": "JSdotNet/Copilot",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "plugins/github/skills/github-actions/SKILL.md",
+      "computedHash": "279c1d56665a6f9dd24d9f1a9804873cddc4e39748dd2b10e8a26de013a2ae8d"
+    },
     "linux-perf": {
       "source": "intel/skills",
       "sourceType": "github",
       "skillPath": "skills/linux-perf/SKILL.md",
       "computedHash": "141df5af374f425c8ccc8d858b17a06ea6bd64546ecddc1e777ce5e710cd2936"
+    },
+    "neo4j-cypher-skill": {
+      "source": "neo4j-contrib/neo4j-skills",
+      "sourceType": "github",
+      "skillPath": "neo4j-cypher-skill/SKILL.md",
+      "computedHash": "b201896c14a6b51cb4c756acd76ab623b5f9b38dc178e5286245e397e8de6cd0"
+    },
+    "neo4j-gds-skill": {
+      "source": "neo4j-contrib/neo4j-skills",
+      "sourceType": "github",
+      "skillPath": "neo4j-gds-skill/SKILL.md",
+      "computedHash": "f36ecf02e9451a2f6392f445cbb30731147df23f7dc4c895dcb90448129784c9"
+    },
+    "neo4j-modeling-skill": {
+      "source": "neo4j-contrib/neo4j-skills",
+      "sourceType": "github",
+      "skillPath": "neo4j-modeling-skill/SKILL.md",
+      "computedHash": "dc3f2a32793b69eb84d35c12388a352c164262b3ee9cb5579c4bec737d9130f4"
+    },
+    "networkx": {
+      "source": "K-Dense-AI/scientific-agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/networkx/SKILL.md",
+      "computedHash": "eb067ee90cec53afd44a4fca3b0925d6d31b7c535ccd053a55814396ea992283"
     },
     "optimize-for-gpu": {
       "source": "K-Dense-AI/scientific-agent-skills",
@@ -31,11 +75,29 @@
       "skillPath": "skills/optimize-for-gpu/SKILL.md",
       "computedHash": "88fe01ff17768037809470e94fbe74950ef067f35b42e3fb46f8cf9ae75f23de"
     },
+    "performance-optimization": {
+      "source": "thiientv/godmode",
+      "sourceType": "github",
+      "skillPath": "skills/performance-optimization/SKILL.md",
+      "computedHash": "3f944039949eb2a2d3a126fb482ea9887501c001342f5048739f88b45022b869"
+    },
     "performance-patterns": {
       "source": "intel/skills",
       "sourceType": "github",
       "skillPath": "skills/performance-patterns/SKILL.md",
       "computedHash": "fbc03d29e217f2fb204707568ae40a9ead6be388997a79778195c6674f4c7f08"
+    },
+    "python-scripting": {
+      "source": "aiskillstore/marketplace",
+      "sourceType": "github",
+      "skillPath": "skills/89jobrien/python-scripting/SKILL.md",
+      "computedHash": "b10f2a23ebce779efbc7cbe8510313923a4ea7f8c1907d74b120481183967179"
+    },
+    "supabase-postgres-best-practices": {
+      "source": "supabase/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/supabase-postgres-best-practices/SKILL.md",
+      "computedHash": "e14e276241805c97dbcfe40dcbea1a3035269cc7293cac4b1832dda41a835e60"
     }
   }
 }

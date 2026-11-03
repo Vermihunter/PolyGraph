@@ -1,17 +1,21 @@
 # CPU CI
 
-[`.github/workflows/cpu-ci.yml`](../.github/workflows/cpu-ci.yml) runs on every
-push and pull request using Ubuntu 24.04. It uses the existing `cpu-tests`
+[`.github/workflows/cpu-ci.yml`](../.github/workflows/cpu-ci.yml) runs **only through
+`workflow_dispatch`** using Ubuntu 24.04. Choose `full`, `unit`, `correctness`,
+`concurrency`, or `oracle` (or `format`/`tidy` alone); `full` runs every existing check plus fresh full CPU clang-tidy. There are no push,
+pull-request, or scheduled triggers. See [DEVELOPMENT.md](DEVELOPMENT.md) for the
+automatic local pre-push gate. It uses the existing `cpu-tests`
 configure/build/test presets; it does not redefine their feature flags.
 
-| Required check | Work performed | Job limit |
+| Manual check | Work performed | Job limit |
 | --- | --- | --- |
-| Build and unit tests | Build every target enabled by `cpu-tests`, then run the entire CTest suite | 30 minutes |
-| BFS correctness | Fresh preset build, then `ctest -L '^correctness$'` | 30 minutes |
-| Concurrency (50 repetitions) | Fresh preset build, then `ctest -L '^concurrency$' --repeat until-fail:50` | 30 minutes |
+| Formatting (read-only) | LLVM 21 formatting verification plus staged-hook regressions in disposable repositories; runs on every dispatch | 10 minutes |
+| CPU / unit | Build every target enabled by `cpu-tests`, then run the entire CTest suite | 30 minutes |
+| CPU / correctness | Fresh preset build, then `ctest -L '^correctness$'` | 30 minutes |
+| CPU / concurrency | Fresh preset build, then `ctest -L '^concurrency$' --repeat until-fail:50` | 30 minutes |
 | Python oracle and isolation | Standard-library reference suite, explicit isolation checks and CI runner regression tests | 10 minutes |
 
-The first three checks share one matrix definition with `fail-fast: false`.
+The three CPU checks share one matrix definition with `fail-fast: false`.
 Each independently configures and builds the source checked out for that event;
 one failing check cannot cancel the others. This repeats compilation across
 runners but avoids transferring binaries/CMake caches with embedded absolute
@@ -19,6 +23,30 @@ paths. Compiler object caching (`ccache`, limited to 300 MB per check) reduces
 repeat work. Cache keys include the check, build configuration hash and commit,
 with fallbacks for earlier commits of the same check. CMake build trees,
 generated oracle fixtures, executables and datasets are never restored from cache.
+
+Formatting is always verified without `--fix`, source writes, staging or commits
+in the checked-out CI tree. Its job installs `clang-format==21.1.8` in an isolated
+Python environment using the Linux wheel hashes in
+[`tools/dev/format-requirements.txt`](../tools/dev/format-requirements.txt), with
+wheel-download caching. The formatter must pass the existing major-version and
+CUDA syntax checks. After validation, `git diff --exit-code` and
+`git diff --cached --exit-code` assert that the checkout and index were not
+changed. Pre-commit regression scenarios may stage **only inside disposable test
+repositories**; they never create a commit. Their formatter dependency is kept
+out of the ordinary CPU test target. Failure logs upload as
+`formatting-diagnostics` alongside the existing per-suite artifacts.
+
+Reproduce the CI formatter environment locally without installing system tools:
+
+```bash
+python3 -m venv /tmp/polygraph-format
+/tmp/polygraph-format/bin/python -m pip install --only-binary=:all: --require-hashes \
+  -r tools/dev/format-requirements.txt
+CLANG_FORMAT=/tmp/polygraph-format/bin/clang-format \
+  python3 tools/dev/quality.py format --all
+CLANG_FORMAT=/tmp/polygraph-format/bin/clang-format \
+  python3 -m unittest discover -s tools/dev -p check_pre_commit_test.py -v
+```
 
 The `cpu-tests` preset enables the CPU libraries, backend adapters, BFS CLI,
 benchmark executable and tests. HTTP/CUDA remain disabled according to the
@@ -93,16 +121,22 @@ The token has only `contents: read`; checkout does not persist credentials.
 There are no secrets, write permissions, deployments, `pull_request_target`, or
 privileged service containers. Official actions are pinned to full commit SHAs
 with release comments. Update those pins together with their comments after
-reviewing upstream releases. Superseded runs on the same PR/ref are cancelled.
+reviewing upstream releases. Superseded manual runs of the same suite/ref are cancelled.
 
-The CLI duplicate-alias failure was fixed at registration, not bypassed in CI.
-`CommandLine::validate_option` now checks alias uniqueness across existing flag
-and value options, built-in help aliases and repeated aliases in the same
-registration, before mutating argparse. Regression coverage also verifies that
-rejected registrations do not consume a key or an otherwise valid alias. The
-original `RejectsUnknownAndDuplicateOptions` test remains unchanged and passes.
+Every change must receive an explicitly dispatched `full` workflow before merging.
+The local default checks changed-file formatting, the incremental CPU build and
+ten smoke tests. Clang-tidy is exclusively opt-in; it is not part of the fast
+automatic gate. This reduced selection is not
+full CI coverage. The `static-analysis` job runs for `full` and `tidy`, installs
+LLVM 21 from [LLVM's package repository](https://apt.llvm.org/), configures/builds
+once through `quality.py tidy --all`, and analyzes every project CPU translation
+unit without success-cache reuse. The other jobs retain their full test,
+correctness, concurrency and isolated-oracle checks. No automatic event triggers
+were added. See [DEVELOPMENT.md](DEVELOPMENT.md) for profiles, coverage limitations,
+verified-push and current measurements.
 
-Local verification for this change (not GitHub-hosted execution):
+Historical local verification from the initial CI implementation (not results
+for the current committed CLI or a GitHub-hosted run):
 
 - Full CPU build and **470/470 CTest tests passed**, also repeated from a fresh
   Git clone of the Phase 3 baseline with only these CI/CLI changes overlaid.
@@ -134,5 +168,6 @@ Local execution uses the available Ubuntu 22.04/GCC 11 environment and locally
 cached FetchContent sources. This does not validate Ubuntu 24.04's apt transaction,
 GitHub checkout/cache/artifact services, hosted runner resources or repository
 branch-protection settings. No workflow run was dispatched or commit pushed.
-Configure the four check names above as required checks after the first hosted
-run confirms them.
+Manual workflows are optional checks. If mandatory remote enforcement is
+introduced later, enable automatic events deliberately and then configure
+branch protection/rulesets with the appropriate required check names.

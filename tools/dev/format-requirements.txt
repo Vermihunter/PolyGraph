@@ -1,0 +1,5 @@
+# CI formatter: Linux x86_64 and aarch64 wheels, matching the local LLVM 21 gate.
+# Native LLVM 21 packages remain supported for developer installations.
+clang-format==21.1.8 \
+    --hash=sha256:d12b864b596b80810cdd7f97556c485dc09cfe2952503958535f01359e025fbb \
+    --hash=sha256:c2a044953efab5f7d0261f3a76aabc01358592faac1b73af38d8c83db6e91a69

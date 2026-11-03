@@ -1,0 +1,8 @@
+#!/bin/sh
+# Default checks: changed-file formatting, incremental CPU build, smoke tests.
+# Clang-tidy is reserved for explicit developer commands/full verification.
+# Git/CLion supply the refs on stdin. The Python driver consumes them before
+# launching tools, checks the checked-out revision, and fails closed.
+set -eu
+root=$(git rev-parse --show-toplevel)
+exec python3 "$root/tools/dev/quality.py" pre-push "$@"

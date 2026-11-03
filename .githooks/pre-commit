@@ -1,0 +1,5 @@
+#!/bin/sh
+# Format only eligible staged files. Partial staging is rejected before writes.
+set -eu
+root=$(git rev-parse --show-toplevel)
+exec python3 "$root/tools/dev/quality.py" pre-commit

@@ -1,0 +1,11 @@
+# Focused push gate; the broad root .clang-tidy remains available to CLion.
+InheritParentConfig: false
+Checks: >-
+  -*,
+  clang-analyzer-core.*,clang-analyzer-cplusplus.*,
+  bugprone-use-after-move,bugprone-sizeof-expression,
+  bugprone-undefined-memory-manipulation,bugprone-unused-raii,
+  bugprone-virtual-near-miss,bugprone-suspicious-memory-comparison
+WarningsAsErrors: '*'
+SystemHeaders: false
+FormatStyle: none
