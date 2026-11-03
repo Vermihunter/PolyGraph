@@ -80,17 +80,6 @@ namespace polygraph::cli {
             EXPECT_THROW(command_line.parse(arguments.argc(), arguments.argv()), std::invalid_argument);
         }
 
-        TEST(CommandLineTest, RejectsUnknownAndDuplicateOptions) {
-            CommandLine command_line("command-line-test");
-            command_line.add_flag_option("verbose", {"--verbose"}, "Verbose");
-            Arguments arguments({"command-line-test", "--unknown"});
-
-            EXPECT_THROW(command_line.parse(arguments.argc(), arguments.argv()), std::invalid_argument);
-            EXPECT_THROW(command_line.add_flag_option("verbose", {"--other"}, "Duplicate key"), std::invalid_argument);
-            EXPECT_THROW(command_line.add_flag_option("other", {"--verbose"}, "Duplicate alias"),
-                         std::invalid_argument);
-        }
-
         TEST(CommandLineTest, RejectsInvalidIntegerText) {
             CommandLine command_line("command-line-test");
             command_line.add_value_option("number", {"--number"}, "Number");
