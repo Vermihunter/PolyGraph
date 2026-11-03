@@ -14,6 +14,9 @@
 /cmake-build-*/
 /out/
 /install/
+/tests/fixtures/ldbc_snb/social_network/static/
+/tests/fixtures/ldbc_snb/social_network/dynamic/
+
 
 CMakeFiles/
 CMakeCache.txt
@@ -198,10 +201,6 @@ Thumbs.db
 *.rar
 
 # ---------------------------------------------------------------------------
-# 9. Existing intentionally-unpublished code (temporary)
+# 9. Local workflow state
 # ---------------------------------------------------------------------------
-# IMPORTANT: These exclusions were present in the original .gitignore.
-# Remove them once reviewed. Public tests are highly recommended for CI.
-/tests/
-/include/insertion/
-/src/insertion//.polygraph/
+/.polygraph/

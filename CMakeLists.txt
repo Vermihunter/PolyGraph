@@ -32,7 +32,7 @@ if(POLYGRAPH_BUILD_TESTS)
     if(BUILD_TESTING AND EXISTS "${PROJECT_SOURCE_DIR}/tests/CMakeLists.txt")
         add_subdirectory(tests)
     elseif(BUILD_TESTING)
-        message(WARNING "POLYGRAPH_BUILD_TESTS=ON, but this source archive does not contain tests/")
+        message(FATAL_ERROR "POLYGRAPH_BUILD_TESTS=ON, but tests/CMakeLists.txt is missing")
     endif()
 endif()
 
