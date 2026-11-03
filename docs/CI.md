@@ -1,14 +1,17 @@
 # CPU CI
 
-[`.github/workflows/cpu-ci.yml`](../.github/workflows/cpu-ci.yml) runs on every
-push and pull request using Ubuntu 24.04. It uses the existing `cpu-tests`
+[`.github/workflows/cpu-ci.yml`](../.github/workflows/cpu-ci.yml) runs **only through
+`workflow_dispatch`** using Ubuntu 24.04. Choose `full`, `unit`, `correctness`,
+`concurrency`, or `oracle`; `full` runs every existing check. There are no push,
+pull-request, or scheduled triggers. See [DEVELOPMENT.md](DEVELOPMENT.md) for the
+automatic local pre-push gate. It uses the existing `cpu-tests`
 configure/build/test presets; it does not redefine their feature flags.
 
 | Required check | Work performed | Job limit |
 | --- | --- | --- |
-| Build and unit tests | Build every target enabled by `cpu-tests`, then run the entire CTest suite | 30 minutes |
-| BFS correctness | Fresh preset build, then `ctest -L '^correctness$'` | 30 minutes |
-| Concurrency (50 repetitions) | Fresh preset build, then `ctest -L '^concurrency$' --repeat until-fail:50` | 30 minutes |
+| CPU / unit | Build every target enabled by `cpu-tests`, then run the entire CTest suite | 30 minutes |
+| CPU / correctness | Fresh preset build, then `ctest -L '^correctness$'` | 30 minutes |
+| CPU / concurrency | Fresh preset build, then `ctest -L '^concurrency$' --repeat until-fail:50` | 30 minutes |
 | Python oracle and isolation | Standard-library reference suite, explicit isolation checks and CI runner regression tests | 10 minutes |
 
 The first three checks share one matrix definition with `fail-fast: false`.
@@ -93,16 +96,17 @@ The token has only `contents: read`; checkout does not persist credentials.
 There are no secrets, write permissions, deployments, `pull_request_target`, or
 privileged service containers. Official actions are pinned to full commit SHAs
 with release comments. Update those pins together with their comments after
-reviewing upstream releases. Superseded runs on the same PR/ref are cancelled.
+reviewing upstream releases. Superseded manual runs of the same suite/ref are cancelled.
 
-The CLI duplicate-alias failure was fixed at registration, not bypassed in CI.
-`CommandLine::validate_option` now checks alias uniqueness across existing flag
-and value options, built-in help aliases and repeated aliases in the same
-registration, before mutating argparse. Regression coverage also verifies that
-rejected registrations do not consume a key or an otherwise valid alias. The
-original `RejectsUnknownAndDuplicateOptions` test remains unchanged and passes.
+The current committed CLI still accepts duplicate aliases. The original
+`RejectsUnknownAndDuplicateOptions` test remains active and correctly makes unit
+and fast local gates fail. No expected-failure marker, filter or skip hides it.
+The earlier local CI implementation included an alias fix/regression proposal,
+but that production change is absent from this checkout. Current quality-gate
+verification and blockers are documented in [DEVELOPMENT.md](DEVELOPMENT.md).
 
-Local verification for this change (not GitHub-hosted execution):
+Historical local verification from the initial CI implementation (not results
+for the current committed CLI or a GitHub-hosted run):
 
 - Full CPU build and **470/470 CTest tests passed**, also repeated from a fresh
   Git clone of the Phase 3 baseline with only these CI/CLI changes overlaid.
@@ -134,5 +138,6 @@ Local execution uses the available Ubuntu 22.04/GCC 11 environment and locally
 cached FetchContent sources. This does not validate Ubuntu 24.04's apt transaction,
 GitHub checkout/cache/artifact services, hosted runner resources or repository
 branch-protection settings. No workflow run was dispatched or commit pushed.
-Configure the four check names above as required checks after the first hosted
-run confirms them.
+Manual workflows are optional checks. If mandatory remote enforcement is
+introduced later, enable automatic events deliberately and then configure
+branch protection/rulesets with the appropriate required check names.

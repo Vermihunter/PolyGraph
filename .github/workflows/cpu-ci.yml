@@ -1,39 +1,39 @@
 name: CPU CI
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Checks to run (full preserves every existing check)
+        type: choice
+        required: true
+        default: full
+        options:
+          - full
+          - unit
+          - correctness
+          - concurrency
+          - oracle
 
 permissions:
   contents: read
 
 concurrency:
-  group: cpu-ci-${{ github.event.pull_request.number || github.ref }}
+  group: cpu-ci-${{ github.ref }}-${{ inputs.suite }}
   cancel-in-progress: true
 
 # Keep each check independent, with one shared build/test definition. No cached
 # build trees or binaries: every runner configures the checked-out source afresh.
 jobs:
   cpu:
-    name: ${{ matrix.name }}
+    if: inputs.suite != 'oracle'
+    name: CPU / ${{ matrix.suite }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - suite: unit
-            name: Build and unit tests
-            label: ''
-            repetitions: 1
-          - suite: correctness
-            name: BFS correctness
-            label: correctness
-            repetitions: 1
-          - suite: concurrency
-            name: Concurrency (50 repetitions)
-            label: concurrency
-            repetitions: 50
+        suite: ${{ fromJSON(inputs.suite == 'full' && '["unit","correctness","concurrency"]' || format('["{0}"]', inputs.suite)) }}
     defaults:
       run:
         shell: bash
@@ -42,8 +42,8 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_MAXSIZE: 300M
       CCACHE_COMPRESS: 'true'
-      TEST_LABEL: ${{ matrix.label }}
-      TEST_REPETITIONS: ${{ matrix.repetitions }}
+      TEST_SUITE: ${{ matrix.suite }}
+      TEST_REPETITIONS: ${{ matrix.suite == 'concurrency' && 50 || 1 }}
       LOG_DIR: build/ci-logs/${{ matrix.suite }}
     steps:
       - name: Check out a clean source tree
@@ -92,8 +92,8 @@ jobs:
         run: |
           set -euo pipefail
           selection=()
-          if [[ -n "$TEST_LABEL" ]]; then
-            selection=(-L "^${TEST_LABEL}$")
+          if [[ "$TEST_SUITE" != unit ]]; then
+            selection=(-L "^${TEST_SUITE}$")
           fi
           ctest --preset cpu-tests "${selection[@]}" --show-only=json-v1 \
             > "$LOG_DIR/discovery.json"
@@ -116,6 +116,7 @@ jobs:
             build/cpu-tests/CMakeFiles/CMakeConfigureLog.yaml
 
   oracle:
+    if: inputs.suite == 'full' || inputs.suite == 'oracle'
     name: Python oracle and isolation
     runs-on: ubuntu-24.04
     timeout-minutes: 10

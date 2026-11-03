@@ -122,3 +122,12 @@ polygraph_add_executor_contract_test(polygraph_bfs_concurrency_test bfs_concurre
 
 # Applied after discovery: preserve list-valued labels across CMake versions.
 set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/executor_test_labels.cmake")
+
+# Developer-gate regressions use executable fixtures, not compilers or git push.
+add_test(NAME python.developer_quality
+    COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s tools/dev -p "test_*.py" -v)
+set_tests_properties(python.developer_quality PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    LABELS "unit;python;developer"
+    TIMEOUT 60
+)
