@@ -12,7 +12,7 @@
 #include <exception>
 #include <iostream>
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     polygraph::cli::CommandLine command_line("polygraph-bfs-benchmark");
     polygraph::cli::add_runtime_arguments(command_line);
     polygraph::cli::add_bfs_arguments(command_line);
@@ -26,7 +26,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         return polygraph::benchmark::run_bfs_benchmark(command_line);
-    } catch (const std::exception& error) {
+    } catch (const std::exception &error) {
         std::cerr << "polygraph-bfs-benchmark: " << error.what() << "\n\n" << command_line;
         return 1;
     } catch (...) {

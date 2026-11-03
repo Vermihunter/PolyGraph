@@ -2,19 +2,20 @@
 
 [`.github/workflows/cpu-ci.yml`](../.github/workflows/cpu-ci.yml) runs **only through
 `workflow_dispatch`** using Ubuntu 24.04. Choose `full`, `unit`, `correctness`,
-`concurrency`, or `oracle`; `full` runs every existing check. There are no push,
+`concurrency`, or `oracle` (or `format` alone); `full` runs every existing check. There are no push,
 pull-request, or scheduled triggers. See [DEVELOPMENT.md](DEVELOPMENT.md) for the
 automatic local pre-push gate. It uses the existing `cpu-tests`
 configure/build/test presets; it does not redefine their feature flags.
 
-| Required check | Work performed | Job limit |
+| Manual check | Work performed | Job limit |
 | --- | --- | --- |
+| Formatting (read-only) | LLVM 21 formatting verification plus staged-hook regressions in disposable repositories; runs on every dispatch | 10 minutes |
 | CPU / unit | Build every target enabled by `cpu-tests`, then run the entire CTest suite | 30 minutes |
 | CPU / correctness | Fresh preset build, then `ctest -L '^correctness$'` | 30 minutes |
 | CPU / concurrency | Fresh preset build, then `ctest -L '^concurrency$' --repeat until-fail:50` | 30 minutes |
 | Python oracle and isolation | Standard-library reference suite, explicit isolation checks and CI runner regression tests | 10 minutes |
 
-The first three checks share one matrix definition with `fail-fast: false`.
+The three CPU checks share one matrix definition with `fail-fast: false`.
 Each independently configures and builds the source checked out for that event;
 one failing check cannot cancel the others. This repeats compilation across
 runners but avoids transferring binaries/CMake caches with embedded absolute
@@ -22,6 +23,30 @@ paths. Compiler object caching (`ccache`, limited to 300 MB per check) reduces
 repeat work. Cache keys include the check, build configuration hash and commit,
 with fallbacks for earlier commits of the same check. CMake build trees,
 generated oracle fixtures, executables and datasets are never restored from cache.
+
+Formatting is always verified without `--fix`, source writes, staging or commits
+in the checked-out CI tree. Its job installs `clang-format==21.1.8` in an isolated
+Python environment using the Linux wheel hashes in
+[`tools/dev/format-requirements.txt`](../tools/dev/format-requirements.txt), with
+wheel-download caching. The formatter must pass the existing major-version and
+CUDA syntax checks. After validation, `git diff --exit-code` and
+`git diff --cached --exit-code` assert that the checkout and index were not
+changed. Pre-commit regression scenarios may stage **only inside disposable test
+repositories**; they never create a commit. Their formatter dependency is kept
+out of the ordinary CPU test target. Failure logs upload as
+`formatting-diagnostics` alongside the existing per-suite artifacts.
+
+Reproduce the CI formatter environment locally without installing system tools:
+
+```bash
+python3 -m venv /tmp/polygraph-format
+/tmp/polygraph-format/bin/python -m pip install --only-binary=:all: --require-hashes \
+  -r tools/dev/format-requirements.txt
+CLANG_FORMAT=/tmp/polygraph-format/bin/clang-format \
+  python3 tools/dev/quality.py format --all
+CLANG_FORMAT=/tmp/polygraph-format/bin/clang-format \
+  python3 -m unittest discover -s tools/dev -p check_pre_commit_test.py -v
+```
 
 The `cpu-tests` preset enables the CPU libraries, backend adapters, BFS CLI,
 benchmark executable and tests. HTTP/CUDA remain disabled according to the

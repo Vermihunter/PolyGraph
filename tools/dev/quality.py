@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only CPU quality gates. Only format-fix and install intentionally mutate state."""
+"""CPU verification and staged-file formatting hooks. Only formatting/install commands mutate state."""
 from __future__ import annotations
 
 import argparse
@@ -11,6 +11,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import stat
+import tempfile
 
 SOURCE_ROOTS = {"include", "src", "app", "tests"}
 EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".ipp", ".tpp", ".cu", ".cuh"}
@@ -120,15 +122,7 @@ def clang_tool(kind: str) -> str:
     return found
 
 
-def check_format(root: Path, names: set[str], *, fix: bool = False) -> None:
-    files = sorted(n for n in names if project_source(n) and (root / n).is_file())
-    if not files:
-        print("[format] No project source changes", flush=True)
-        return
-    for name in files:
-        if not (root / name).resolve().is_relative_to(root):
-            raise GateError("source symlink leaves repository: " + name)
-    tool = clang_tool("clang-format")
+def cuda_format_probe(root: Path, tool: str, files: list[str]) -> None:
     if any(Path(n).suffix in {".cu", ".cuh"} for n in files):
         # Exercise kernel-launch syntax with the selected version before allowing
         # it near CUDA files. No C++ compiler flags or CUDA SDK are assumed.
@@ -138,8 +132,32 @@ def check_format(root: Path, names: set[str], *, fix: bool = False) -> None:
         if not all(token in parsed.stdout for token in ("__global__", "<<<", ">>>")):
             raise GateError("selected clang-format did not preserve the CUDA kernel-launch probe")
         print("[format] LLVM 21 CUDA kernel-launch compatibility probe passed", flush=True)
+
+
+def formatter_ignores(root: Path, tool: str, name: str) -> bool:
+    # For ignored stdin paths clang-format returns success with *empty output*.
+    # Query ignore status explicitly; never interpret that output as source.
+    result = run([tool, "--list-ignored", str(root / name)], root, capture=True)
+    if result.stdout:
+        print("[format] Excluded by .clang-format-ignore: " + name, flush=True)
+        return True
+    return False
+
+
+def check_format(root: Path, names: set[str], *, fix: bool = False) -> None:
+    files = sorted(n for n in names if project_source(n) and (root / n).is_file())
+    if not files:
+        print("[format] No project source changes", flush=True)
+        return
+    for name in files:
+        if not (root / name).resolve().is_relative_to(root):
+            raise GateError("source symlink leaves repository: " + name)
+    tool = clang_tool("clang-format")
+    cuda_format_probe(root, tool, files)
     failures = []
     for name in files:
+        if formatter_ignores(root, tool, name):
+            continue
         args = [tool, "--style=file", "-i"] if fix else [tool, "--style=file", "--dry-run", "--Werror"]
         result = run([*args, str(root / name)], root, capture=not fix, check=False)
         if result.returncode:
@@ -151,6 +169,157 @@ def check_format(root: Path, names: set[str], *, fix: bool = False) -> None:
         print("Fix explicitly: python3 tools/dev/quality.py format-fix --files " + shlex.join(failures), file=sys.stderr)
         raise GateError(f"{len(failures)} file(s) fail clang-format; no files were modified")
     print(f"[format] {'Formatted' if fix else 'Validated'} {len(files)} file(s)", flush=True)
+
+
+def git_input(root: Path, args: list[str], data: bytes, env: dict[str, str] | None = None) -> bytes:
+    result = subprocess.run(["git", *args], cwd=root, input=data, capture_output=True, env=env, timeout=30)
+    if result.returncode:
+        raise GateError(f"git {shlex.join(args)} failed: {os.fsdecode(result.stderr)}")
+    return result.stdout
+
+
+def index_entries(root: Path) -> dict[str, tuple[str, str]]:
+    entries = {}
+    for record in git(root, "ls-files", "--stage", "-z").split(b"\0"):
+        if not record:
+            continue
+        metadata, name = record.split(b"\t", 1)
+        mode, oid, stage = metadata.decode("ascii").split()
+        if stage != "0":
+            raise GateError("resolve unmerged index entries before committing")
+        entries[os.fsdecode(name)] = (mode, oid)
+    return entries
+
+
+def candidate_bytes(root: Path, name: str) -> tuple[bytes, int]:
+    path = root / name
+    if path.is_symlink() or not path.resolve().is_relative_to(root) or not path.is_file():
+        raise GateError("staged source must be a regular file inside the checkout: " + name)
+    return path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
+
+
+def format_staged(root: Path) -> None:
+    # Diff the active index, including GIT_INDEX_FILE used by partial/pathspec
+    # commits. Added/modified/renamed files only; deleted and unrelated files stay.
+    names = sorted(n for n in decode_paths(git(root, "diff", "--cached", "--name-only", "-z",
+                                               "--diff-filter=ACMRT", "--")) if project_source(n))
+    if not names:
+        print("[pre-commit] No eligible staged C++/CUDA files", flush=True)
+        return
+    entries = index_entries(root)
+    original = {}
+    for name in names:
+        if name not in entries or entries[name][0] not in {"100644", "100755"}:
+            raise GateError("staged source must be a regular index entry: " + name)
+        data, mode = candidate_bytes(root, name)
+        if data != git(root, "cat-file", "blob", entries[name][1]):
+            raise GateError("partially staged source (or EOL/clean-filter conversion): " + name +
+                            ". Nothing formatted or staged. Stage the whole file, or stash its unstaged "
+                            "edits with --keep-index before retrying; restore them afterward and resolve conflicts")
+        original[name] = (data, mode)
+    # clang-format reads working-tree policy files. Do not let unstaged or
+    # untracked policy silently control what is committed.
+    policies = {".clang-format"}
+    for name in names:
+        for parent in (root / name).parents:
+            if not parent.is_relative_to(root):
+                break
+            for filename in (".clang-format", "_clang-format", ".clang-format-ignore"):
+                path = parent / filename
+                relative = path.relative_to(root).as_posix()
+                policies.add(relative)
+    absent_policies = set()
+    for name in sorted(policies):
+        path = root / name
+        if name != ".clang-format" and not path.exists() and not path.is_symlink() and name not in entries:
+            absent_policies.add(name)
+            continue
+        if name not in entries or entries[name][0] not in {"100644", "100755"}:
+            raise GateError("formatter configuration must be staged/tracked before committing: " + name)
+        data, mode = candidate_bytes(root, name)
+        if data != git(root, "cat-file", "blob", entries[name][1]):
+            raise GateError("formatter configuration has unstaged changes: " + name + "; stage or stash them first")
+        original[name] = (data, mode)
+
+    def verify_inputs() -> None:
+        for name, snapshot in original.items():
+            if candidate_bytes(root, name) != snapshot:
+                raise GateError("working file or formatter configuration changed during formatting: " + name)
+        for name in absent_policies:
+            path = root / name
+            if path.exists() or path.is_symlink():
+                raise GateError("formatter configuration appeared during formatting: " + name + "; stage or stash it first")
+
+    tool = clang_tool("clang-format")
+    cuda_format_probe(root, tool, names)
+    formatted = {}
+    for name in names:
+        if formatter_ignores(root, tool, name):
+            continue
+        result = subprocess.run([tool, "--style=file", "--assume-filename=" + str(root / name)],
+                                cwd=root, input=original[name][0], capture_output=True, timeout=30)
+        if result.returncode:
+            raise GateError("formatter failed for " + name + ": " + os.fsdecode(result.stderr))
+        if original[name][0].strip() and not result.stdout.strip():
+            raise GateError("formatter unexpectedly produced empty source for " + name + "; nothing staged")
+        if result.stdout != original[name][0]:
+            formatted[name] = result.stdout
+    verify_inputs()
+    if not formatted:
+        print(f"[pre-commit] {len(names)} staged file(s) already formatted; index/worktree unchanged", flush=True)
+        return
+    index = Path(os.fsdecode(git(root, "rev-parse", "--git-path", "index")).removesuffix("\n"))
+    if not index.is_absolute():
+        index = root / index
+    snapshot = index.read_bytes()
+    # Own the real index lock, prepare updates on a private index in the same
+    # directory (also supports split indexes), then atomically replace the index.
+    # Never `git add` a working file: stage exactly our formatted blob and mode.
+    lock = index.with_name(index.name + ".lock")
+    try:
+        descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as error:
+        raise GateError("index is locked by another Git operation; wait for it to finish and retry") from error
+    os.close(descriptor)
+    temporary_index = None
+    try:
+        if index.read_bytes() != snapshot or index_entries(root) != entries:
+            raise GateError("index changed during formatting; retry the commit")
+        verify_inputs()
+        fd, temporary = tempfile.mkstemp(prefix="quality-index-", dir=index.parent)
+        temporary_index = Path(temporary)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(snapshot)
+        os.chmod(temporary_index, stat.S_IMODE(index.stat().st_mode))
+        env = {**os.environ, "GIT_INDEX_FILE": str(temporary_index)}
+        updates = b""
+        for name, data in formatted.items():
+            oid = git_input(root, ["hash-object", "-w", "--stdin"], data).strip()
+            updates += entries[name][0].encode() + b" " + oid + b"\t" + os.fsencode(name) + b"\0"
+        git_input(root, ["update-index", "-z", "--index-info"], updates, env)
+        for name, data in formatted.items():
+            if candidate_bytes(root, name) != original[name]:
+                raise GateError("working file changed; formatted files may remain unstaged, review git diff: " + name)
+            path = root / name
+            fd, temporary_file = tempfile.mkstemp(prefix=".quality-format-", dir=path.parent)
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(data)
+                    os.fchmod(stream.fileno(), original[name][1])
+                # Preparing/writing the temporary file can take time. Recheck
+                # after that work too, so an editor save is not overwritten.
+                if candidate_bytes(root, name) != original[name]:
+                    raise GateError("working file changed while preparing formatting; retry without editing: " + name)
+                os.replace(temporary_file, path)
+            finally:
+                Path(temporary_file).unlink(missing_ok=True)
+        os.replace(temporary_index, index)
+        print("[pre-commit] Formatted and staged only:\n" + "\n".join("  " + n for n in formatted), flush=True)
+    finally:
+        if temporary_index is not None:
+            temporary_index.unlink(missing_ok=True)
+            temporary_index.with_name(temporary_index.name + ".lock").unlink(missing_ok=True)
+        lock.unlink()
 
 
 def configure(root: Path) -> None:
@@ -299,22 +468,23 @@ def install(root: Path) -> None:
     existing = run(["git", "config", "--get", "core.hooksPath"], root, capture=True, check=False)
     if existing.returncode == 0 and existing.stdout.decode().strip() != ".githooks":
         raise GateError("core.hooksPath already points elsewhere; integrate existing hooks before overriding it")
-    if not os.access(root / ".githooks/pre-push", os.X_OK):
-        raise GateError(".githooks/pre-push must be executable (chmod +x .githooks/pre-push)")
+    for name in ("pre-commit", "pre-push"):
+        if not os.access(root / ".githooks" / name, os.X_OK):
+            raise GateError(f".githooks/{name} must be executable (chmod +x .githooks/{name})")
     run(["git", "config", "--local", "core.hooksPath", ".githooks"], root)
     hook_status(root)
 
 
 def hook_status(root: Path) -> None:
     value = git(root, "config", "--get", "core.hooksPath").decode().strip()
-    if value != ".githooks" or not os.access(root / ".githooks/pre-push", os.X_OK):
-        raise GateError("pre-push hook is not active/executable; run tools/dev/install-hooks.sh")
-    print("[quality] Active: core.hooksPath=.githooks; executable pre-push hook (terminal and CLion)", flush=True)
+    if value != ".githooks" or not all(os.access(root / ".githooks" / n, os.X_OK) for n in ("pre-commit", "pre-push")):
+        raise GateError("pre-commit/pre-push hooks are not active/executable; run tools/dev/install-hooks.sh")
+    print("[quality] Active: core.hooksPath=.githooks; executable pre-commit and pre-push hooks (terminal and CLion)", flush=True)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("format", "format-fix", "configure", "tidy", "build", "test", "verify", "pre-push", "install", "hook-status"))
+    parser.add_argument("command", choices=("format", "format-fix", "configure", "tidy", "build", "test", "verify", "pre-commit", "format-staged", "pre-push", "install", "hook-status"))
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--base", help="compare committed HEAD with this local commit/ref")
     scope.add_argument("--all", action="store_true", help="audit all tracked project sources (default)")
@@ -322,6 +492,9 @@ def main() -> int:
     args = parser.parse_args()
     try:
         root = Path(os.fsdecode(git(Path.cwd(), "rev-parse", "--show-toplevel")).removesuffix("\n")).resolve()
+        if args.command in {"pre-commit", "format-staged"}:
+            format_staged(root)
+            return 0
         if args.command == "pre-push":
             expected, names = push_scope(root, sys.stdin.read())
             if expected is None:

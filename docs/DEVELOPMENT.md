@@ -1,13 +1,15 @@
 # Developer quality gates
 
 GitHub tests are **manual only**. Open Actions → CPU CI → Run workflow, choose a
-branch and `full`, `unit`, `correctness`, `concurrency`, or `oracle`. `full` keeps
+branch and `full`, `unit`, `correctness`, `concurrency`, or `oracle` (or `format` for formatting only). `full` keeps
 all existing build/test/oracle checks; concurrency remains a 50-repeat manual
 stress check. Nothing runs automatically on push, pull request, or a schedule.
 See [CI.md](CI.md) for dependencies, diagnostics, caching and reproduction.
 
-Local pushes use the version-controlled [pre-push hook](../.githooks/pre-push).
-Both terminal Git and CLion's Git push invoke it after installation. CLion must
+Local commits use the version-controlled [pre-commit hook](../.githooks/pre-commit)
+to automatically format eligible staged files and include that formatting in the
+index. Local pushes use the read-only [pre-push hook](../.githooks/pre-push).
+Terminal Git and CLion invoke the respective hooks after installation. CLion must
 use this Git checkout and have the same Python/CMake/LLVM tools available in its
 process PATH; restart the IDE after changing PATH. This is a local safeguard,
 not mandatory remote enforcement.
@@ -33,7 +35,7 @@ python3 tools/dev/quality.py hook-status
 
 The installer refuses to overwrite another effective `core.hooksPath`; integrate
 any existing hooks first. It changes only local Git configuration, not the
-index, sources, commits or remotes. The hook and installer must retain their
+index, sources, commits or remotes. Both hooks and the installer must retain their
 executable file modes. Installation is per clone; Git does not activate hooks
 merely by checking them out. Use `git config --show-origin --get core.hooksPath`
 to diagnose another configuration overriding it.
@@ -44,6 +46,8 @@ Run from the repository root (or invoke the driver by its absolute path from
 another directory inside the same checkout):
 
 ```bash
+# Format and stage ONLY eligible staged changes (same as pre-commit):
+python3 tools/dev/quality.py format-staged
 # Read-only formatting audit of tracked, project-owned sources:
 python3 tools/dev/quality.py format --all
 # Narrow scope while editing; filenames are repository-relative:
@@ -79,6 +83,66 @@ The manual commands inspect the working files, allowing checks during editing.
 `--files` or `--all` to include uncommitted edits. The pre-push entry point does
 not expose these manual scope overrides. It always derives scope from Git's
 actual pre-push stdin and verifies a clean checked-out revision.
+
+## Automatic formatting before commits
+
+`pre-commit` considers only added, modified, copied, renamed or type-changed
+staged project sources with the existing C/C++/header extensions (including
+`.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`, `.ipp`) and CUDA `.cu`/`.cuh`. Deletions,
+untracked/unrelated files, generated/vendor/build/dataset paths and the vendored
+JSON header are excluded. Tracked `.clang-format-ignore` matches are skipped
+explicitly; empty formatter output for nonempty source is rejected. There is no automatic repository-wide format pass.
+CUDA files use the existing LLVM 21 kernel-launch compatibility probe; no CUDA
+compiler or GPU is used.
+
+The hook preflights **all selected files before writing anything**. If a file's
+working bytes differ from its staged blob, it fails with `partially staged`
+instructions. This conservative policy also rejects EOL/clean-filter conversions
+that make working/index bytes differ; it never guesses which hunks to stage.
+Unstaged changes in unrelated files are allowed and left untouched. Applicable
+`.clang-format`, `_clang-format` and `.clang-format-ignore` files must be tracked
+and match their staged versions, preventing an unstaged policy from controlling
+a commit. Newly staged policy changes are supported.
+
+For a partially staged source, either stage the whole file deliberately, or
+preserve unstaged edits before retrying. One possible manual flow is:
+
+```bash
+git stash push --keep-index --include-untracked
+# Review the remaining staged changes, then commit normally yourself.
+# After the commit, restore the stash yourself:
+git stash pop
+```
+
+Stash restoration can conflict with formatting; resolve conflicts explicitly.
+The hook does not stash, restore or commit for you. Do not edit or run another
+Git index operation while it runs. Like other local hooks, this is not a lock
+against an editor or an adversarial process modifying the working files.
+
+Formatting is prepared in memory. Already formatted files do not rewrite the
+worktree or index. Changed files preserve working permissions and staged
+executable modes. Git's active `GIT_INDEX_FILE` (including path-limited commits),
+alternate indexes and split indexes are supported. The driver owns the active
+index lock, prepares an updated private index, and atomically installs it. It
+stages exactly the formatted blobs using `update-index`, never a broad `git add`
+that could scoop up unrelated edits. Other staged entries are retained.
+Symlink sources are rejected rather than followed.
+
+If formatting or partial-staging preflight fails, neither index nor sources are
+changed. If a later filesystem/index write fails, the commit is blocked and the
+original index remains unless its final atomic replacement succeeded. Some
+formatted worktree files can remain unstaged; inspect `git diff`/`git diff
+--cached`, stage deliberately and retry. Do not remove an existing index lock
+until you have confirmed its owning Git operation is no longer running.
+
+Regression scenarios use actual Git indexes and LLVM 21 in disposable
+repositories, reusing existing commit objects without creating commits:
+
+```bash
+python3 -m unittest discover -s tools/dev -p check_pre_commit_test.py -v
+# Existing pre-push stage-failure/selection tests (no formatter required):
+python3 -m unittest discover -s tools/dev -p 'test_*.py' -v
+```
 
 ## Push behavior and revision safety
 
@@ -152,7 +216,8 @@ all owned files is independent of whether a CPU target builds them.
 
 ## Bypass and later remote enforcement
 
-`git push --no-verify` bypasses this local hook; users can also change local Git
+`git commit --no-verify` bypasses pre-commit and `git push --no-verify` bypasses
+pre-push; users can also change local Git
 configuration or hook files. Use that escape hatch deliberately and record why.
 CLion can likewise be configured to skip hooks. No local hook is tamper-proof.
 To require checks centrally later, add automatic CI events deliberately and
@@ -161,7 +226,31 @@ server-side gate. Manual-only workflows alone do not enforce every push/PR.
 
 ## Verification and existing blockers
 
-Local verification on 2026-11-03 (Ubuntu 22.04, LLVM 21; not a hosted run):
+Current pre-commit update, locally verified on 2026-11-03 (not GitHub-hosted):
+
+| Check | Result |
+| --- | --- |
+| `python3 -m unittest discover -s tools/dev -p check_pre_commit_test.py -v` | 18/18 passed with native LLVM 21 |
+| Same 18 tests with CI's exact hash-pinned formatter wheel | 18/18 passed |
+| `python3 -m unittest discover -s tools/dev -p 'test_*.py' -v` | 19/19 existing gate tests passed; injected format/configure/tidy/build/test failures block pre-push |
+| `python3 tools/dev/quality.py format --all` | Passed all 254 project source/header files, read-only; CUDA probe passed |
+| `python3 tools/dev/quality.py build` | All enabled CPU targets built |
+| `python3 tools/dev/quality.py test` | 468/469 passed; the unchanged CLI duplicate-alias regression fails and blocks pre-push |
+| `python3 tools/dev/quality.py hook-status` | Both executable hooks active under the existing `.githooks` setting |
+| actionlint 1.7.7 + ShellCheck 0.10.0 | Workflow and hook scripts passed |
+
+The 18 real-Git tests cover modified tracked source, already formatted files
+(no rewrite), unrelated files, partial staging, spaces, executable modes,
+generated/vendor/build/data exclusions, CUDA, staged/unstaged configuration,
+ignored files, empty formatter output, alternate/split indexes, symlinks,
+formatter errors, index locks, and saves/configuration appearing during
+preparation. Staging occurred only in disposable fixture repositories. No commit
+or push was executed. The developer checkout's index and all five pre-existing
+unstaged app edits were verified unchanged. Logs are retained in ignored
+`build/precommit-verification/`. The actual GitHub-hosted run, apt transaction,
+cache/artifact services, and IDE UI invocation were not executed locally.
+
+Earlier pre-push-gate validation on 2026-11-03 (historical, not a hosted run):
 
 | Command/check | Result |
 | --- | --- |
@@ -188,12 +277,13 @@ sole genuine test failure to the CLI regression. No real database was used.
 Logs are retained under ignored `build/quality-verification/`. No GitHub manual
 run was dispatched. No existing C++/CUDA source was changed, and no files were
 staged, committed or pushed.
-No source is auto-formatted or automatically repaired to make a push green.
-The current full-format audit fails on five existing files:
+The earlier full-format audit found five existing files (historical result):
 `app/bfs/main.cpp`, `app/bfs_benchmark/BfsBenchmark.cpp`,
 `app/bfs_benchmark/BfsBenchmark.hpp`, `app/bfs_benchmark/main.cpp`, and
 `app/http_server/main.cpp`. New-branch/full audits will block until those are
-explicitly formatted by a developer. Incremental pushes only audit their scope.
+formatted and staged via pre-commit, or explicitly formatted by a developer.
+Incremental pushes only audit their scope. The current update preserves the
+five pre-existing unstaged app-formatting edits in this working tree.
 
 The current checkout also still contains the known
 `CommandLineTest.RejectsUnknownAndDuplicateOptions` failure: duplicate aliases

@@ -18,7 +18,7 @@
 #include <iostream>
 #include <stdexcept>
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     polygraph::cli::CommandLine command_line("polygraph-bfs");
     polygraph::cli::add_runtime_arguments(command_line);
     polygraph::cli::add_bfs_arguments(command_line);
@@ -39,16 +39,15 @@ int main(int argc, char* argv[]) {
         LOG_INFO("Starting BFS CLI");
         EVENT_INFO("bfs.cli.starting");
 
-        const auto context = polygraph::cli::GraphRuntimeBuilder::build(
-            polygraph::cli::parse_runtime_config(command_line));
+        const auto context =
+                polygraph::cli::GraphRuntimeBuilder::build(polygraph::cli::parse_runtime_config(command_line));
 
         polygraph::BfsExecutor executor(*context->placement_catalog);
-        const auto result = executor.run(
-            polygraph::cli::parse_source(command_line, *context),
-            polygraph::cli::parse_expand_spec(command_line, *context->schema),
-            polygraph::cli::parse_bfs_options(command_line));
+        const auto result = executor.run(polygraph::cli::parse_source(command_line, *context),
+                                         polygraph::cli::parse_expand_spec(command_line, *context->schema),
+                                         polygraph::cli::parse_bfs_options(command_line));
 
-        const auto& output_file = command_line.string_value("output-file");
+        const auto &output_file = command_line.string_value("output-file");
         if (output_file.empty()) {
             polygraph::cli::write_bfs_distances_csv(std::cout, result);
         } else {
@@ -65,7 +64,7 @@ int main(int argc, char* argv[]) {
         polygraph::events::shutdown();
         polygraph::logging::shutdown();
         return 0;
-    } catch (const std::exception& error) {
+    } catch (const std::exception &error) {
         EVENT_ERROR("bfs.cli.failed", {"error", error.what()});
         LOG_ERROR("BFS CLI failed: {}", error.what());
         polygraph::prof::Profiler::dump(std::cerr);
