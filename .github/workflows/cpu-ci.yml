@@ -1,0 +1,170 @@
+name: CPU CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpu-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Keep each check independent, with one shared build/test definition. No cached
+# build trees or binaries: every runner configures the checked-out source afresh.
+jobs:
+  cpu:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: unit
+            name: Build and unit tests
+            label: ''
+            repetitions: 1
+          - suite: correctness
+            name: BFS correctness
+            label: correctness
+            repetitions: 1
+          - suite: concurrency
+            name: Concurrency (50 repetitions)
+            label: concurrency
+            repetitions: 50
+    defaults:
+      run:
+        shell: bash
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/build/ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_MAXSIZE: 300M
+      CCACHE_COMPRESS: 'true'
+      TEST_LABEL: ${{ matrix.label }}
+      TEST_REPETITIONS: ${{ matrix.repetitions }}
+      LOG_DIR: build/ci-logs/${{ matrix.suite }}
+    steps:
+      - name: Check out a clean source tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          clean: true
+          persist-credentials: false
+
+      - name: Install CPU build and test dependencies
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mkdir -p "$LOG_DIR"
+          sudo apt-get update 2>&1 | tee "$LOG_DIR/apt-update.log"
+          sudo apt-get install --no-install-recommends -y \
+            build-essential cmake ninja-build pkg-config ccache git ca-certificates \
+            libcurl4-openssl-dev libpq-dev libspdlog-dev libgtest-dev \
+            nlohmann-json3-dev python3 2>&1 | tee "$LOG_DIR/apt-install.log"
+          { cmake --version; c++ --version; python3 --version; } > "$LOG_DIR/versions.log"
+
+      - name: Restore compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/ccache
+          key: cpu-ubuntu24-gcc-v1-${{ matrix.suite }}-${{ hashFiles('CMakePresets.json', 'CMakeLists.txt', 'cmake/**', 'src/cmake/**') }}-${{ github.sha }}
+          restore-keys: |
+            cpu-ubuntu24-gcc-v1-${{ matrix.suite }}-${{ hashFiles('CMakePresets.json', 'CMakeLists.txt', 'cmake/**', 'src/cmake/**') }}-
+            cpu-ubuntu24-gcc-v1-${{ matrix.suite }}-
+
+      - name: Configure cpu-tests
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          cmake --preset cpu-tests -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            2>&1 | tee "$LOG_DIR/configure.log"
+
+      - name: Build every cpu-tests target
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          cmake --build --preset cpu-tests 2>&1 | tee "$LOG_DIR/build.log"
+          ccache --show-stats | tee "$LOG_DIR/ccache.log"
+
+      - name: Discover and run required tests
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          selection=()
+          if [[ -n "$TEST_LABEL" ]]; then
+            selection=(-L "^${TEST_LABEL}$")
+          fi
+          ctest --preset cpu-tests "${selection[@]}" --show-only=json-v1 \
+            > "$LOG_DIR/discovery.json"
+          ctest --preset cpu-tests "${selection[@]}" --no-tests=error \
+            --parallel 2 --timeout 60 --repeat "until-fail:${TEST_REPETITIONS}" \
+            --output-log "$PWD/$LOG_DIR/ctest.log" --output-junit "$PWD/$LOG_DIR/ctest.xml" \
+            2>&1 | tee "$LOG_DIR/ctest-console.log"
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cpu-${{ matrix.suite }}-diagnostics
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/ci-logs/
+            build/cpu-tests/Testing/Temporary/
+            build/cpu-tests/CMakeCache.txt
+            build/cpu-tests/CMakeFiles/CMakeConfigureLog.yaml
+
+  oracle:
+    name: Python oracle and isolation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out a clean source tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          clean: true
+          persist-credentials: false
+
+      - name: Install the standard-library Python runtime
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          mkdir -p build/ci-logs/oracle
+          sudo apt-get update 2>&1 | tee build/ci-logs/oracle/apt-update.log
+          sudo apt-get install --no-install-recommends -y python3 \
+            2>&1 | tee build/ci-logs/oracle/apt-install.log
+          python3 --version > build/ci-logs/oracle/versions.log
+
+      - name: Test the runner's failure guards
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          python3 -I -S .github/scripts/test_oracle_runner.py \
+            2>&1 | tee build/ci-logs/oracle/runner-tests.log
+
+      - name: Run the independent reference suite without site packages
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          python3 -I -S .github/scripts/run_oracle_tests.py \
+            2>&1 | tee build/ci-logs/oracle/tests.log
+
+      - name: Verify import and file-access isolation explicitly
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          python3 -I -S .github/scripts/run_oracle_tests.py --isolation-only \
+            2>&1 | tee build/ci-logs/oracle/isolation.log
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-oracle-diagnostics
+          retention-days: 14
+          if-no-files-found: warn
+          path: build/ci-logs/oracle/
