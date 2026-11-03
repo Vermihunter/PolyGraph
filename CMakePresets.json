@@ -37,6 +37,18 @@
       }
     },
     {
+      "name": "cpu-tests",
+      "displayName": "CPU adapters, CLI, and existing tests",
+      "inherits": "cpu-core",
+      "binaryDir": "${sourceDir}/build/cpu-tests",
+      "cacheVariables": {
+        "POLYGRAPH_BUILD_BACKENDS": "ON",
+        "POLYGRAPH_BUILD_BFS": "ON",
+        "POLYGRAPH_ENABLE_CLANG_FORMAT": "OFF",
+        "POLYGRAPH_ENABLE_CLANG_TIDY": "OFF"
+      }
+    },
+    {
       "name": "cpu-bfs",
       "displayName": "CPU BFS CLI",
       "inherits": "base",
@@ -181,6 +193,7 @@
   ],
   "buildPresets": [
     { "name": "cpu-core", "configurePreset": "cpu-core", "jobs": 2 },
+    { "name": "cpu-tests", "configurePreset": "cpu-tests", "jobs": 2 },
     { "name": "cpu-bfs", "configurePreset": "cpu-bfs", "jobs": 2 },
     { "name": "cpu-bfs-debug", "configurePreset": "cpu-bfs-debug", "jobs": 2 },
     { "name": "gpu-bfs", "configurePreset": "gpu-bfs", "jobs": 2 },
@@ -193,7 +206,8 @@
     { "name": "http-server-analysis", "configurePreset": "http-server-analysis", "jobs": 2 }
   ],
   "testPresets": [
-    { "name": "cpu-core", "configurePreset": "cpu-core", "output": { "outputOnFailure": true } },
+    { "name": "cpu-core", "configurePreset": "cpu-core", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "cpu-tests", "configurePreset": "cpu-tests", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "cpu-bfs", "configurePreset": "cpu-bfs", "output": { "outputOnFailure": true } },
     { "name": "cpu-bfs-debug", "configurePreset": "cpu-bfs-debug", "output": { "outputOnFailure": true } },
     { "name": "gpu-bfs", "configurePreset": "gpu-bfs", "output": { "outputOnFailure": true } },

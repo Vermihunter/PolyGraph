@@ -63,7 +63,22 @@ class ResumableStorageLoadTests(unittest.TestCase):
             root = Path(temporary)
             manifest = root / "domain.json"
             graph = root / "graph.jsonl"
-            manifest.write_text("{}\n", encoding="utf-8")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "format": "polygraph.domain",
+                        "version": 1,
+                        "id": "checkpoint-test",
+                        "paths": {
+                            "schema": "schema.json",
+                            "data": graph.name,
+                            "backendConfig": "backends.json",
+                        },
+                        "defaults": {"bfs": {"startUuid": "1"}},
+                    }
+                ) + "\n",
+                encoding="utf-8",
+            )
             graph.write_text('{"kind":"meta"}\n', encoding="utf-8")
             checkpoint_path = root / "storage-load.json"
 

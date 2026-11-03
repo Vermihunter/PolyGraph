@@ -33,7 +33,10 @@ def read_bfs_csv(path: str | Path) -> dict[str, int]:
         for row in reader:
             if not row.get(vertex_col):
                 continue
-            rows[row[vertex_col]] = int(row[distance_col])
+            vertex_id = row[vertex_col]
+            if vertex_id in rows:
+                raise ValueError(f"Duplicate vertex ID {vertex_id!r} in {path} at CSV line {reader.line_num}")
+            rows[vertex_id] = int(row[distance_col])
         return rows
 
 

@@ -1,0 +1,440 @@
+{
+  "complete_families": true,
+  "counts": {
+    "relationships": 1477965,
+    "relationships_by_type": {
+      "COMMENT_HASCREATOR_PERSON": 151043,
+      "COMMENT_HASTAG_TAG": 191303,
+      "COMMENT_ISLOCATEDIN_PLACE": 151043,
+      "COMMENT_REPLYOF_COMMENT": 76787,
+      "COMMENT_REPLYOF_POST": 74256,
+      "FORUM_CONTAINEROF_POST": 135701,
+      "FORUM_HASMEMBER_PERSON": 123268,
+      "FORUM_HASMODERATOR_PERSON": 13750,
+      "FORUM_HASTAG_TAG": 47697,
+      "ORGANISATION_ISLOCATEDIN_PLACE": 7955,
+      "PERSON_HASINTEREST_TAG": 35475,
+      "PERSON_ISLOCATEDIN_PLACE": 1528,
+      "PERSON_KNOWS_PERSON": 14073,
+      "PERSON_LIKES_COMMENT": 62225,
+      "PERSON_LIKES_POST": 47215,
+      "PERSON_STUDYAT_ORGANISATION": 1209,
+      "PERSON_WORKAT_ORGANISATION": 3313,
+      "PLACE_ISPARTOF_PLACE": 1454,
+      "POST_HASCREATOR_PERSON": 135701,
+      "POST_HASTAG_TAG": 51118,
+      "POST_ISLOCATEDIN_PLACE": 135701,
+      "TAGCLASS_ISSUBCLASSOF_TAGCLASS": 70,
+      "TAG_HASTYPE_TAGCLASS": 16080
+    },
+    "vertices": 327588,
+    "vertices_by_type": {
+      "Comment": 151043,
+      "Forum": 13750,
+      "Organisation": 7955,
+      "Person": 1528,
+      "Place": 1460,
+      "Post": 135701,
+      "Tag": 16080,
+      "TagClass": 71
+    }
+  },
+  "dataset": "ldbc-snb-interactive-v1-initial",
+  "excluded": [
+    "root updateStream*.csv",
+    "Hadoop .crc sidecars",
+    "non-CSV runtime artifacts"
+  ],
+  "files": [
+    {
+      "bytes": 13218305,
+      "header": [
+        "id",
+        "creationDate",
+        "locationIP",
+        "browserUsed",
+        "content",
+        "length"
+      ],
+      "path": "dynamic/comment_0_0.csv",
+      "rows": 151043,
+      "sha256": "7a61fad9c9230c0a512e3097cc9de9789c6ca23beafb26f25fda3785746ffee3"
+    },
+    {
+      "bytes": 3953993,
+      "header": [
+        "Comment.id",
+        "Person.id"
+      ],
+      "path": "dynamic/comment_hasCreator_person_0_0.csv",
+      "rows": 151043,
+      "sha256": "d8216c90b519a22fbfcdd9f8c4da9cd7c10ab9c01d9923cef66dbf3dc5cd93b1"
+    },
+    {
+      "bytes": 3459591,
+      "header": [
+        "Comment.id",
+        "Tag.id"
+      ],
+      "path": "dynamic/comment_hasTag_tag_0_0.csv",
+      "rows": 191303,
+      "sha256": "3eb683f632f8a40b8b0a0e93c2567afb267e5f8a0904a74db33f4e295e37b75b"
+    },
+    {
+      "bytes": 2398376,
+      "header": [
+        "Comment.id",
+        "Place.id"
+      ],
+      "path": "dynamic/comment_isLocatedIn_place_0_0.csv",
+      "rows": 151043,
+      "sha256": "f1392ead20af1262e116520a3bfea5c9b0b98034973a9bb10a07318403246aec"
+    },
+    {
+      "bytes": 2006899,
+      "header": [
+        "Comment.id",
+        "Comment.id"
+      ],
+      "path": "dynamic/comment_replyOf_comment_0_0.csv",
+      "rows": 76787,
+      "sha256": "e021bdf50628abec989e26b8c193c67d6374a727efe51b9ef273781f962868ca"
+    },
+    {
+      "bytes": 1942023,
+      "header": [
+        "Comment.id",
+        "Post.id"
+      ],
+      "path": "dynamic/comment_replyOf_post_0_0.csv",
+      "rows": 74256,
+      "sha256": "faea7f994a5aa16679d595602e2dc387db1c8f085acd1c86fbdd3a8c555b2584"
+    },
+    {
+      "bytes": 713464,
+      "header": [
+        "id",
+        "title",
+        "creationDate"
+      ],
+      "path": "dynamic/forum_0_0.csv",
+      "rows": 13750,
+      "sha256": "f881c221bb3cf45c2a521871781dca515edb8765ec3a5457e9e545c0de1e9311"
+    },
+    {
+      "bytes": 3535256,
+      "header": [
+        "Forum.id",
+        "Post.id"
+      ],
+      "path": "dynamic/forum_containerOf_post_0_0.csv",
+      "rows": 135701,
+      "sha256": "d049bc05cd1477569c170bb984f77bfa2cada4276f1aca2b5348f2f32b4f01d9"
+    },
+    {
+      "bytes": 5033179,
+      "header": [
+        "Forum.id",
+        "Person.id",
+        "joinDate"
+      ],
+      "path": "dynamic/forum_hasMember_person_0_0.csv",
+      "rows": 123268,
+      "sha256": "ecc6ac977063e918d5bf2787647328ff724c16ba8c8614118ef5408d0f3ac0c6"
+    },
+    {
+      "bytes": 364464,
+      "header": [
+        "Forum.id",
+        "Person.id"
+      ],
+      "path": "dynamic/forum_hasModerator_person_0_0.csv",
+      "rows": 13750,
+      "sha256": "62acdc36dd39a0f2379b5f1eac96b7fb066c437c069c526f263656bcf715c856"
+    },
+    {
+      "bytes": 838260,
+      "header": [
+        "Forum.id",
+        "Tag.id"
+      ],
+      "path": "dynamic/forum_hasTag_tag_0_0.csv",
+      "rows": 47697,
+      "sha256": "714acb5f812ab7b0e802134db03f22bbff05986931690f1b61dd16259cbdf616"
+    },
+    {
+      "bytes": 128884,
+      "header": [
+        "id",
+        "firstName",
+        "lastName",
+        "gender",
+        "birthday",
+        "creationDate",
+        "locationIP",
+        "browserUsed"
+      ],
+      "path": "dynamic/person_0_0.csv",
+      "rows": 1528,
+      "sha256": "fe79de0f2fe6cd23da5919a3207f4f7cda8988fcf22d5309c1cdf296edda82bc"
+    },
+    {
+      "bytes": 146096,
+      "header": [
+        "Person.id",
+        "email"
+      ],
+      "path": "dynamic/person_email_emailaddress_0_0.csv",
+      "rows": 3310,
+      "sha256": "e99c8db739d54e46e9b6c0b9aa97db245cae1057e05942994ffacd896dfdbb83"
+    },
+    {
+      "bytes": 676851,
+      "header": [
+        "Person.id",
+        "Tag.id"
+      ],
+      "path": "dynamic/person_hasInterest_tag_0_0.csv",
+      "rows": 35475,
+      "sha256": "32ddc6453110fa646e669782f529d2f73b4ca0555e326f126b2995e0c2967468"
+    },
+    {
+      "bytes": 28404,
+      "header": [
+        "Person.id",
+        "Place.id"
+      ],
+      "path": "dynamic/person_isLocatedIn_place_0_0.csv",
+      "rows": 1528,
+      "sha256": "bd3b43330b765ac1af51651f937fdae95abbf9a0dd511370f685527c0b195ca4"
+    },
+    {
+      "bytes": 592535,
+      "header": [
+        "Person.id",
+        "Person.id",
+        "creationDate"
+      ],
+      "path": "dynamic/person_knows_person_0_0.csv",
+      "rows": 14073,
+      "sha256": "6a6fa1ef658e0fbfe8b0184575772217d5563ea9e8aa859b2d96d737e2ff3d25"
+    },
+    {
+      "bytes": 2567488,
+      "header": [
+        "Person.id",
+        "Comment.id",
+        "creationDate"
+      ],
+      "path": "dynamic/person_likes_comment_0_0.csv",
+      "rows": 62225,
+      "sha256": "f1e4bb5b142cd9dae41041f8a8be191d29a2ce6b2bde7961f080ae4c6d6b8896"
+    },
+    {
+      "bytes": 1939177,
+      "header": [
+        "Person.id",
+        "Post.id",
+        "creationDate"
+      ],
+      "path": "dynamic/person_likes_post_0_0.csv",
+      "rows": 47215,
+      "sha256": "24fda1be6785da83fe4b7d15a4594157cf7813c0b23a03d4458da4561e8cea91"
+    },
+    {
+      "bytes": 58282,
+      "header": [
+        "Person.id",
+        "language"
+      ],
+      "path": "dynamic/person_speaks_language_0_0.csv",
+      "rows": 3385,
+      "sha256": "52b1da354b80c7f76d0bac697d973a7c07fbafc0987785007a63511de8321a35"
+    },
+    {
+      "bytes": 29287,
+      "header": [
+        "Person.id",
+        "Organisation.id",
+        "classYear"
+      ],
+      "path": "dynamic/person_studyAt_organisation_0_0.csv",
+      "rows": 1209,
+      "sha256": "c1ca2230c1d693f4b3d389569eb2c8ce795210696de9e5d617c3fe0cd5640aa1"
+    },
+    {
+      "bytes": 77429,
+      "header": [
+        "Person.id",
+        "Organisation.id",
+        "workFrom"
+      ],
+      "path": "dynamic/person_workAt_organisation_0_0.csv",
+      "rows": 3313,
+      "sha256": "b1a6424f226e3d8082865183193faac5b13791ad7808b543bb6c186602a8848a"
+    },
+    {
+      "bytes": 12003836,
+      "header": [
+        "id",
+        "imageFile",
+        "creationDate",
+        "locationIP",
+        "browserUsed",
+        "language",
+        "content",
+        "length"
+      ],
+      "path": "dynamic/post_0_0.csv",
+      "rows": 135701,
+      "sha256": "92b35849a71fb33c48f233d0e4ac1c3341c6ca6f5bc15fff6a4e18b585455dc3"
+    },
+    {
+      "bytes": 3591800,
+      "header": [
+        "Post.id",
+        "Person.id"
+      ],
+      "path": "dynamic/post_hasCreator_person_0_0.csv",
+      "rows": 135701,
+      "sha256": "36e6da71ecb1bf789d126d81c4f5e2fb32553a8e1343a547a797bdafb8062afc"
+    },
+    {
+      "bytes": 911075,
+      "header": [
+        "Post.id",
+        "Tag.id"
+      ],
+      "path": "dynamic/post_hasTag_tag_0_0.csv",
+      "rows": 51118,
+      "sha256": "cabbdf6b6912f737811639038bdb54ae67ece7e0a1390adc6a63d839be866957"
+    },
+    {
+      "bytes": 2155859,
+      "header": [
+        "Post.id",
+        "Place.id"
+      ],
+      "path": "dynamic/post_isLocatedIn_place_0_0.csv",
+      "rows": 135701,
+      "sha256": "0d8035b49aaa07b7be466e58defb06b56ca4402b18df308e4ceef5f5a7d58915"
+    },
+    {
+      "bytes": 674,
+      "path": "params.ini",
+      "sha256": "a725b7bf6447fb6b504c1f572a8fa201a5a736cb2cd8400a7b2e8fc128d4edeb"
+    },
+    {
+      "bytes": 819926,
+      "header": [
+        "id",
+        "type",
+        "name",
+        "url"
+      ],
+      "path": "static/organisation_0_0.csv",
+      "rows": 7955,
+      "sha256": "37415355e0d524be6f2f8321e4dd9290da7f94b955284bf8be443478fcbfe366"
+    },
+    {
+      "bytes": 70928,
+      "header": [
+        "Organisation.id",
+        "Place.id"
+      ],
+      "path": "static/organisation_isLocatedIn_place_0_0.csv",
+      "rows": 7955,
+      "sha256": "9783fac3ea1293775c80e9657c107679b4b9ac458555eae014a284ed2d9e8465"
+    },
+    {
+      "bytes": 81884,
+      "header": [
+        "id",
+        "name",
+        "url",
+        "type"
+      ],
+      "path": "static/place_0_0.csv",
+      "rows": 1460,
+      "sha256": "f2ecc4db415c122d5de97931f4b0c3aea93c318c849390ed01006fe860c48236"
+    },
+    {
+      "bytes": 10458,
+      "header": [
+        "Place.id",
+        "Place.id"
+      ],
+      "path": "static/place_isPartOf_place_0_0.csv",
+      "rows": 1454,
+      "sha256": "b3892a6708fe8315f3212382d903cde7b06238dece86d8c15776d64b996762b8"
+    },
+    {
+      "bytes": 1106348,
+      "header": [
+        "id",
+        "name",
+        "url"
+      ],
+      "path": "static/tag_0_0.csv",
+      "rows": 16080,
+      "sha256": "a1c976ef974519d52261800631e9038ddd9cd29e99727b06f1eda130b7700f1f"
+    },
+    {
+      "bytes": 147267,
+      "header": [
+        "Tag.id",
+        "TagClass.id"
+      ],
+      "path": "static/tag_hasType_tagclass_0_0.csv",
+      "rows": 16080,
+      "sha256": "6afdf21e6a8c96b72e33f384a335b6cc69297b690376a367a9af05ca00ac4205"
+    },
+    {
+      "bytes": 3874,
+      "header": [
+        "id",
+        "name",
+        "url"
+      ],
+      "path": "static/tagclass_0_0.csv",
+      "rows": 71,
+      "sha256": "433b19e0b95b0c9b8a3a1a4ca1c638fadc6fbd28f7501e57abd0b3f5b8d56a92"
+    },
+    {
+      "bytes": 545,
+      "header": [
+        "TagClass.id",
+        "TagClass.id"
+      ],
+      "path": "static/tagclass_isSubclassOf_tagclass_0_0.csv",
+      "rows": 70,
+      "sha256": "9302ffa1c37648743864e32c2cca872abea3bf34f841729d5448f53976aa9d4d"
+    }
+  ],
+  "format": "polygraph.reference.dataset-lock",
+  "identity": [
+    "entity_type",
+    "original_ldbc_id"
+  ],
+  "provenance": {
+    "archive_sha256": null,
+    "generator_commit": null,
+    "generator_repository": "https://github.com/ldbc/ldbc_snb_datagen_hadoop",
+    "generator_seed": null,
+    "parameters": {
+      "ldbc.snb.datagen.generator.scaleFactor": "snb.interactive.0.1",
+      "ldbc.snb.datagen.parametergenerator.parameters": "false",
+      "ldbc.snb.datagen.serializer.dateFormatter": "ldbc.snb.datagen.util.formatter.LongDateFormatter",
+      "ldbc.snb.datagen.serializer.dynamicActivitySerializer": "ldbc.snb.datagen.serializer.snb.csv.dynamicserializer.activity.CsvBasicDynamicActivitySerializer",
+      "ldbc.snb.datagen.serializer.dynamicPersonSerializer": "ldbc.snb.datagen.serializer.snb.csv.dynamicserializer.person.CsvBasicDynamicPersonSerializer",
+      "ldbc.snb.datagen.serializer.numUpdatePartitions": "1",
+      "ldbc.snb.datagen.serializer.staticSerializer": "ldbc.snb.datagen.serializer.snb.csv.staticserializer.CsvBasicStaticSerializer"
+    },
+    "status": "local snapshot; generator commit, seed and archive not independently established"
+  },
+  "scale_factor": "0.1",
+  "schema_sha256": "4747c5caa548fadfbe0772b5008fffb91831cdd7ccf7b4effb9ff4d62f7a4265",
+  "serializer": "CsvBasic",
+  "snapshot_sha256": "c920a481599751dbcfef9117f73aae0ffa643034bc338bb2fd02011c87d2b9f4",
+  "version": 1
+}

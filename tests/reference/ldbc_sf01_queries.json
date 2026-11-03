@@ -1,0 +1,505 @@
+{
+  "dataset_lock_sha256": "0452ddd3af9093e5cc039e45bd5bea7b89e72760e70e53d82cc49c857bae551f",
+  "format": "polygraph.reference.queries",
+  "queries": [
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "comment-min-both-d7",
+      "return_predecessors": true,
+      "root": "comment-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "comment-max-degree-both-d7",
+      "return_predecessors": true,
+      "root": "comment-max-degree",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "forum-min-both-d7",
+      "return_predecessors": true,
+      "root": "forum-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "forum-max-degree-both-d7",
+      "return_predecessors": true,
+      "root": "forum-max-degree",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "organisation-min-both-d7",
+      "return_predecessors": true,
+      "root": "organisation-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "organisation-max-degree-both-d7",
+      "return_predecessors": true,
+      "root": "organisation-max-degree",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "person-min-both-d7",
+      "return_predecessors": true,
+      "root": "person-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "person-max-degree-both-d7",
+      "return_predecessors": true,
+      "root": "person-max-degree",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "place-min-both-d7",
+      "return_predecessors": true,
+      "root": "place-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "post-min-both-d7",
+      "return_predecessors": true,
+      "root": "post-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "post-max-degree-both-d7",
+      "return_predecessors": true,
+      "root": "post-max-degree",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "tag-min-both-d7",
+      "return_predecessors": true,
+      "root": "tag-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "tag-max-degree-both-d7",
+      "return_predecessors": true,
+      "root": "tag-max-degree",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "tagclass-min-both-d7",
+      "return_predecessors": true,
+      "root": "tagclass-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "tagclass-max-degree-both-d7",
+      "return_predecessors": true,
+      "root": "tagclass-max-degree",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "hash-rank-00-both-d7",
+      "return_predecessors": true,
+      "root": "hash-rank-00",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "hash-rank-01-both-d7",
+      "return_predecessors": true,
+      "root": "hash-rank-01",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "hash-rank-02-both-d7",
+      "return_predecessors": true,
+      "root": "hash-rank-02",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "hash-rank-03-both-d7",
+      "return_predecessors": true,
+      "root": "hash-rank-03",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "hash-rank-04-both-d7",
+      "return_predecessors": true,
+      "root": "hash-rank-04",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "hash-rank-05-both-d7",
+      "return_predecessors": true,
+      "root": "hash-rank-05",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "hash-rank-06-both-d7",
+      "return_predecessors": true,
+      "root": "hash-rank-06",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "hash-rank-07-both-d7",
+      "return_predecessors": true,
+      "root": "hash-rank-07",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 7,
+      "name": "hash-rank-08-both-d7",
+      "return_predecessors": true,
+      "root": "hash-rank-08",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 0,
+      "name": "boundary-d0",
+      "return_predecessors": true,
+      "root": "person-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 1,
+      "name": "boundary-d1",
+      "return_predecessors": true,
+      "root": "person-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 2,
+      "name": "boundary-d2",
+      "return_predecessors": true,
+      "root": "person-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 3,
+      "name": "boundary-d3",
+      "return_predecessors": true,
+      "root": "person-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": null,
+      "name": "boundary-dunlimited",
+      "return_predecessors": true,
+      "root": "person-min",
+      "target_types": []
+    },
+    {
+      "direction": "outgoing",
+      "edge_types": [],
+      "max_depth": 3,
+      "name": "comment-outgoing-d3",
+      "return_predecessors": true,
+      "root": "comment-min",
+      "target_types": []
+    },
+    {
+      "direction": "outgoing",
+      "edge_types": [],
+      "max_depth": 3,
+      "name": "forum-outgoing-d3",
+      "return_predecessors": true,
+      "root": "forum-min",
+      "target_types": []
+    },
+    {
+      "direction": "outgoing",
+      "edge_types": [],
+      "max_depth": 3,
+      "name": "organisation-outgoing-d3",
+      "return_predecessors": true,
+      "root": "organisation-min",
+      "target_types": []
+    },
+    {
+      "direction": "outgoing",
+      "edge_types": [],
+      "max_depth": 3,
+      "name": "person-outgoing-d3",
+      "return_predecessors": true,
+      "root": "person-min",
+      "target_types": []
+    },
+    {
+      "direction": "outgoing",
+      "edge_types": [],
+      "max_depth": 3,
+      "name": "place-outgoing-d3",
+      "return_predecessors": true,
+      "root": "place-min",
+      "target_types": []
+    },
+    {
+      "direction": "outgoing",
+      "edge_types": [],
+      "max_depth": 3,
+      "name": "post-outgoing-d3",
+      "return_predecessors": true,
+      "root": "post-min",
+      "target_types": []
+    },
+    {
+      "direction": "outgoing",
+      "edge_types": [],
+      "max_depth": 3,
+      "name": "tag-outgoing-d3",
+      "return_predecessors": true,
+      "root": "tag-min",
+      "target_types": []
+    },
+    {
+      "direction": "outgoing",
+      "edge_types": [],
+      "max_depth": 3,
+      "name": "tagclass-outgoing-d3",
+      "return_predecessors": true,
+      "root": "tagclass-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [
+        "PERSON_KNOWS_PERSON"
+      ],
+      "max_depth": null,
+      "name": "person-min-knows-unlimited",
+      "return_predecessors": true,
+      "root": "person-min",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [
+        "PERSON_KNOWS_PERSON"
+      ],
+      "max_depth": null,
+      "name": "person-max-degree-knows-unlimited",
+      "return_predecessors": true,
+      "root": "person-max-degree",
+      "target_types": []
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 3,
+      "name": "target-person-d3",
+      "return_predecessors": true,
+      "root": "person-min",
+      "target_types": [
+        "Person"
+      ]
+    },
+    {
+      "direction": "both",
+      "edge_types": [],
+      "max_depth": 3,
+      "name": "distance-only-d3",
+      "return_predecessors": false,
+      "root": "person-min",
+      "target_types": []
+    }
+  ],
+  "roots": [
+    {
+      "name": "comment-min",
+      "vertex_id": "32485",
+      "vertex_type": "Comment"
+    },
+    {
+      "name": "comment-max-degree",
+      "vertex_id": "618475628146",
+      "vertex_type": "Comment"
+    },
+    {
+      "name": "forum-min",
+      "vertex_id": "0",
+      "vertex_type": "Forum"
+    },
+    {
+      "name": "forum-max-degree",
+      "vertex_id": "68719491952",
+      "vertex_type": "Forum"
+    },
+    {
+      "name": "organisation-min",
+      "vertex_id": "0",
+      "vertex_type": "Organisation"
+    },
+    {
+      "name": "organisation-max-degree",
+      "vertex_id": "553",
+      "vertex_type": "Organisation"
+    },
+    {
+      "name": "person-min",
+      "vertex_id": "65",
+      "vertex_type": "Person"
+    },
+    {
+      "name": "person-max-degree",
+      "vertex_id": "2199023256816",
+      "vertex_type": "Person"
+    },
+    {
+      "name": "place-min",
+      "vertex_id": "0",
+      "vertex_type": "Place"
+    },
+    {
+      "name": "post-min",
+      "vertex_id": "3",
+      "vertex_type": "Post"
+    },
+    {
+      "name": "post-max-degree",
+      "vertex_id": "1030792516845",
+      "vertex_type": "Post"
+    },
+    {
+      "name": "tag-min",
+      "vertex_id": "0",
+      "vertex_type": "Tag"
+    },
+    {
+      "name": "tag-max-degree",
+      "vertex_id": "6",
+      "vertex_type": "Tag"
+    },
+    {
+      "name": "tagclass-min",
+      "vertex_id": "0",
+      "vertex_type": "TagClass"
+    },
+    {
+      "name": "tagclass-max-degree",
+      "vertex_id": "182",
+      "vertex_type": "TagClass"
+    },
+    {
+      "name": "hash-rank-00",
+      "vertex_id": "962072843196",
+      "vertex_type": "Comment"
+    },
+    {
+      "name": "hash-rank-01",
+      "vertex_id": "137439187690",
+      "vertex_type": "Post"
+    },
+    {
+      "name": "hash-rank-02",
+      "vertex_id": "206158612095",
+      "vertex_type": "Comment"
+    },
+    {
+      "name": "hash-rank-03",
+      "vertex_id": "962072863035",
+      "vertex_type": "Post"
+    },
+    {
+      "name": "hash-rank-04",
+      "vertex_id": "755914457354",
+      "vertex_type": "Comment"
+    },
+    {
+      "name": "hash-rank-05",
+      "vertex_id": "755914542443",
+      "vertex_type": "Post"
+    },
+    {
+      "name": "hash-rank-06",
+      "vertex_id": "137439029538",
+      "vertex_type": "Comment"
+    },
+    {
+      "name": "hash-rank-07",
+      "vertex_id": "962072883891",
+      "vertex_type": "Comment"
+    },
+    {
+      "name": "hash-rank-08",
+      "vertex_id": "824633924910",
+      "vertex_type": "Post"
+    }
+  ],
+  "selection": "per-type min ID + max distinct Both degree (ties min ID), fill to 24 by SHA256(type:id)",
+  "version": 1
+}
