@@ -1,0 +1,3 @@
+add_executable(polygraph_bulk_import main.cpp)
+target_link_libraries(polygraph_bulk_import PRIVATE polygraph::ingestion)
+polygraph_configure_target(polygraph_bulk_import)

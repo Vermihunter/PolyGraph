@@ -1,0 +1,33 @@
+{
+  "targets": {
+    "PostgreSQL": {
+      "database": "bulk_example_pg",
+      "host": "127.0.0.1",
+      "port": 5432,
+      "username": "polygraph_import",
+      "password_env": "POLYGRAPH_IMPORT_PG_PASSWORD",
+      "traversal_indexes": false
+    },
+    "ArangoDB": {
+      "database": "bulk_example_arango",
+      "endpoint": "http://127.0.0.1:8529",
+      "username": "polygraph_import",
+      "password_env": "POLYGRAPH_IMPORT_ARANGO_PASSWORD",
+      "timeout_seconds": 900
+    },
+    "Neo4J": {
+      "database": "bulk-example-neo",
+      "offline": true,
+      "runner": ["neo4j-admin"],
+      "preflight_command": ["/absolute/path/to/operator-offline-fresh-check", "bulk-example-neo"],
+      "start_command": ["/absolute/path/to/operator-start-isolated-dbms", "bulk-example-neo"],
+      "artifact_root": "/absolute/shared/path/to/artifacts",
+      "endpoint": "http://127.0.0.1:7474",
+      "username": "polygraph_import",
+      "password_env": "POLYGRAPH_IMPORT_NEO_PASSWORD",
+      "threads": 4,
+      "startup_attempts": 60,
+      "timeout_seconds": 900
+    }
+  }
+}

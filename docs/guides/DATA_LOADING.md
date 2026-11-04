@@ -55,3 +55,7 @@ Redis is materialized only from the selected plan's `redis/index.bin` and `redis
 ```bash
 python3 tools/polygraph.py cache redis-load DOMAIN --cache-plan CACHE/cache-plan.json
 ```
+
+## Standalone native bulk ingestion
+
+The C++ `polygraph_bulk_import` CLI prepares checksummed PostgreSQL COPY, Neo4j offline CSV and ArangoDB JSONL artifacts without contacting services. See [Native bulk ingestion](BULK_INGESTION.md) for commands, isolated-target execution, verification and recovery. The existing Python loader remains available.

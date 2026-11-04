@@ -21,7 +21,7 @@ PolyGraph is a C++23 research runtime that executes graph traversals over a **si
 
 ### Guides · do something
 
-[Getting started](guides/GETTING_STARTED.md) · [Building](guides/BUILDING.md) · [Data loading](guides/DATA_LOADING.md) · [LDBC fast preparation](guides/FAST_LDBC_PREPARATION.md) · [Benchmarking](guides/BENCHMARKING.md) · [Scripts](guides/SCRIPTS.md) · [Testing](guides/TESTING.md) · [Troubleshooting](guides/TROUBLESHOOTING.md)
+[Getting started](guides/GETTING_STARTED.md) · [Building](guides/BUILDING.md) · [Data loading](guides/DATA_LOADING.md) · [Native bulk ingestion](guides/BULK_INGESTION.md) · [LDBC fast preparation](guides/FAST_LDBC_PREPARATION.md) · [Benchmarking](guides/BENCHMARKING.md) · [Scripts](guides/SCRIPTS.md) · [Testing](guides/TESTING.md) · [Troubleshooting](guides/TROUBLESHOOTING.md)
 
 ### Architecture · understand how it works
 

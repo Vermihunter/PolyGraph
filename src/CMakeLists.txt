@@ -25,3 +25,7 @@ if(POLYGRAPH_BUILD_DISTRIBUTED_GPU_EXPERIMENTS)
     endif()
     add_subdirectory(gpu/distributed)
 endif()
+
+if(POLYGRAPH_BUILD_BULK_IMPORT)
+    add_subdirectory(ingestion)
+endif()

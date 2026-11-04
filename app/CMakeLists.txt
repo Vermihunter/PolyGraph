@@ -9,3 +9,7 @@ endif()
 if(POLYGRAPH_BUILD_HTTP)
     add_subdirectory(http_server)
 endif()
+
+if(POLYGRAPH_BUILD_BULK_IMPORT)
+    add_subdirectory(bulk_import)
+endif()

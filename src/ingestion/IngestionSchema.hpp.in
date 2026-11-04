@@ -1,0 +1,6 @@
+#ifndef POLYGRAPH_INGESTION_SCHEMA_HPP
+#define POLYGRAPH_INGESTION_SCHEMA_HPP
+namespace polygraph::ingestion::detail {
+inline constexpr const char *schema_sql=R"POLYGRAPH_SQL(@POLYGRAPH_INGESTION_SCHEMA@)POLYGRAPH_SQL";
+}
+#endif

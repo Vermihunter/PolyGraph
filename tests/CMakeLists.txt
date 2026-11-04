@@ -131,3 +131,26 @@ set_tests_properties(python.developer_quality PROPERTIES
     LABELS "unit;python;developer"
     TIMEOUT 60
 )
+
+if(TARGET polygraph_ingestion)
+    polygraph_add_unit_test(polygraph_ingestion_test ingestion_test.cpp polygraph::ingestion)
+endif()
+if(TARGET polygraph_bulk_import)
+    add_test(NAME python.ingestion_semantics
+        COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
+                "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_semantics -v)
+    set_tests_properties(python.ingestion_semantics PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 60)
+endif()
+if(POLYGRAPH_INGESTION_LIVE_TESTS)
+    if(NOT TARGET polygraph_bulk_import OR NOT TARGET polygraph_bfs)
+        message(FATAL_ERROR "Ingestion live tests require bulk importer and CPU BFS targets")
+    endif()
+    foreach(adapter ldbc-snb polygraph-jsonl)
+        add_test(NAME "integration.ingestion.${adapter}"
+            COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/ingestion/disposable_live.py"
+                --run --unique-output --adapter "${adapter}"
+                --binary "$<TARGET_FILE:polygraph_bulk_import>" --bfs "$<TARGET_FILE:polygraph_bfs>"
+                --output-dir "${CMAKE_BINARY_DIR}/ingestion-live/ctest")
+        set_tests_properties("integration.ingestion.${adapter}" PROPERTIES LABELS "integration;live;ingestion" TIMEOUT 300 RUN_SERIAL TRUE)
+    endforeach()
+endif()

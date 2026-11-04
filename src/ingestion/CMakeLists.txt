@@ -1,0 +1,28 @@
+find_package(SQLite3 REQUIRED)
+find_package(OpenSSL REQUIRED COMPONENTS SSL Crypto)
+find_package(Threads REQUIRED)
+add_library(polygraph_ingestion STATIC
+    Config.cpp Storage.cpp Input.cpp Normalize.cpp Writers.cpp Import.cpp Process.cpp
+    Execute.cpp Postgres.cpp Http.cpp Arango.cpp Neo4j.cpp
+    "${PROJECT_SOURCE_DIR}/src/insertion/BackendEncodedUuid.cpp"
+)
+add_library(polygraph::ingestion ALIAS polygraph_ingestion)
+target_link_libraries(polygraph_ingestion PUBLIC SQLite::SQLite3 OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+polygraph_configure_target(polygraph_ingestion)
+
+file(READ "${PROJECT_SOURCE_DIR}/storage_layer/postgresql/init/001_polygraph.sql" POLYGRAPH_INGESTION_SCHEMA)
+string(REPLACE "CREATE TABLE IF NOT EXISTS polygraph_" "CREATE TABLE IF NOT EXISTS public.polygraph_" POLYGRAPH_INGESTION_SCHEMA "${POLYGRAPH_INGESTION_SCHEMA}")
+configure_file(IngestionSchema.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/IngestionSchema.hpp" @ONLY)
+target_include_directories(polygraph_ingestion PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+if(POLYGRAPH_INGESTION_NATIVE_EXECUTORS)
+    find_package(PostgreSQL QUIET)
+    find_package(CURL QUIET)
+    if(PostgreSQL_FOUND)
+        target_link_libraries(polygraph_ingestion PRIVATE PostgreSQL::PostgreSQL)
+        target_compile_definitions(polygraph_ingestion PRIVATE POLYGRAPH_INGESTION_HAS_LIBPQ=1)
+    endif()
+    if(CURL_FOUND)
+        target_link_libraries(polygraph_ingestion PRIVATE CURL::libcurl)
+        target_compile_definitions(polygraph_ingestion PRIVATE POLYGRAPH_INGESTION_HAS_CURL=1)
+    endif()
+endif()

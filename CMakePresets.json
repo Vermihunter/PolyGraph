@@ -63,6 +63,7 @@
       "cacheVariables": {
         "POLYGRAPH_BUILD_BACKENDS": "ON",
         "POLYGRAPH_BUILD_BFS": "ON",
+        "POLYGRAPH_BUILD_BULK_IMPORT": "ON",
         "POLYGRAPH_ENABLE_CLANG_FORMAT": "OFF",
         "POLYGRAPH_ENABLE_CLANG_TIDY": "OFF"
       }
