@@ -1,0 +1,17 @@
+{
+  "storageBackends": [
+    "Neo4J",
+    "ArangoDB",
+    "PostgreSQL"
+  ],
+  "nodeSources": {
+    "Person": "Neo4J",
+    "Post": "ArangoDB",
+    "Place": "PostgreSQL"
+  },
+  "relationshipSources": {
+    "PERSON_LIKES_POST": "PostgreSQL",
+    "POST_ISLOCATEDIN_PLACE": "ArangoDB",
+    "POST_HASCREATOR_PERSON": "Neo4J"
+  }
+}

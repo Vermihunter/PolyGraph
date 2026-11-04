@@ -1,0 +1,236 @@
+#include <algorithm>
+#include <charconv>
+#include <map>
+#include <set>
+#include "Internal.hpp"
+#include "LdbcSpec.hpp"
+
+namespace polygraph::ingestion::detail {
+    namespace {
+        class LdbcIds {
+        public:
+            Id node(const Record &r, Backend backend) {
+                const auto text = r.key.substr(r.key.find(':') + 1);
+                std::uint64_t raw = 0;
+                const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), raw);
+                if (error != std::errc{} || end != text.data() + text.size() || text.empty())
+                    throw Error("LDBC ID must be a nonnegative uint64: " + r.key);
+                const auto pair = std::pair(r.type, raw >> 31);
+                auto it = prefixes_.find(pair);
+                if (it == prefixes_.end()) {
+                    if (prefixes_.size() >= 65536)
+                        throw Error("LDBC block31 prefix dictionary exhausted (65536 entries)");
+                    it = prefixes_.emplace(pair, prefixes_.size()).first;
+                }
+                return make_id(backend, (static_cast<Id>(it->second) << 31) | (raw & ((Id{1} << 31) - 1)));
+            }
+            Id edge(const Record &r, Backend backend) {
+                const auto it = std::ranges::find_if(edge_specs, [&](const auto &s) { return s.type == r.type; });
+                if (it == edge_specs.end())
+                    throw Error("Unknown LDBC relation type: " + r.type);
+                auto &sequence = sequences_[{r.type, backend}];
+                if (sequence >= (Id{1} << 42))
+                    throw Error("LDBC relationship sequence exhausted");
+                return make_id(backend, (Id{1} << 47) | (static_cast<Id>(it - edge_specs.begin()) << 42) | sequence++);
+            }
+            Json metadata() const {
+                Json entries = Json::array();
+                for (const auto &[pair, code]: prefixes_)
+                    entries[code] = {{"type", pair.first}, {"rawPrefix", pair.second}, {"code", code}};
+                return entries;
+            }
+
+        private:
+            std::map<std::pair<std::string, Id>, std::size_t> prefixes_;
+            std::map<std::pair<std::string, Backend>, Id> sequences_;
+        };
+        void validate_record(const Record &r) {
+            if (r.type.empty() || r.type.find('\0') != std::string::npos)
+                throw Error("Empty/invalid entity type");
+            if (r.type == "Proxy")
+                throw Error("Proxy is reserved for generated cross-backend vertices");
+            validate_properties(r.properties);
+        }
+    } // namespace
+    Json normalize(const PrepareOptions &o, const Placement &placement, const fs::path &scratch) {
+        const auto start = Clock::now();
+        Database db(scratch / "graph.sqlite3", std::max(1U, o.memory_limit_mb / 4));
+        db.exec(R"(
+            CREATE TABLE identities(id INTEGER PRIMARY KEY);
+            CREATE TABLE nodes(id INTEGER PRIMARY KEY,original INTEGER NOT NULL,key TEXT NOT NULL UNIQUE,type TEXT NOT NULL,owner TEXT NOT NULL,properties TEXT NOT NULL,residency INTEGER NOT NULL);
+            CREATE TABLE edges(id INTEGER PRIMARY KEY,original INTEGER NOT NULL,type TEXT NOT NULL,owner TEXT NOT NULL,from_id INTEGER NOT NULL,to_id INTEGER NOT NULL,properties TEXT NOT NULL);
+            CREATE TABLE replicas(backend TEXT NOT NULL,edge_id INTEGER NOT NULL,PRIMARY KEY(backend,edge_id)) WITHOUT ROWID;
+            CREATE TABLE proxies(backend TEXT NOT NULL,node_id INTEGER NOT NULL,PRIMARY KEY(backend,node_id)) WITHOUT ROWID;
+            CREATE TABLE partitions(key TEXT PRIMARY KEY,partition INTEGER NOT NULL) WITHOUT ROWID;
+            CREATE INDEX nodes_owner ON nodes(owner,id);
+        )");
+        Json partition_map = Json::object();
+        if (!o.partition_file.empty()) {
+            if (o.partition_map.empty())
+                throw Error("--partition-file requires --partition-map");
+            partition_map = read_json(o.partition_map);
+            if (!partition_map.is_object())
+                throw Error("Partition map must be an object mapping partition numbers to backends");
+            for (const auto &value: partition_map)
+                placement.validate(parse_backend(value.get<std::string>()));
+            std::ifstream in(o.partition_file);
+            if (!in)
+                throw Error("Cannot read partition file");
+            auto insert = db.statement("INSERT INTO partitions VALUES(?,?)");
+            std::string line;
+            db.exec("BEGIN");
+            while (std::getline(in, line)) {
+                if (line.size() > static_cast<std::size_t>(o.max_record_mb) * 1024 * 1024)
+                    throw Error("Partition record too large");
+                if (line.empty())
+                    continue;
+                const auto value = Json::parse(line);
+                insert.bind(1, value.at("key").get<std::string>());
+                insert.bind(2, static_cast<std::int64_t>(value.at("partition").get<unsigned>()));
+                insert.run();
+            }
+            if (!in.eof())
+                throw Error("Partition file read failed");
+            db.exec("COMMIT");
+        } else if (!o.partition_map.empty())
+            throw Error("--partition-map requires --partition-file");
+        auto adapter = make_adapter(o, scratch);
+        auto entity = db.statement("INSERT INTO identities VALUES(?)");
+        auto node_insert = db.statement("INSERT INTO nodes VALUES(?,?,?,?,?,?,?)");
+        auto edge_insert = db.statement("INSERT INTO edges VALUES(?,?,?,?,?,?,?)");
+        auto lookup = db.statement("SELECT id,type,owner FROM nodes WHERE key=?");
+        auto partition = db.statement("SELECT partition FROM partitions WHERE key=?");
+        auto replica = db.statement("INSERT INTO replicas VALUES(?,?)");
+        auto proxy = db.statement("INSERT OR IGNORE INTO proxies VALUES(?,?)");
+        LdbcIds ids;
+        std::uint64_t nodes = 0, edges = 0, cut = 0;
+        std::map<std::string, std::string> safe_types;
+        std::size_t type_bytes = 0;
+        const auto check_type = [&](const std::string &type) {
+            const auto safe = sanitize_name(type);
+            if (safe == "Proxy" || safe == "polygraph_bulk_import_lock")
+                throw Error("Entity type aliases reserved Proxy collection");
+            if (safe.size() > 200)
+                throw Error("Sanitized type name exceeds the 200-byte artifact/collection limit");
+            const auto [it, inserted] = safe_types.emplace(safe, type);
+            if (inserted) {
+                type_bytes += safe.size() + type.size() + 64;
+                if (safe_types.size() > 4096 || type_bytes > 1024 * 1024)
+                    throw Error("Type dictionary exceeds bounded 4096-type/1-MiB limit");
+            }
+            if (!inserted && it->second != type)
+                throw Error("Entity types collide after label/collection sanitization: " + type + " and " + it->second);
+        };
+        db.exec("BEGIN");
+        adapter->nodes([&](Record r) {
+            validate_record(r);
+            check_type(r.type);
+            auto home = placement.route(r, false);
+            if (!o.partition_file.empty()) {
+                partition.bind(1, r.key);
+                if (!partition.step())
+                    throw Error("Missing external partition assignment for " + r.key);
+                const auto p = std::to_string(partition.integer(0));
+                partition.reset();
+                if (!partition_map.contains(p))
+                    throw Error("Partition has no backend mapping: " + p);
+                const auto assigned = parse_backend(partition_map[p].get<std::string>());
+                if (r.id && assigned != home)
+                    throw Error("Partition mapping cannot rewrite canonical IDs");
+                home = assigned;
+            }
+            const auto id = r.id ? *r.id : ids.node(r, home);
+            const auto canonical = canonical_id(id);
+            entity.bind(1, signed_id(canonical));
+            entity.run();
+            node_insert.bind(1, signed_id(canonical));
+            node_insert.bind(2, signed_id(id));
+            node_insert.bind(3, r.key);
+            node_insert.bind(4, r.type);
+            node_insert.bind(5, backend_name(home));
+            node_insert.bind(6, r.properties.dump());
+            node_insert.bind(7, static_cast<std::int64_t>((id >> 48) ^ (canonical >> 48)));
+            node_insert.run();
+            if (++nodes % 50000 == 0)
+                db.exec("COMMIT; BEGIN");
+        });
+        db.exec("COMMIT; BEGIN");
+        const auto node_seconds = elapsed(start);
+        adapter->relationships([&](Record r) {
+            validate_record(r);
+            check_type(r.type);
+            const auto home = placement.route(r, true);
+            const auto id = r.id ? *r.id : ids.edge(r, home);
+            const auto canonical = canonical_id(id);
+            entity.bind(1, signed_id(canonical));
+            entity.run();
+            struct Endpoint {
+                std::int64_t id;
+                std::string home;
+            };
+            const auto resolve = [&](const std::string &key) {
+                lookup.bind(1, key);
+                if (!lookup.step())
+                    throw Error("Unresolved relationship endpoint " + key + " on " + r.type);
+                Endpoint result{lookup.integer(0), lookup.text(2)};
+                lookup.reset();
+                return result;
+            };
+            const auto from = resolve(r.from), to = resolve(r.to);
+            edge_insert.bind(1, signed_id(canonical));
+            edge_insert.bind(2, signed_id(id));
+            edge_insert.bind(3, r.type);
+            edge_insert.bind(4, backend_name(home));
+            edge_insert.bind(5, from.id);
+            edge_insert.bind(6, to.id);
+            edge_insert.bind(7, r.properties.dump());
+            edge_insert.run();
+            const std::set<std::string> stores{backend_name(home), from.home, to.home};
+            for (const auto &store: stores) {
+                replica.bind(1, store);
+                replica.bind(2, signed_id(canonical));
+                replica.run();
+                for (const auto &endpoint: {from, to})
+                    if (endpoint.home != store) {
+                        proxy.bind(1, store);
+                        proxy.bind(2, endpoint.id);
+                        proxy.run();
+                    }
+            }
+            if (from.home != to.home)
+                ++cut;
+            if (++edges % 50000 == 0)
+                db.exec("COMMIT; BEGIN");
+        });
+        db.exec("COMMIT");
+        const auto metadata = adapter->metadata();
+        if (o.adapter == "polygraph-jsonl") {
+            if (!metadata.contains("idRouting") || !metadata["idRouting"].is_array())
+                throw Error("Canonical JSONL metadata requires idRouting array");
+            std::set<Backend> configured;
+            for (const auto &name: metadata["idRouting"]) {
+                const auto backend = parse_backend(name.get<std::string>());
+                placement.validate(backend);
+                if (!configured.insert(backend).second)
+                    throw Error("Duplicate idRouting entry");
+            }
+            if (configured != std::set<Backend>(placement.backends.begin(), placement.backends.end()))
+                throw Error("JSONL idRouting differs from placement storageBackends");
+            if (metadata.value("idRoutingBits", 16) != 16 || metadata.value("idPayloadBits", 48) != 48)
+                throw Error("Unsupported JSONL ID layout; expected 16 location / 48 payload bits");
+        }
+        return {{"counts", {{"nodes", nodes}, {"edges", edges}}},
+                {"metadata", metadata},
+                {"node_prefixes", ids.metadata()},
+                {"timings",
+                 {{"nodes_seconds", node_seconds},
+                  {"edges_seconds", elapsed(start) - node_seconds},
+                  {"normalization_seconds", elapsed(start)}}},
+                {"partitioning",
+                 {{"algorithm", o.partition_file.empty() ? "none" : "external"},
+                  {"seed", o.seed},
+                  {"seconds", 0},
+                  {"backend_cross_edges", cut},
+                  {"edge_cut_measured", false}}}};
+    }
+} // namespace polygraph::ingestion::detail

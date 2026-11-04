@@ -1,0 +1,69 @@
+{
+  "nodes": [
+    {
+      "uuid": 281474976710657,
+      "type": "Person",
+      "source": "Neo4J",
+      "properties": {
+        "firstName": "Zoë|😀",
+        "birthday": "2000-01-01",
+        "ldbc_id": 1,
+        "email": [
+          "a@example.org",
+          "b@example.org"
+        ],
+        "language": [
+          "en",
+          "sk"
+        ]
+      }
+    },
+    {
+      "uuid": 562952100904962,
+      "type": "Post",
+      "source": "ArangoDB",
+      "properties": {
+        "content": "hello, \"world\"\nnext",
+        "length": 12,
+        "ldbc_id": 2
+      }
+    },
+    {
+      "uuid": 9223372041149743107,
+      "type": "Place",
+      "source": "PostgreSQL",
+      "properties": {
+        "name": "Bratislava",
+        "ldbc_id": 3
+      }
+    }
+  ],
+  "edges": [
+    {
+      "uuid": 9223574346994286592,
+      "type": "PERSON_LIKES_POST",
+      "source": "PostgreSQL",
+      "from": 281474976710657,
+      "to": 562952100904962,
+      "properties": {
+        "creationDate": "2020-01-01T00:00:00.000+0000"
+      }
+    },
+    {
+      "uuid": 496979255754752,
+      "type": "POST_HASCREATOR_PERSON",
+      "source": "Neo4J",
+      "from": 562952100904962,
+      "to": 281474976710657,
+      "properties": {}
+    },
+    {
+      "uuid": 787250325487616,
+      "type": "POST_ISLOCATEDIN_PLACE",
+      "source": "ArangoDB",
+      "from": 562952100904962,
+      "to": 9223372041149743107,
+      "properties": {}
+    }
+  ]
+}
