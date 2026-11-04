@@ -114,11 +114,13 @@ namespace {
     struct ExecutionState {
         std::atomic<int> imports{0};
         std::atomic<int> preflights{0};
+        std::atomic<int> verifications{0};
         std::atomic<int> active{0};
         std::atomic<int> maximum{0};
         std::latch *started = nullptr;
         bool fail_preflight = false;
         bool fail_import = false;
+        bool fail_verification = false;
     };
     class FakeExecutor final : public IImportExecutor {
     public:
@@ -144,7 +146,12 @@ namespace {
                 throw Error("import failed after partial write");
             return {{"native_import_seconds", 0.01}};
         }
-        Json verify() override { return {{"counts", context_.artifacts.at("counts")}, {"exact_ids", true}}; }
+        Json verify() override {
+            ++state_.verifications;
+            if (state_.fail_verification)
+                throw Error("verification failed");
+            return {{"counts", context_.artifacts.at("counts")}, {"exact_ids", true}};
+        }
 
     private:
         ImportContext context_;
@@ -177,6 +184,94 @@ TEST_F(IngestionTest, FailedExecutionIsNotRetriedAutomatically) {
     const auto imports = state.imports.load();
     EXPECT_THROW(execute(o.output_dir / "manifest.json", dir / "targets.json", true, 2, factory), Error);
     EXPECT_EQ(state.imports, imports);
+}
+
+TEST_F(IngestionTest, SkippedVerificationPublishesImportedStateAndNeverReimportsUncheckedTargets) {
+    auto o = fixture();
+    (void) prepare(o);
+    write(dir / "targets.json",
+          R"({"targets":{"Neo4J":{"database":"bulk-test-neo"},"ArangoDB":{"database":"bulk_test_arango"},"PostgreSQL":{"database":"bulk_test_pg"}}})");
+    ExecutionState state;
+    state.fail_verification = true;
+    ExecutorFactory factory = [&](ImportContext c) {
+        EXPECT_EQ(c.verification, VerificationMode::none);
+        return std::make_unique<FakeExecutor>(std::move(c), state);
+    };
+    EXPECT_NO_THROW(
+            execute(o.output_dir / "manifest.json", dir / "targets.json", true, 2, factory, VerificationMode::none));
+    EXPECT_EQ(state.imports, 3);
+    EXPECT_EQ(state.preflights, 3);
+    EXPECT_EQ(state.verifications, 0);
+    const auto journal = read_json(o.output_dir / "execution-state.json");
+    EXPECT_EQ(journal.at("state"), "imported");
+    EXPECT_EQ(journal.at("verification"), "skipped");
+    for (const auto &backend: journal.at("backends")) {
+        EXPECT_EQ(backend.at("state"), "imported");
+        EXPECT_FALSE(backend.contains("verification"));
+    }
+    EXPECT_FALSE(fs::exists(o.output_dir / "live-verification.json"));
+    EXPECT_THROW(
+            execute(o.output_dir / "manifest.json", dir / "targets.json", true, 2, factory, VerificationMode::none),
+            Error);
+    EXPECT_EQ(state.imports, 3);
+    EXPECT_EQ(read_json(o.output_dir / "execution-state.json"), journal);
+}
+
+TEST_F(IngestionTest, SkipVerificationStillRejectsPartialImportRetries) {
+    auto o = fixture();
+    (void) prepare(o);
+    write(dir / "targets.json",
+          R"({"targets":{"Neo4J":{"database":"bulk-test-neo"},"ArangoDB":{"database":"bulk_test_arango"},"PostgreSQL":{"database":"bulk_test_pg"}}})");
+    ExecutionState state;
+    state.fail_import = true;
+    ExecutorFactory factory = [&](ImportContext c) { return std::make_unique<FakeExecutor>(std::move(c), state); };
+    EXPECT_THROW(
+            execute(o.output_dir / "manifest.json", dir / "targets.json", true, 2, factory, VerificationMode::none),
+            Error);
+    EXPECT_EQ(read_json(o.output_dir / "execution-state.json").at("state"), "failed");
+    const auto attempts = state.imports.load();
+    EXPECT_THROW(
+            execute(o.output_dir / "manifest.json", dir / "targets.json", true, 2, factory, VerificationMode::none),
+            Error);
+    EXPECT_EQ(state.imports, attempts);
+}
+
+TEST_F(IngestionTest, SkipVerificationStillRejectsCorruptArtifactsBeforePreflight) {
+    auto o = fixture();
+    const auto manifest = prepare(o);
+    write(dir / "targets.json",
+          R"({"targets":{"Neo4J":{"database":"bulk-test-neo"},"ArangoDB":{"database":"bulk_test_arango"},"PostgreSQL":{"database":"bulk_test_pg"}}})");
+    ExecutionState state;
+    ExecutorFactory factory = [&](ImportContext c) { return std::make_unique<FakeExecutor>(std::move(c), state); };
+    const auto artifact = o.output_dir / manifest["backends"]["ArangoDB"]["artifacts"][0]["path"].get<std::string>();
+    std::ofstream(artifact, std::ios::app) << "corrupt";
+    EXPECT_THROW(
+            execute(o.output_dir / "manifest.json", dir / "targets.json", true, 2, factory, VerificationMode::none),
+            Error);
+    EXPECT_EQ(state.preflights, 0);
+    EXPECT_EQ(state.imports, 0);
+}
+
+TEST_F(IngestionTest, VerifiedExecutionPublishesLiveReportAndStandaloneVerificationNeverImports) {
+    auto o = fixture();
+    (void) prepare(o);
+    write(dir / "targets.json",
+          R"({"targets":{"Neo4J":{"database":"bulk-test-neo"},"ArangoDB":{"database":"bulk_test_arango"},"PostgreSQL":{"database":"bulk_test_pg"}}})");
+    ExecutionState state;
+    ExecutorFactory factory = [&](ImportContext c) {
+        EXPECT_EQ(c.verification, VerificationMode::full);
+        return std::make_unique<FakeExecutor>(std::move(c), state);
+    };
+    execute(o.output_dir / "manifest.json", dir / "targets.json", true, 2, factory);
+    EXPECT_EQ(state.verifications, 3);
+    const auto report = read_json(o.output_dir / "live-verification.json");
+    EXPECT_EQ(report.at("state"), "verified");
+    EXPECT_EQ(report.at("backends").size(), 3);
+    const auto journal = read_json(o.output_dir / "execution-state.json");
+    (void) verify_live(o.output_dir / "manifest.json", dir / "targets.json", factory);
+    EXPECT_EQ(state.verifications, 6);
+    EXPECT_EQ(state.imports, 3);
+    EXPECT_EQ(read_json(o.output_dir / "execution-state.json"), journal);
 }
 
 TEST_F(IngestionTest, CanonicalIdsResidencyArraysAndSignedEndpointsArePreserved) {
@@ -460,4 +555,46 @@ TEST_F(IngestionTest, ArangoNodeAndEdgeCollectionCollisionsFailPreparation) {
     write(o.input, records);
     EXPECT_THROW((void) prepare(o), Error);
     EXPECT_FALSE(fs::exists(o.output_dir / "manifest.json"));
+}
+
+TEST_F(IngestionTest, LdbcDatasetRootIgnoresUpdateEventsAndGeneratorMetadata) {
+    auto o = fixture();
+    const auto snapshot = prepare(o);
+    write(o.input / "params.ini", "ldbc.snb.datagen.serializer.numUpdatePartitions:1\n");
+    write(o.input / "updateStream.properties", "update stream metadata, not a snapshot table\n");
+    for (const auto *name: {"updateStream_0_0_forum.csv", "updateStream_0_0_person.csv", "UPDATESTREAM_1_0_person.csv",
+                            "update_stream_2_0_person.csv"})
+        write(o.input / name, "not snapshot CSV: \"unterminated update event\n");
+    o.output_dir = dir / "with-update-streams";
+    // Include a trailing separator, as users commonly do for dataset roots.
+    o.input /= "";
+    const auto mixed = prepare(o);
+    EXPECT_EQ(mixed.at("generation_id"), snapshot.at("generation_id"));
+    EXPECT_EQ(mixed.at("source"), snapshot.at("source"));
+    EXPECT_EQ(mixed.at("counts"), snapshot.at("counts"));
+    for (const auto &[backend, expected]: snapshot.at("backends").items()) {
+        const auto &actual = mixed.at("backends").at(backend).at("artifacts");
+        ASSERT_EQ(actual.size(), expected.at("artifacts").size());
+        for (std::size_t i = 0; i < actual.size(); ++i)
+            EXPECT_EQ(actual[i].at("sha256"), expected.at("artifacts")[i].at("sha256"));
+    }
+    EXPECT_NO_THROW((void) verify(o.output_dir / "manifest.json", true));
+    write(o.input / "updateStream_0_0_person.csv", "changed update events\n");
+    EXPECT_EQ(prepare(o).at("generation_id"), mixed.at("generation_id"));
+}
+
+TEST_F(IngestionTest, LdbcUpdateStreamExceptionNeverHidesUnknownSnapshotTables) {
+    auto o = fixture();
+    unsigned attempt = 0;
+    for (const auto *directory: {"static", "dynamic"}) {
+        for (const auto *name: {"unknown_0_0.csv", "updateStream_0_0_person.csv",
+                                "unexpected_updatestream_notes_0_0.csv", "update_stream_0_0_person.csv"}) {
+            const auto path = o.input / directory / name;
+            write(path, "id|name\n1|unknown snapshot\n");
+            o.output_dir = dir / ("unknown-snapshot-" + std::to_string(attempt++));
+            EXPECT_THROW((void) prepare(o), Error) << path;
+            EXPECT_FALSE(fs::exists(o.output_dir / "manifest.json"));
+            fs::remove(path);
+        }
+    }
 }

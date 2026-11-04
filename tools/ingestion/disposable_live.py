@@ -9,75 +9,35 @@ python3 tools/ingestion/disposable_live.py --run --binary build/cpu-tests/bin/po
   --bfs build/cpu-tests/bin/polygraph_bfs --output-dir build/ingestion-live/run-001
 
 Images must already be installed. Never touches existing service containers or volumes.
-The owned containers use --rm, no named volumes, and are stopped in finally.
+Provisioning, offline runners and ownership-checked cleanup are shared with load --docker.
+Only newly owned containers/network are removed; bind-mounted data and logs remain.
 """
 from __future__ import annotations
 import argparse
-import base64
 import csv
-import io
 import json
-import os
 from pathlib import Path
 import secrets
-import socket
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 FIXTURE = ROOT / 'tests/fixtures/ingestion'
 
 
-def run(argv, **kwargs):
-    return subprocess.run([str(x) for x in argv], check=True, text=True, **kwargs)
-
-
-def request(url, username, password, body=None):
-    data = None if body is None else json.dumps(body).encode()
-    headers = {'Authorization': 'Basic ' + base64.b64encode(f'{username}:{password}'.encode()).decode(), 'Content-Type': 'application/json'}
-    with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers), timeout=10) as response:
-        return json.load(response)
-
-
-def wait_for(check, seconds=180):
-    deadline = time.monotonic() + seconds
-    while True:
-        try:
-            return check()
-        except (Exception,):
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(1)
-
-
-def available_port():
-    with socket.socket() as sock:
-        sock.bind(('127.0.0.1', 0))
-        return sock.getsockname()[1]
+from tools.ingestion.docker_environment import DockerEnvironment, run, request, wait_for
 
 
 def helper(mode, state_path, extra):
-    state = json.loads(Path(state_path).read_text())
-    name = state['neo_name']
+    environment = DockerEnvironment.from_state(state_path)
     if mode == '_neo-preflight':
-        result = run(['docker', 'inspect', '--format', '{{.State.Running}}', name], capture_output=True)
-        data = Path(state['neo_data'])
-        store = data / 'databases' / state['database']
-        logs = data / 'transactions' / state['database']
-        empty = not store.exists() and not logs.exists()
-        print(json.dumps({'database': state['database'], 'offline': result.stdout.strip() == 'false', 'empty': empty}))
+        print(json.dumps(environment.neo_preflight()))
     elif mode == '_neo-admin':
-        run(['docker', 'run', '--rm', '--pull=never', '--network=none', '--hostname=localhost', '-w', '/data', '--user', f'{os.getuid()}:{os.getgid()}',
-             '-e', 'NEO4J_ACCEPT_LICENSE_AGREEMENT=yes', '-e', 'NEO4J_server_directories_data=/data',
-             '-e', 'NEO4J_server_directories_logs=/data/logs', '-e', 'HEAP_SIZE=512m',
-             '-v', f'{state["neo_data"]}:/data', '-v', f'{state["artifacts"]}:/artifacts:ro',
-             '--entrypoint', 'neo4j-admin', state['neo_image'], *extra, '--additional-config=/artifacts/import.conf'])
+        environment.neo_admin(extra)
     elif mode == '_neo-start':
-        run(['docker', 'start', name])
+        environment.neo_start()
     else:
         raise ValueError(mode)
 
@@ -108,15 +68,10 @@ def main():
     token = secrets.token_hex(5)
     prefix = 'polygraph-bulk-it-' + token
     database = 'bulk-it-' + token
-    names = {backend: prefix + '-' + backend for backend in ('neo', 'arango', 'pg')}
-    ports = {backend: available_port() for backend in names}
-    password = secrets.token_urlsafe(24)
-    env = os.environ.copy()
-    env.update(POSTGRES_PASSWORD=password, ARANGO_ROOT_PASSWORD=password, NEO4J_AUTH='neo4j/' + password, POLYGRAPH_BULK_TEST_PASSWORD=password)
-    os.environ['POLYGRAPH_BULK_TEST_PASSWORD'] = password
-    (output / 'neo-data').mkdir(mode=0o777)
-    os.chmod(output / 'neo-data', 0o777)
-    artifacts = output / 'artifacts'
+    environment = DockerEnvironment(output, prefix, images={'neo': args.neo_image, 'arango': args.arango_image, 'pg': args.pg_image})
+    database, names, ports = environment.database, environment.names, environment.ports
+    password, env = environment.password, environment.env
+    artifacts = environment.artifacts
     input_path = FIXTURE / 'raw'
     if args.adapter == 'polygraph-jsonl':
         records = [json.loads(line) for line in (FIXTURE / 'canonical.jsonl').read_text().splitlines()]
@@ -128,50 +83,13 @@ def main():
         input_path = output / 'input.jsonl'
         input_path.write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in records))
     run([binary, 'prepare', '--adapter', args.adapter, '--input', input_path, '--placement-config', FIXTURE / 'placement.json', '--output-dir', artifacts])
-    state = {'neo_name': names['neo'], 'neo_data': str(output / 'neo-data'), 'artifacts': str(artifacts), 'database': database, 'neo_image': args.neo_image}
-    (artifacts / 'import.conf').write_text('server.directories.data=/data\nserver.directories.logs=/data/logs\nserver.directories.transaction.logs.root=/data/transactions\n')
-    state_path = output / 'runner-state.json'
-    state_path.write_text(json.dumps(state, indent=2))
-    helper_argv = [sys.executable, str(Path(__file__).resolve())]
-    targets = {'targets': {
-        'PostgreSQL': {'database': database, 'host': '127.0.0.1', 'port': ports['pg'], 'username': 'postgres', 'password_env': 'POLYGRAPH_BULK_TEST_PASSWORD'},
-        'ArangoDB': {'database': database, 'endpoint': f'http://127.0.0.1:{ports["arango"]}', 'username': 'root', 'password_env': 'POLYGRAPH_BULK_TEST_PASSWORD'},
-        'Neo4J': {'database': database, 'offline': True, 'endpoint': f'http://127.0.0.1:{ports["neo"]}', 'username': 'neo4j', 'password_env': 'POLYGRAPH_BULK_TEST_PASSWORD',
-                  'artifact_root': '/artifacts', 'runner': [*helper_argv, '_neo-admin', str(state_path)],
-                  'preflight_command': [*helper_argv, '_neo-preflight', str(state_path)],
-                  'start_command': [*helper_argv, '_neo-start', str(state_path)], 'startup_attempts': 45}}}
-    target_path = output / 'targets.json'
-    target_path.write_text(json.dumps(targets, indent=2))
-    owned = []
+    targets, target_path = environment.targets, environment.target_path
     try:
-        # --rm ensures cleanup only of this test's newly created containers.
-        run(['docker', 'run', '-d', '--rm', '--pull=never', '--name', names['pg'], '-p', f'127.0.0.1:{ports["pg"]}:5432', '-e', 'POSTGRES_PASSWORD', '-e', f'POSTGRES_DB={database}', args.pg_image], env=env)
-        owned.append(names['pg'])
-        run(['docker', 'run', '-d', '--rm', '--pull=never', '--name', names['arango'], '-p', f'127.0.0.1:{ports["arango"]}:8529', '-e', 'ARANGO_ROOT_PASSWORD', args.arango_image,
-             '--rocksdb.block-cache-size=67108864', '--cache.size=33554432'], env=env)
-        owned.append(names['arango'])
-        run(['docker', 'create', '--pull=never', '--name', names['neo'], '-p', f'127.0.0.1:{ports["neo"]}:7474', '-e', 'NEO4J_AUTH',
-             '-e', 'NEO4J_ACCEPT_LICENSE_AGREEMENT=yes', '-e', f'NEO4J_initial_dbms_default__database={database}',
-             '-e', 'NEO4J_server_memory_heap_initial__size=256m', '-e', 'NEO4J_server_memory_heap_max__size=512m', '-e', 'NEO4J_server_memory_pagecache_size=128m',
-             '-v', f'{output / "neo-data"}:/data', args.neo_image], env=env)
-        owned.append(names['neo'])
-        wait_for(lambda: run(['docker', 'exec', names['pg'], 'pg_isready', '-U', 'postgres', '-d', database], capture_output=True))
+        environment.provision()
         arango = targets['targets']['ArangoDB']['endpoint']
-        wait_for(lambda: request(arango + '/_api/version', 'root', password))
-        request(arango + '/_api/database', 'root', password, {'name': database})
         # Runtime integration: use the existing backend adapters and distributed BFS.
-        from tools.graphio.domain import _backend_entry
         placement = json.loads((FIXTURE / 'placement.json').read_text())
-        entries = [_backend_entry(n, True, database) for n in placement['storageBackends']]
-        for entry in entries:
-            backend = entry['id']
-            entry['connection']['credentials'] = {'username': 'postgres' if backend == 'PostgreSQL' else 'root' if backend == 'ArangoDB' else 'neo4j', 'password': password}
-            entry['connection']['database'] = database
-            entry['connection']['endpoint'] = (f'127.0.0.1:{ports["pg"]}' if backend == 'PostgreSQL' else
-                f'{arango}/_db/{database}/_api/cursor' if backend == 'ArangoDB' else f'http://127.0.0.1:{ports["neo"]}/db/{database}/tx/commit')
-        backend_path = output / 'runtime.secret.json'
-        with os.fdopen(os.open(backend_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as config_file:
-            json.dump({'idRouting': placement['storageBackends'], 'backends': entries}, config_file)
+        backend_path = environment.runtime_config(placement['storageBackends'])
         # Invalid preflight must not import anything, even when an unrelated collection is empty.
         bad_database = database + '-preflight'
         request(arango + '/_api/database', 'root', password, {'name': bad_database})
@@ -266,12 +184,10 @@ def main():
         (output / 'integration-result.json').write_text(json.dumps({'state': 'passed', 'exact_counts_ids_endpoints': True, 'runtime_bfs_roots': len(expected_ids)}, indent=2))
         print(f'Disposable three-backend {args.workflow} import and PolyGraph BFS tests passed')
     finally:
-        for name in reversed(owned):
-            with (output / f'{name}.log').open('w') as log:
-                subprocess.run(['docker', 'logs', name], stdout=log, stderr=subprocess.STDOUT)
-            # Only stop exact names generated and created by this invocation. No volume reset/drop.
-            subprocess.run(['docker', 'stop', '-t', '10', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(['docker', 'rm', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            environment.capture_logs()
+        finally:
+            environment.cleanup()
         secret_path = output / 'runtime.secret.json'
         secret_path.unlink(missing_ok=True)
 

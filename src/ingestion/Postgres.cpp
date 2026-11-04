@@ -68,7 +68,8 @@ namespace polygraph::ingestion::detail {
                 )");
                 command("ANALYZE public.polygraph_nodes; ANALYZE public.polygraph_edges");
                 // Validate in the importing transaction; failures roll back both COPY streams.
-                (void) verify();
+                if (context_.verification == VerificationMode::full)
+                    (void) verify();
                 command("COMMIT");
                 return {{"native_import_seconds", elapsed(start)}, {"mechanism", "libpq COPY FROM STDIN"}};
             }

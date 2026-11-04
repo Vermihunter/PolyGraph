@@ -1,7 +1,10 @@
+#include <cerrno>
 #include <charconv>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <set>
+#include <unistd.h>
 #include "ingestion/Import.hpp"
 
 namespace {
@@ -20,16 +23,42 @@ polygraph_bulk_import prepare --adapter <ldbc-snb|polygraph-jsonl>
     Edges keep their independently configured schema ownership.
     memory-limit-mb budgets SQLite caches and record buffers, not a process RSS hard limit.
 
+polygraph_bulk_import load --adapter <ldbc-snb|polygraph-jsonl> --input <directory|file>
+  --placement-config <placement.json> --docker [--keep-running]
+  [--output-dir <fresh-directory>] [--generation-name <readable-prefix>]
+  [--threads 3] [--memory-limit-mb 256] [--chunk-size-mb 64] [--max-record-mb 8]
+  [--partitioner none] [--concurrency 3] [--startup-timeout-seconds 180]
+  [--neo-image <image>] [--arango-image <image>] [--pg-image <image>]
+  [--skip-verification] [--verify-bfs] [--bfs-binary <polygraph_bfs>] [--bfs-max-vertices 100000]
+    One command: prepare, strict verify, fresh isolated Docker resources, native
+    execution and live verification. --docker authorizes creation of new owned resources.
+    --keep-running retains imported services; otherwise owned resources are removed.
+    Prints endpoints, counts, private credentials location and ownership-checked cleanup.
+    Uses Python 3.10+ standard-library lifecycle helpers and Docker; no Compose project.
+    Failures retain logs, stopped owned resources and import journals. No implicit retries.
+    Image defaults prefer cached repository images, then fetch official images if missing.
+    --verify-bfs additionally compares a depth-two distributed BFS with the source index.
+    --skip-verification imports without exhaustive artifact/live/BFS correctness checks.
+    Checksums, fresh-target safeguards and importer error/count checks remain enabled.
+    Successful unchecked loads report imported, verification skipped; use verify-load later.
+
+polygraph_bulk_import verify-load --output-dir <existing-load-directory>
+  [--verify-bfs] [--bfs-binary <polygraph_bfs>] [--bfs-max-vertices 100000]
+    Uses saved Docker ownership, targets and private credentials. Runs strict artifact
+    and exact live verification without importing or stopping services; optionally BFS.
+    Services must be running. Writes verification-result.json with separate elapsed time.
+
 polygraph_bulk_import verify --manifest <manifest.json> [--strict]
     Checks sizes and SHA-256; strict also checks the endpoint index and reconstructs
     native representations in bounded memory (requires temporary disk space).
 
 polygraph_bulk_import execute --manifest <manifest.json> --target-config <targets.json>
-  --confirm-create [--concurrency 3]
+  --confirm-create [--concurrency 3] [--skip-verification]
     Requires isolated fresh named targets. Never drops databases or resets volumes.
     All preflights must succeed before imports start. Failed imports are never retried.
     Native executors: libpq COPY, Arango HTTP import, offline neo4j-admin runner.
     Neo4j start_command and an online endpoint enable final verification.
+    --skip-verification records imported/unverified targets and skips exhaustive checks.
 
 polygraph_bulk_import verify-live --manifest <manifest.json> --target-config <targets.json>
     Verifies exact node/edge/proxy counts, canonical IDs and endpoint traversal.
@@ -70,10 +99,24 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
             allowed = {"--adapter",       "--input",         "--placement-config", "--output-dir",
                        "--partitioner",   "--seed",          "--threads",          "--memory-limit-mb",
                        "--chunk-size-mb", "--max-record-mb", "--partition-file",   "--partition-map"};
+        else if (command == "load")
+            allowed = {"--adapter",          "--input",
+                       "--placement-config", "--docker",
+                       "--keep-running",     "--output-dir",
+                       "--generation-name",  "--threads",
+                       "--memory-limit-mb",  "--chunk-size-mb",
+                       "--max-record-mb",    "--partitioner",
+                       "--concurrency",      "--startup-timeout-seconds",
+                       "--neo-image",        "--arango-image",
+                       "--pg-image",         "--verify-bfs",
+                       "--bfs-binary",       "--bfs-max-vertices",
+                       "--skip-verification"};
+        else if (command == "verify-load")
+            allowed = {"--output-dir", "--verify-bfs", "--bfs-binary", "--bfs-max-vertices"};
         else if (command == "verify")
             allowed = {"--manifest", "--strict"};
         else if (command == "execute")
-            allowed = {"--manifest", "--target-config", "--confirm-create", "--concurrency"};
+            allowed = {"--manifest", "--target-config", "--confirm-create", "--concurrency", "--skip-verification"};
         else if (command == "verify-live")
             allowed = {"--manifest", "--target-config"};
         else
@@ -85,7 +128,8 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
                 throw Error("Unknown option for " + command + ": " + key);
             if (result.flags.contains(key) || result.values.contains(key))
                 throw Error("Duplicate option: " + key);
-            if (key == "--strict" || key == "--confirm-create")
+            if (key == "--strict" || key == "--confirm-create" || key == "--docker" || key == "--keep-running" ||
+                key == "--verify-bfs" || key == "--skip-verification")
                 result.flags.insert(key);
             else {
                 if (i + 1 == argc || std::string_view(argv[i + 1]).starts_with("--"))
@@ -115,7 +159,31 @@ int main(int argc, char **argv) {
         return 2;
     }
     try {
-        if (command == "prepare") {
+        if (command == "load" || command == "verify-load") {
+            if (command == "load") {
+                if (!args.flags.contains("--docker"))
+                    throw Error("load requires --docker to create an isolated fresh environment");
+                (void) args.require("--adapter");
+                (void) args.require("--input");
+                (void) args.require("--placement-config");
+            } else
+                (void) args.require("--output-dir");
+            const auto executable = fs::canonical("/proc/self/exe").string();
+            const auto script = fs::path(POLYGRAPH_PROJECT_ROOT) / "tools/ingestion/docker_load.py";
+            if (!fs::is_regular_file(script))
+                throw Error("Docker lifecycle helper is missing: " + script.string());
+            std::vector<std::string> command_args{"python3", script.string(), command, "--binary", executable};
+            for (int i = 2; i < argc; ++i)
+                command_args.emplace_back(argv[i]);
+            std::vector<char *> native_args;
+            for (auto &arg: command_args)
+                native_args.push_back(arg.data());
+            native_args.push_back(nullptr);
+            // Preserve streaming progress and exit status; argv is never interpreted by a shell.
+            ::execvp(native_args.front(), native_args.data());
+            throw Error("Cannot start Docker lifecycle helper (requires Python 3.10+): " +
+                        std::string(std::strerror(errno)));
+        } else if (command == "prepare") {
             PrepareOptions options;
             options.adapter = args.require("--adapter");
             options.input = args.require("--input");
@@ -142,14 +210,18 @@ int main(int argc, char **argv) {
             std::cout << "Artifacts verified\n";
         } else if (command == "execute") {
             execute(args.require("--manifest"), args.require("--target-config"),
-                    args.flags.contains("--confirm-create"), args.number("--concurrency", 3));
-            std::cout << "All native imports and live validation succeeded\n";
+                    args.flags.contains("--confirm-create"), args.number("--concurrency", 3), {},
+                    args.flags.contains("--skip-verification") ? VerificationMode::none : VerificationMode::full);
+            std::cout << (args.flags.contains("--skip-verification")
+                                  ? "All native imports completed; correctness verification skipped\n"
+                                  : "All native imports and live validation succeeded\n");
         } else
             std::cout << verify_live(args.require("--manifest"), args.require("--target-config")).dump(2) << '\n';
         return 0;
     } catch (const Error &e) {
         std::cerr << "Bulk ingestion: " << e.what() << '\n';
-        return command == "execute" || command == "verify-live" ? 4 : 3;
+        return command == "execute" || command == "verify-live" || command == "load" || command == "verify-load" ? 4
+                                                                                                                 : 3;
     } catch (const Json::exception &e) {
         std::cerr << "Invalid configuration/record: " << e.what() << '\n';
         return 2;

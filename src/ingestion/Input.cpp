@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <map>
 #include <regex>
@@ -8,6 +9,26 @@
 
 namespace polygraph::ingestion::detail {
     namespace {
+        std::vector<fs::path> snapshot_csv_paths(const fs::path &input) {
+            std::vector<fs::path> paths;
+            for (const auto &entry: fs::recursive_directory_iterator(input)) {
+                // params.ini and updateStream.properties describe the generated dataset;
+                // neither is a snapshot table or part of snapshot identity.
+                if (!entry.is_regular_file() || entry.path().extension() != ".csv")
+                    continue;
+                auto filename = entry.path().filename().string();
+                std::ranges::transform(filename, filename.begin(),
+                                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                const bool root_level = entry.path().lexically_relative(input).parent_path().empty();
+                if (root_level && (filename.starts_with("updatestream") || filename.starts_with("update_stream")))
+                    continue;
+                // Snapshot-directory CSVs always reach table-name and row validation,
+                // even when their names resemble update streams.
+                paths.push_back(entry.path());
+            }
+            std::ranges::sort(paths);
+            return paths;
+        }
         std::string trim(std::string text) {
             const auto first = text.find_first_not_of(" \t\r\n");
             if (first == std::string::npos)
@@ -173,16 +194,7 @@ namespace polygraph::ingestion::detail {
                 max_(static_cast<std::size_t>(o.max_record_mb) * 1024 * 1024),
                 aux_(scratch / "aux.sqlite3", std::max(1U, o.memory_limit_mb / 8)) {
                 static const std::regex suffix("_[0-9]+_[0-9]+$");
-                std::vector<fs::path> paths;
-                for (const auto &entry: fs::recursive_directory_iterator(o.input))
-                    if (entry.is_regular_file() && entry.path().extension() == ".csv")
-                        paths.push_back(entry.path());
-                std::ranges::sort(paths);
-                for (const auto &path: paths) {
-                    const auto filename = path.filename().string();
-                    if (filename.find("updatestream") != std::string::npos ||
-                        filename.find("update_stream") != std::string::npos)
-                        continue;
+                for (const auto &path: snapshot_csv_paths(o.input)) {
                     const auto prefix = std::regex_replace(path.stem().string(), suffix, "");
                     const bool known =
                             prefix == "person_email_emailaddress" || prefix == "person_speaks_language" ||
@@ -307,9 +319,8 @@ namespace polygraph::ingestion::detail {
         else if (o.adapter == "ldbc-snb") {
             if (!fs::is_directory(o.input))
                 throw Error("LDBC input must be a directory");
-            for (const auto &entry: fs::recursive_directory_iterator(o.input))
-                if (entry.is_regular_file() && entry.path().extension() == ".csv")
-                    files.push_back(fs::canonical(entry.path()));
+            for (const auto &path: snapshot_csv_paths(o.input))
+                files.push_back(fs::canonical(path));
             std::ranges::sort(files);
         } else
             throw Error("Unknown adapter: " + o.adapter);

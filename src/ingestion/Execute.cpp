@@ -7,7 +7,8 @@
 
 namespace polygraph::ingestion {
     namespace {
-        std::vector<ImportContext> contexts(const fs::path &root, const Json &manifest, const Json &config) {
+        std::vector<ImportContext> contexts(const fs::path &root, const Json &manifest, const Json &config,
+                                            VerificationMode verification = VerificationMode::full) {
             if (!config.is_object() || !config.contains("targets") || !config["targets"].is_object())
                 throw Error("Target configuration requires a targets object");
             std::vector<ImportContext> result;
@@ -30,7 +31,8 @@ namespace polygraph::ingestion {
                 result.push_back({.backend = parse_backend(name),
                                   .root = root,
                                   .artifacts = artifacts,
-                                  .target = std::move(target)});
+                                  .target = std::move(target),
+                                  .verification = verification});
             }
             return result;
         }
@@ -39,7 +41,7 @@ namespace polygraph::ingestion {
         }
     } // namespace
     void execute(const fs::path &manifest_path, const fs::path &target_path, bool confirm, unsigned concurrency,
-                 const ExecutorFactory &factory) {
+                 const ExecutorFactory &factory, VerificationMode verification) {
         if (!confirm)
             throw Error("Execution requires --confirm-create for new isolated named targets; prepare never contacts "
                         "databases");
@@ -47,7 +49,8 @@ namespace polygraph::ingestion {
             throw Error("Execution concurrency must be in [1,64]");
         const auto root = fs::absolute(manifest_path).parent_path();
         detail::DirectoryLock lock(root);
-        const auto manifest = verify(manifest_path, true), targets = read_json(target_path);
+        const bool full_verification = verification == VerificationMode::full;
+        const auto manifest = verify(manifest_path, full_verification), targets = read_json(target_path);
         const auto target_hash = sha256_text(targets.dump());
         const auto journal_path = root / "execution-state.json";
         Json journal = {{"schema_version", 1},
@@ -61,14 +64,18 @@ namespace polygraph::ingestion {
                 journal.at("target_sha256") != target_hash)
                 throw Error("Execution journal is bound to a different generation/target; use a separate artifact "
                             "directory and isolated fresh targets");
+            if (!full_verification)
+                throw Error("An execution journal already exists. Import-only execution never reimports or resumes "
+                            "existing targets; use verify-live to check a completed import");
             for (const auto &[name, state]: journal.at("backends").items())
                 if (state.at("state") != "verified")
                     throw Error("Cannot safely resume " + name +
                                 " after an interrupted/failed import: target may contain partial data. Provision fresh "
                                 "isolated targets and a separate artifact directory; no automatic retries");
         }
+        journal["verification"] = full_verification ? "full" : "skipped";
         const auto create = effective_factory(factory);
-        auto configurations = contexts(root, manifest, targets);
+        auto configurations = contexts(root, manifest, targets, verification);
         std::vector<std::unique_ptr<IImportExecutor>> executors;
         // Entire preflight is read-only. A failure prevents every backend import.
         for (const auto &context: configurations) {
@@ -110,11 +117,14 @@ namespace polygraph::ingestion {
                         imported["bytes_per_second"] =
                                 configurations[index].artifacts.at("bytes").get<double>() / seconds;
                     }
-                    auto validated = executors[index]->verify();
+                    Json validated;
+                    if (full_verification)
+                        validated = executors[index]->verify();
                     std::scoped_lock guard(journal_mutex);
-                    journal["backends"][name] = {{"state", "verified"},
-                                                 {"import", std::move(imported)},
-                                                 {"verification", std::move(validated)}};
+                    journal["backends"][name] = {{"state", full_verification ? "verified" : "imported"},
+                                                 {"import", std::move(imported)}};
+                    if (full_verification)
+                        journal["backends"][name]["verification"] = std::move(validated);
                     write_json_atomic(journal_path, journal);
                 } catch (...) {
                     std::scoped_lock guard(journal_mutex);
@@ -138,10 +148,18 @@ namespace polygraph::ingestion {
         getrusage(RUSAGE_SELF, &usage);
         journal["peak_rss_kb"] = usage.ru_maxrss;
         journal["seconds"] = detail::elapsed(started);
-        journal["state"] = error ? "failed" : "verified";
+        journal["state"] = error ? "failed" : full_verification ? "verified" : "imported";
         write_json_atomic(journal_path, journal);
         if (error)
             std::rethrow_exception(error);
+        if (full_verification) {
+            Json report = {{"generation_id", manifest.at("generation_id")},
+                           {"state", "verified"},
+                           {"backends", Json::object()}};
+            for (const auto &[name, backend]: journal.at("backends").items())
+                report["backends"][name] = backend.at("verification");
+            write_json_atomic(root / "live-verification.json", report);
+        }
     }
     Json verify_live(const fs::path &manifest_path, const fs::path &target_path, const ExecutorFactory &factory) {
         const auto root = fs::absolute(manifest_path).parent_path();

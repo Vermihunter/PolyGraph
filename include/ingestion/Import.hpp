@@ -81,11 +81,13 @@ namespace polygraph::ingestion {
     [[nodiscard]] Json prepare(const PrepareOptions &options, const ProgressObserver &progress = {});
     // Always validates checksums and sizes. Strict also checks native record semantics and endpoint closure.
     [[nodiscard]] Json verify(const fs::path &manifest, bool strict = false);
+    enum class VerificationMode { full, none };
     struct ImportContext {
         Backend backend;
         fs::path root;
         Json artifacts;
         Json target;
+        VerificationMode verification = VerificationMode::full;
     };
     class IImportExecutor {
     public:
@@ -96,7 +98,7 @@ namespace polygraph::ingestion {
     };
     using ExecutorFactory = std::function<std::unique_ptr<IImportExecutor>(ImportContext)>;
     void execute(const fs::path &manifest, const fs::path &targets, bool confirm_create, unsigned concurrency = 3,
-                 const ExecutorFactory &factory = {});
+                 const ExecutorFactory &factory = {}, VerificationMode verification = VerificationMode::full);
     [[nodiscard]] Json verify_live(const fs::path &manifest, const fs::path &targets,
                                    const ExecutorFactory &factory = {});
 } // namespace polygraph::ingestion
