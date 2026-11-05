@@ -2,7 +2,7 @@
 
 **One logical graph. Multiple storage engines. CPU and GPU execution.**
 
-[Documentation](docs/README.md) · [Getting started](docs/guides/GETTING_STARTED.md) · [Architecture](docs/architecture/ARCHITECTURE.md) · [Native bulk ingestion](docs/guides/BULK_INGESTION.md) · [Docker load](docs/guides/DOCKER_INGESTION.md) · [Benchmarks](docs/guides/BENCHMARKING.md) · [C++ API](docs/reference/API_REFERENCE.md)
+[Documentation](docs/README.md) · [Getting started](docs/guides/GETTING_STARTED.md) · [Architecture](docs/architecture/ARCHITECTURE.md) · [Native bulk ingestion](docs/guides/BULK_INGESTION.md) · [Docker load](docs/guides/DOCKER_INGESTION.md) · [Graph partitioning](docs/guides/GRAPH_PARTITIONING.md) · [Benchmarks](docs/guides/BENCHMARKING.md) · [C++ API](docs/reference/API_REFERENCE.md)
 
 ---
 

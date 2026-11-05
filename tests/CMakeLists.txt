@@ -136,6 +136,10 @@ if(TARGET polygraph_ingestion)
     polygraph_add_unit_test(polygraph_ingestion_test ingestion_test.cpp polygraph::ingestion)
     polygraph_add_unit_test(polygraph_ingestion_batch_test ingestion_batch_test.cpp polygraph::ingestion)
     target_compile_definitions(polygraph_ingestion_batch_test PRIVATE _GLIBCXX_ASSERTIONS)
+    polygraph_add_unit_test(polygraph_ingestion_partition_test ingestion_partition_test.cpp polygraph::ingestion)
+    target_compile_definitions(polygraph_ingestion_partition_test PRIVATE
+        _GLIBCXX_ASSERTIONS POLYGRAPH_TEST_HAS_KAMINPAR=$<BOOL:${POLYGRAPH_INGESTION_KAMINPAR}>)
+    target_include_directories(polygraph_ingestion_partition_test PRIVATE "${PROJECT_SOURCE_DIR}/src/ingestion")
 endif()
 if(TARGET polygraph_bulk_import)
     add_test(NAME python.ingestion_semantics
@@ -162,7 +166,7 @@ if(TARGET polygraph_bulk_import)
                 "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_docker_workflow -v)
     set_tests_properties(python.ingestion_docker_workflow PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 60)
     add_test(NAME python.ingestion_benchmark_metrics
-        COMMAND "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_benchmark_ldbc -v)
+        COMMAND "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_benchmark_ldbc tools.ingestion.test_partition_benchmark -v)
     set_tests_properties(python.ingestion_benchmark_metrics PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 20)
 endif()
 if(POLYGRAPH_INGESTION_LIVE_TESTS)
@@ -172,4 +176,12 @@ if(POLYGRAPH_INGESTION_LIVE_TESTS)
             --output-dir "${CMAKE_BINARY_DIR}/ingestion-docker-load/ctest")
     # Four isolated Docker lifecycles plus repeated read-only verification on potentially slow local storage.
     set_tests_properties(integration.ingestion.docker-load PROPERTIES LABELS "integration;live;ingestion" TIMEOUT 900 RUN_SERIAL TRUE)
+    if(POLYGRAPH_INGESTION_KAMINPAR)
+        add_test(NAME integration.ingestion.kaminpar
+            COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/ingestion/docker_load_live.py"
+                --run --binary "$<TARGET_FILE:polygraph_bulk_import>" --bfs "$<TARGET_FILE:polygraph_bfs>"
+                --partitioner kaminpar --cases keep canonical mapped
+                --output-dir "${CMAKE_BINARY_DIR}/ingestion-partition/ctest")
+        set_tests_properties(integration.ingestion.kaminpar PROPERTIES LABELS "integration;live;ingestion;kaminpar" TIMEOUT 600 RUN_SERIAL TRUE)
+    endif()
 endif()

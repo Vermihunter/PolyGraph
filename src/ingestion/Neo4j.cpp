@@ -146,6 +146,7 @@ namespace polygraph::ingestion::detail {
                         {"mechanism", "neo4j-admin database import full"}};
             }
             Json verify() override {
+                const bool partitioned = expects_partition_metadata(context_);
                 const auto expected = expected_counts(context_);
                 const auto nodes = cypher("MATCH (n:POLYGRAPHVertex) RETURN count(CASE WHEN n.is_proxy = false THEN 1 "
                                           "END),count(CASE WHEN n.is_proxy = true THEN 1 END)")
@@ -172,7 +173,7 @@ namespace polygraph::ingestion::detail {
                     }
                     for (const auto &[key, rows]: groups) {
                         const auto property = key.second ? "localId" : "uuid";
-                        const std::string query =
+                        std::string query =
                                 edge ? "UNWIND $rows AS x MATCH (a)-[r:" + key.first + " {" + property +
                                                 ":x.lookup_id}]->(b) WHERE "
                                                 "(CASE WHEN a.localId IS NOT NULL THEN a.localId+281474976710656 ELSE "
@@ -186,15 +187,23 @@ namespace polygraph::ingestion::detail {
                                                 " {" + property +
                                                 ":x.lookup_id}) WHERE n.type=x.type AND n.is_proxy=x.proxy RETURN "
                                                 "x.id,count(n)";
+                        if (partitioned)
+                            query.insert(query.find(" RETURN "), edge ? " AND r.from_partition_id=x.from_partition_id "
+                                                                        "AND r.to_partition_id=x.to_partition_id "
+                                                                        "AND r.is_partition_cut=x.is_partition_cut"
+                                                                      : " AND n.partition_id=x.partition_id");
                         const auto result = cypher(query, {{"rows", rows}});
                         if (result.size() != rows.size())
-                            throw Error("Neo4j canonical ID/type/endpoint traversal mismatch");
+                            throw Error("Neo4j canonical ID/type/endpoint/partition metadata mismatch");
                         for (const auto &row: result)
                             if (row.at("row").at(1) != 1)
                                 throw Error("Neo4j duplicate persistent IDs");
                     }
                 });
-                return {{"counts", expected}, {"exact_ids", true}, {"endpoint_traversal", true}};
+                Json verified = {{"counts", expected}, {"exact_ids", true}, {"endpoint_traversal", true}};
+                if (partitioned)
+                    verified["partition_metadata"] = true;
+                return verified;
             }
 
         private:

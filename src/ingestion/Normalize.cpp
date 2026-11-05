@@ -64,41 +64,17 @@ namespace polygraph::ingestion::detail {
             CREATE TABLE partitions(key TEXT PRIMARY KEY,partition INTEGER NOT NULL) WITHOUT ROWID;
             CREATE INDEX nodes_owner ON nodes(owner,id);
         )");
-        Json partition_map = Json::object();
-        if (!o.partition_file.empty()) {
-            if (o.partition_map.empty())
-                throw Error("--partition-file requires --partition-map");
-            partition_map = read_json(o.partition_map);
-            if (!partition_map.is_object())
-                throw Error("Partition map must be an object mapping partition numbers to backends");
-            for (const auto &value: partition_map)
-                placement.validate(parse_backend(value.get<std::string>()));
-            std::ifstream in(o.partition_file);
-            if (!in)
-                throw Error("Cannot read partition file");
-            auto insert = db.statement("INSERT INTO partitions VALUES(?,?)");
-            std::string line;
-            db.exec("BEGIN");
-            while (std::getline(in, line)) {
-                if (line.size() > static_cast<std::size_t>(o.max_record_mb) * 1024 * 1024)
-                    throw Error("Partition record too large");
-                if (line.empty())
-                    continue;
-                const auto value = Json::parse(line);
-                insert.bind(1, value.at("key").get<std::string>());
-                insert.bind(2, static_cast<std::int64_t>(value.at("partition").get<unsigned>()));
-                insert.run();
-            }
-            if (!in.eof())
-                throw Error("Partition file read failed");
-            db.exec("COMMIT");
-        } else if (!o.partition_map.empty())
-            throw Error("--partition-map requires --partition-file");
+        const bool partitioned = partition_metadata_enabled(o);
+        const auto partition_map = load_partition_mapping(o, placement);
+        auto partitioning = prepare_partition_assignments(o, db, scratch);
         auto adapter = make_adapter(o, scratch);
         auto entity = db.statement("INSERT INTO identities VALUES(?)");
         auto node_insert = db.statement("INSERT INTO nodes VALUES(?,?,?,?,?,?,?)");
         auto edge_insert = db.statement("INSERT INTO edges VALUES(?,?,?,?,?,?,?)");
-        auto lookup = db.statement("SELECT id,type,owner FROM nodes WHERE key=?");
+        auto lookup =
+                db.statement(partitioned ? "SELECT n.id,n.type,n.owner,p.partition FROM nodes n JOIN partitions p "
+                                           "ON p.key=n.key WHERE n.key=?"
+                                         : "SELECT id,type,owner,-1 FROM nodes WHERE key=?");
         auto partition = db.statement("SELECT partition FROM partitions WHERE key=?");
         auto replica = db.statement("INSERT INTO replicas VALUES(?,?)");
         auto proxy = db.statement("INSERT OR IGNORE INTO proxies VALUES(?,?)");
@@ -121,23 +97,30 @@ namespace polygraph::ingestion::detail {
             if (!inserted && it->second != type)
                 throw Error("Entity types collide after label/collection sanitization: " + type + " and " + it->second);
         };
+        const auto node_start = Clock::now();
         db.exec("BEGIN");
         adapter->nodes([&](Record r) {
             validate_record(r);
             check_type(r.type);
             auto home = placement.route(r, false);
-            if (!o.partition_file.empty()) {
+            if (partitioned) {
+                if (r.properties.contains("partition_id"))
+                    throw Error("Input property partition_id collides with generated partition metadata");
                 partition.bind(1, r.key);
                 if (!partition.step())
-                    throw Error("Missing external partition assignment for " + r.key);
-                const auto p = std::to_string(partition.integer(0));
+                    throw Error("Missing partition assignment for " + r.key);
+                const auto assigned_partition = partition.integer(0);
                 partition.reset();
-                if (!partition_map.contains(p))
-                    throw Error("Partition has no backend mapping: " + p);
-                const auto assigned = parse_backend(partition_map[p].get<std::string>());
-                if (r.id && assigned != home)
-                    throw Error("Partition mapping cannot rewrite canonical IDs");
-                home = assigned;
+                r.properties["partition_id"] = assigned_partition;
+                if (!partition_map.empty()) {
+                    const auto p = std::to_string(assigned_partition);
+                    if (!partition_map.contains(p))
+                        throw Error("Partition has no backend mapping: " + p);
+                    const auto assigned = parse_backend(partition_map[p].get<std::string>());
+                    if (r.id && assigned != home)
+                        throw Error("Partition mapping cannot rewrite canonical IDs");
+                    home = assigned;
+                }
             }
             const auto id = r.id ? *r.id : ids.node(r, home);
             const auto canonical = canonical_id(id);
@@ -155,7 +138,8 @@ namespace polygraph::ingestion::detail {
                 db.exec("COMMIT; BEGIN");
         });
         db.exec("COMMIT; BEGIN");
-        const auto node_seconds = elapsed(start);
+        const auto node_seconds = elapsed(node_start);
+        const auto edge_start = Clock::now();
         adapter->relationships([&](Record r) {
             validate_record(r);
             check_type(r.type);
@@ -167,16 +151,26 @@ namespace polygraph::ingestion::detail {
             struct Endpoint {
                 std::int64_t id;
                 std::string home;
+                std::int64_t partition;
             };
             const auto resolve = [&](const std::string &key) {
                 lookup.bind(1, key);
                 if (!lookup.step())
                     throw Error("Unresolved relationship endpoint " + key + " on " + r.type);
-                Endpoint result{lookup.integer(0), lookup.text(2)};
+                Endpoint result{lookup.integer(0), lookup.text(2), lookup.integer(3)};
                 lookup.reset();
                 return result;
             };
             const auto from = resolve(r.from), to = resolve(r.to);
+            if (partitioned) {
+                for (const auto *key: {"from_partition_id", "to_partition_id", "is_partition_cut"})
+                    if (r.properties.contains(key))
+                        throw Error("Input property " + std::string(key) +
+                                    " collides with generated partition metadata");
+                r.properties["from_partition_id"] = from.partition;
+                r.properties["to_partition_id"] = to.partition;
+                r.properties["is_partition_cut"] = from.partition != to.partition;
+            }
             edge_insert.bind(1, signed_id(canonical));
             edge_insert.bind(2, signed_id(id));
             edge_insert.bind(3, r.type);
@@ -203,6 +197,7 @@ namespace polygraph::ingestion::detail {
                 db.exec("COMMIT; BEGIN");
         });
         db.exec("COMMIT");
+        const auto edge_seconds = elapsed(edge_start);
         const auto metadata = adapter->metadata();
         if (o.adapter == "polygraph-jsonl") {
             if (!metadata.contains("idRouting") || !metadata["idRouting"].is_array())
@@ -219,18 +214,15 @@ namespace polygraph::ingestion::detail {
             if (metadata.value("idRoutingBits", 16) != 16 || metadata.value("idPayloadBits", 48) != 48)
                 throw Error("Unsupported JSONL ID layout; expected 16 location / 48 payload bits");
         }
+        finish_partition_metadata(o, db, scratch, partitioning);
+        partitioning["backend_cross_edges"] = cut;
         return {{"counts", {{"nodes", nodes}, {"edges", edges}}},
                 {"metadata", metadata},
                 {"node_prefixes", ids.metadata()},
                 {"timings",
                  {{"nodes_seconds", node_seconds},
-                  {"edges_seconds", elapsed(start) - node_seconds},
+                  {"edges_seconds", edge_seconds},
                   {"normalization_seconds", elapsed(start)}}},
-                {"partitioning",
-                 {{"algorithm", o.partition_file.empty() ? "none" : "external"},
-                  {"seed", o.seed},
-                  {"seconds", 0},
-                  {"backend_cross_edges", cut},
-                  {"edge_cut_measured", false}}}};
+                {"partitioning", partitioning}};
     }
 } // namespace polygraph::ingestion::detail

@@ -116,6 +116,7 @@ namespace polygraph::ingestion::detail {
                         {"mechanism", "HTTP /_api/import"}};
             }
             Json verify() override {
+                const bool partitioned = expects_partition_metadata(context_);
                 std::map<std::string, std::uint64_t> expected;
                 for (const auto &artifact: context_.artifacts.at("artifacts"))
                     expected[artifact.at("collection").get<std::string>()] +=
@@ -151,7 +152,7 @@ namespace polygraph::ingestion::detail {
                         groups[collection].push_back(std::move(row));
                     }
                     for (const auto &[collection, rows]: groups) {
-                        const auto query =
+                        std::string query =
                                 edge ? "FOR x IN @rows LET d=DOCUMENT(@collection,x.key) FILTER d != null AND d.uuid "
                                        "== x.id AND d.type == x.type AND d.source == x.source AND "
                                        "PARSE_IDENTIFIER(d._from).key == TO_STRING(x.fromKey) AND "
@@ -159,6 +160,12 @@ namespace polygraph::ingestion::detail {
                                        "null AND DOCUMENT(d._to) != null RETURN x.id"
                                      : "FOR x IN @rows LET d=DOCUMENT(@collection,x.key) FILTER d != null AND d.uuid "
                                        "== x.id AND d.type == x.type AND (d.is_proxy == true) == x.proxy RETURN x.id";
+                        if (partitioned)
+                            query.insert(query.find(" RETURN "),
+                                         edge ? " AND d.from_partition_id == x.from_partition_id AND d.to_partition_id "
+                                                "== x.to_partition_id "
+                                                "AND d.is_partition_cut == x.is_partition_cut"
+                                              : " AND d.partition_id == x.partition_id");
                         auto values = rows;
                         if (edge)
                             for (auto &r: values) {
@@ -171,10 +178,14 @@ namespace polygraph::ingestion::detail {
                                                      {"batchSize", 1000}}
                                                         .dump());
                         if (result.at("result").size() != rows.size() || result.value("hasMore", false))
-                            throw Error("Arango canonical ID/type/endpoint traversal mismatch");
+                            throw Error("Arango canonical ID/type/endpoint/partition metadata mismatch");
                     }
                 });
-                return {{"counts", expected_counts(context_)}, {"exact_ids", true}, {"endpoint_traversal", true}};
+                Json verified = {
+                        {"counts", expected_counts(context_)}, {"exact_ids", true}, {"endpoint_traversal", true}};
+                if (partitioned)
+                    verified["partition_metadata"] = true;
+                return verified;
             }
 
         private:

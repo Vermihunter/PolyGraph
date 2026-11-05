@@ -88,6 +88,7 @@ namespace polygraph::ingestion::detail {
             }
             Json verify() override {
                 connect();
+                const bool partitioned = expects_partition_metadata(context_);
                 const auto expected = expected_counts(context_);
                 auto counts = query(
                         "SELECT (SELECT count(*) FROM public.polygraph_nodes WHERE NOT is_proxy),(SELECT count(*) FROM "
@@ -103,13 +104,21 @@ namespace polygraph::ingestion::detail {
                 if (std::string(PQgetvalue(missing.get(), 0, 0)) != "0")
                     throw Error("PostgreSQL traversal has unresolved endpoints");
                 verify_expected_rows(context_, [&](bool edge, const Json &batch) {
-                    const std::string sql = edge ? "SELECT count(*) FROM jsonb_to_recordset($1::jsonb) AS x(id "
-                                                   "bigint,\"from\" bigint,\"to\" bigint,type text,source text) JOIN "
-                                                   "public.polygraph_edges e ON e.id=x.id AND e.from_id=x.\"from\" AND "
-                                                   "e.to_id=x.\"to\" AND e.edge_type=x.type AND e.source=x.source"
-                                                 : "SELECT count(*) FROM jsonb_to_recordset($1::jsonb) AS x(id "
-                                                   "bigint,type text,proxy boolean) JOIN public.polygraph_nodes n ON "
-                                                   "n.id=x.id AND n.type=x.type AND n.is_proxy=x.proxy";
+                    std::string fields = edge ? "id bigint,\"from\" bigint,\"to\" bigint,type text,source text"
+                                              : "id bigint,type text,proxy boolean";
+                    if (partitioned)
+                        fields += edge ? ",from_partition_id bigint,to_partition_id bigint,is_partition_cut boolean"
+                                       : ",partition_id bigint";
+                    std::string sql =
+                            "SELECT count(*) FROM jsonb_to_recordset($1::jsonb) AS x(" + fields + ") JOIN " +
+                            (edge ? "public.polygraph_edges e ON e.id=x.id AND e.from_id=x.\"from\" AND "
+                                    "e.to_id=x.\"to\" "
+                                    "AND e.edge_type=x.type AND e.source=x.source"
+                                  : "public.polygraph_nodes n ON n.id=x.id AND n.type=x.type AND n.is_proxy=x.proxy");
+                    if (partitioned)
+                        sql += edge ? " AND e.properties @> jsonb_build_object('from_partition_id',x.from_partition_id,"
+                                      "'to_partition_id',x.to_partition_id,'is_partition_cut',x.is_partition_cut)"
+                                    : " AND n.properties @> jsonb_build_object('partition_id',x.partition_id)";
                     const auto body = batch.dump();
                     const char *values[] = {body.c_str()};
                     Result result(PQexecParams(connection_.get(), sql.c_str(), 1, nullptr, values, nullptr, nullptr, 0),
@@ -117,9 +126,12 @@ namespace polygraph::ingestion::detail {
                     if (!result || PQresultStatus(result.get()) != PGRES_TUPLES_OK)
                         fail("PostgreSQL ID verification failed", result.get());
                     if (std::stoull(PQgetvalue(result.get(), 0, 0)) != batch.size())
-                        throw Error("PostgreSQL canonical ID/type/endpoint mismatch");
+                        throw Error("PostgreSQL canonical ID/type/endpoint/partition metadata mismatch");
                 });
-                return {{"counts", expected}, {"exact_ids", true}, {"endpoint_traversal", true}};
+                Json verified = {{"counts", expected}, {"exact_ids", true}, {"endpoint_traversal", true}};
+                if (partitioned)
+                    verified["partition_metadata"] = true;
+                return verified;
             }
 
         private:

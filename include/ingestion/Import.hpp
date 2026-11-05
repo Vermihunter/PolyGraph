@@ -1,6 +1,7 @@
 #ifndef POLYGRAPH_INGESTION_IMPORT_HPP
 #define POLYGRAPH_INGESTION_IMPORT_HPP
 
+#include "ingestion/Partition.hpp"
 #include "utilities/json.hpp"
 
 #include <bit>
@@ -58,6 +59,7 @@ namespace polygraph::ingestion {
         fs::path placement_config;
         fs::path output_dir;
         std::string partitioner = "none";
+        PartitionOptions partition_options;
         fs::path partition_file;
         fs::path partition_map;
         unsigned seed = 42;

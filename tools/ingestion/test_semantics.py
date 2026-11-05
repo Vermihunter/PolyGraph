@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 from dataclasses import replace
 import json
 import os
@@ -35,10 +36,10 @@ class NativeSemanticsTest(unittest.TestCase):
         self.layout = BackendLayout(('Neo4J', 'ArangoDB', 'PostgreSQL'))
         self.index = {n.uuid: EndpointInfo(n.uuid, n.type, n.source) for n in self.nodes}
 
-    def prepare(self, adapter, input_path, output):
+    def prepare(self, adapter, input_path, output, extra=()):
         subprocess.run([self.binary, 'prepare', '--adapter', adapter, '--input', str(input_path),
                         '--placement-config', str(FIXTURE / 'placement.json'), '--output-dir', str(output),
-                        '--memory-limit-mb', '32', '--max-record-mb', '4', '--chunk-size-mb', '1'], check=True, capture_output=True)
+                        '--memory-limit-mb', '32', '--max-record-mb', '4', '--chunk-size-mb', '1', *extra], check=True, capture_output=True)
         return json.loads((output / 'manifest.json').read_text())
 
     def selected(self, backend):
@@ -49,6 +50,8 @@ class NativeSemanticsTest(unittest.TestCase):
         # load_postgresql_source preserves logical types for SQL traversal routing.
         if backend == 'PostgreSQL':
             nodes = [replace(n, type=self.index[n.uuid].type) if n.properties.get('is_proxy') else n for n in nodes]
+        if hasattr(self, 'partitions'):
+            nodes = [replace(n, properties={**n.properties, 'partition_id': self.partitions[n.uuid]}) for n in nodes]
         return nodes, edges
 
     def test_python_golden_and_both_adapters_match_native_representations(self):
@@ -126,6 +129,8 @@ class NativeSemanticsTest(unittest.TestCase):
         self.assertEqual(set(actual_edges), {e.uuid for e in edges})
         for n in nodes:
             row = actual_nodes[n.uuid]
+            if hasattr(self, 'partitions'):
+                self.assertEqual(int(row['partition_id:long']), self.partitions[n.uuid])
             labels = set(row[':LABEL'].split('\x1f'))
             self.assertTrue({'POLYGRAPHVertex', '__GraphNode', sanitize_name(n.type)} <= labels)
             if n.type == 'Proxy':
@@ -138,9 +143,53 @@ class NativeSemanticsTest(unittest.TestCase):
                 self.assertEqual(row['email:string[]'].split('\x1f'), n.properties['email'])
         for e in edges:
             row = actual_edges[e.uuid]
+            if hasattr(self, 'partitions'):
+                self.assertEqual(int(row['from_partition_id:long']), self.partitions[e.from_uuid])
+                self.assertEqual(int(row['to_partition_id:long']), self.partitions[e.to_uuid])
+                self.assertEqual(row['is_partition_cut:boolean'], str(self.partitions[e.from_uuid] != self.partitions[e.to_uuid]).lower())
             self.assertEqual((int(row[':START_ID']), int(row[':END_ID'])), (e.from_uuid, e.to_uuid))
             self.assertEqual(row['source:string'], e.source)
             self.assertEqual(row[':TYPE'], sanitize_name(e.type))
+
+    def test_partition_metadata_retains_python_ids_and_all_native_representations(self):
+        by_type = {'Person': 40, 'Post': 41, 'Place': 42}
+        self.partitions = {node.uuid: by_type[node.type] for node in self.nodes}
+        self.edges = [replace(edge, properties={**edge.properties,
+            'from_partition_id': self.partitions[edge.from_uuid], 'to_partition_id': self.partitions[edge.to_uuid],
+            'is_partition_cut': self.partitions[edge.from_uuid] != self.partitions[edge.to_uuid]}) for edge in self.edges]
+        mapping = self.root / 'mapping.json'
+        mapping.write_text(json.dumps({str(by_type[n.type]): n.source for n in self.nodes}))
+        outputs = []
+        for adapter, input_path in [('ldbc-snb', FIXTURE / 'raw'), ('polygraph-jsonl', FIXTURE / 'canonical.jsonl')]:
+            assignments = self.root / (adapter + '.jsonl')
+            raw_keys = {'Person': 'Person:1', 'Post': 'Post:2', 'Place': 'Place:3'}
+            assignments.write_text(''.join(json.dumps({'key': raw_keys[node.type] if adapter == 'ldbc-snb' else str(node.uuid),
+                'partition': by_type[node.type]}) + '\n' for node in self.nodes))
+            output = self.root / adapter
+            manifest = self.prepare(adapter, input_path, output,
+                ['--partition-file', str(assignments), '--partition-map', str(mapping)])
+            self.check_postgres(output, manifest)
+            self.check_arango(output, manifest)
+            self.check_neo4j(output, manifest)
+            subprocess.run([self.binary, 'verify', '--manifest', str(output / 'manifest.json'), '--strict'],
+                           check=True, capture_output=True)
+            outputs.append((output, manifest))
+        for backend in self.layout.backends:
+            self.assertEqual([a['sha256'] for a in outputs[0][1]['backends'][backend]['artifacts']],
+                             [a['sha256'] for a in outputs[1][1]['backends'][backend]['artifacts']])
+        output, manifest = outputs[0]
+        artifact = manifest['partitioning']['assignment_artifact']
+        path = output / artifact['path']
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[0]['partition'] = 999
+        path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        artifact.update(bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        (output / 'manifest.json').write_text(json.dumps(manifest))
+        subprocess.run([self.binary, 'verify', '--manifest', str(output / 'manifest.json')], check=True, capture_output=True)
+        failed = subprocess.run([self.binary, 'verify', '--manifest', str(output / 'manifest.json'), '--strict'],
+                                capture_output=True, text=True)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn('assignment artifact differs', failed.stderr)
 
     def test_sparse_high_ldbc_prefix_ids_and_relationship_sequences_match_python(self):
         raw = self.root / 'raw'

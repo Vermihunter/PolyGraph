@@ -366,6 +366,48 @@ p=Path(sys.argv[sys.argv.index('--manifest')+1]).parent
             self.assertIn('Arango import settings', result.stderr)
             self.assertFalse(output.exists())
 
+    def test_partition_options_are_forwarded_to_offline_prepare_before_provisioning(self):
+        binary = os.environ.get('POLYGRAPH_BULK_IMPORT')
+        if not binary:
+            self.skipTest('CTest supplies the executable')
+        from tools.ingestion import docker_load
+        output = self.env.output / 'partition-forwarding'
+        argv = ['docker_load.py', 'load', '--binary', binary, '--adapter', 'ldbc-snb', '--input', 'missing',
+                '--placement-config', 'placement.json', '--docker', '--output-dir', str(output),
+                '--partitioner', 'kaminpar', '--partitions', '8', '--partition-threads', '2',
+                '--partition-imbalance', '0.05', '--partition-preset', 'eco', '--seed', '17',
+                '--partition-map', 'mapping.json']
+        def create(path, generation, **kwargs):
+            return DockerEnvironment(path, generation, runner=self.fake)
+        with patch.object(sys, 'argv', argv), patch.object(docker_load, 'DockerEnvironment', side_effect=create), \
+             patch.object(docker_load, 'stage', side_effect=WorkflowError('prepare stopped')) as stage, \
+             patch.object(docker_load.signal, 'signal'):
+            with self.assertRaisesRegex(WorkflowError, 'prepare stopped'):
+                docker_load.main()
+        command = list(map(str, stage.call_args.args[2]))
+        for key, value in [('--partitioner', 'kaminpar'), ('--partitions', '8'), ('--partition-threads', '2'),
+                           ('--partition-imbalance', '0.05'), ('--partition-preset', 'eco'), ('--seed', '17')]:
+            self.assertEqual(command[command.index(key) + 1], value)
+        self.assertEqual(Path(command[command.index('--partition-map') + 1]), Path('mapping.json').resolve())
+        self.assertFalse(any(argv[1] in ('create', 'start') for argv, _ in self.fake.calls))
+
+    def test_invalid_partition_controls_fail_before_creating_an_environment(self):
+        from tools.ingestion import docker_load
+        binary = os.environ.get('POLYGRAPH_BULK_IMPORT', '/missing/binary')
+        for flags in (['--partitioner', 'kaminpar', '--partitions', '0'], ['--partitions', '2'],
+                      ['--partitioner', 'kaminpar', '--partitions', '2', '--partition-threads', '0'],
+                      ['--partitioner', 'kaminpar', '--partitions', '2', '--partition-imbalance', 'nan'],
+                      ['--partitioner', 'kaminpar', '--partitions', '2', '--partition-file', 'external.jsonl'],
+                      ['--partition-map', 'map.json']):
+            argv = ['docker_load.py', 'load', '--binary', binary, '--adapter', 'ldbc-snb', '--input', 'missing',
+                    '--placement-config', 'missing', '--docker', *flags]
+            with self.subTest(flags=flags), patch.object(sys, 'argv', argv), \
+                 patch.object(docker_load, 'DockerEnvironment') as environment:
+                with self.assertRaises(SystemExit) as raised:
+                    docker_load.main()
+                self.assertEqual(raised.exception.code, 2)
+                environment.assert_not_called()
+
     def test_existing_generation_cannot_be_reused(self):
         with self.assertRaises(WorkflowError):
             DockerEnvironment(self.env.output, self.env.generation, runner=self.fake)

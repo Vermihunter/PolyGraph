@@ -47,6 +47,10 @@ Requirements are the built native executors, Python 3.10+ (standard library only
 
 Neo4j license acceptance follows the repository's existing Enterprise integration setup. Use an image you are authorized to run. No production service is stopped or reused.
 
+## Optional topology partitioning
+
+Use a partition-enabled executable and add `--partitioner kaminpar --partitions 8` to `load`. It generates partitions, adds verified partition properties, and imports through the same native executors. Schema placement stays in force unless `--partition-map` explicitly chooses raw node ownership by partition. See [Graph partitioning](GRAPH_PARTITIONING.md) for the build, mapping example and complete one-command LDBC load.
+
 ## Output and connection information
 
 The default output is `build/ingestion-load/<fresh-generation>/`. Every generation has a random suffix even when a readable prefix is supplied:

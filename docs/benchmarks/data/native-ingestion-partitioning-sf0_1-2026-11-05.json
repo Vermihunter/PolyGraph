@@ -1,0 +1,826 @@
+{
+  "schema_version": 1,
+  "started_at_utc": "2026-11-05T15:53:50.475431+00:00",
+  "engine_revision": "71e75100e847cd3785a5fa21fba467a133e6cb13",
+  "engine_source_sha256": "7720c4a4f2d3bf9d6cd790445e5c41cf49c7ea56e5682fb33cc9170a238f1134",
+  "native_binary_sha256": "b6bb9e3b477e6bfc757eae48a79ef4c4c9623282dcccb38d442323e0576ab0f4",
+  "collector_sha256": "892ef39f05d9914f2f5771702f9b566e12fc464282086852b33ce5c567fff960",
+  "host_before": {
+    "kernel": "6.8.0-138-generic",
+    "architecture": "x86_64",
+    "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "logical_cpus": 16,
+    "cpu_governor": "powersave",
+    "memory": {
+      "MemTotal_bytes": 33497423872,
+      "MemAvailable_bytes": 5065101312,
+      "SwapTotal_bytes": 10737410048,
+      "SwapFree_bytes": 3579904
+    },
+    "load_average": [
+      2.3125,
+      2.89990234375,
+      2.96630859375
+    ],
+    "kernel_pressure": {
+      "memory": "some avg10=0.00 avg60=0.10 avg300=0.13 total=2638639854\nfull avg10=0.00 avg60=0.10 avg300=0.13 total=2234953528",
+      "io": "some avg10=0.18 avg60=0.82 avg300=1.29 total=2978584764\nfull avg10=0.18 avg60=0.80 avg300=1.26 total=452951333"
+    }
+  },
+  "settings": {
+    "threads": 3,
+    "memory_limit_mb": 256,
+    "partition_threads": 1,
+    "imbalance": 0.03,
+    "preset": "default",
+    "seed": 42,
+    "partitions": [
+      2,
+      8
+    ],
+    "repetitions": 1,
+    "discard_artifacts": false
+  },
+  "trials": [
+    {
+      "variant": "none",
+      "repetition": 1,
+      "client": {
+        "wall_seconds": 84.61,
+        "cpu_user_seconds": 106.24,
+        "cpu_system_seconds": 3.21,
+        "average_cpu_percent": 129.35823188748373,
+        "peak_rss_bytes": 239730688
+      },
+      "timings": {
+        "edges_seconds": 33.999618927,
+        "input_edges_per_second": 43470.04603708393,
+        "input_nodes_per_second": 26718.176109998,
+        "nodes_seconds": 12.260866859,
+        "normalization_seconds": 46.295764972,
+        "prepare_seconds": 84.233976903
+      },
+      "partitioning": {
+        "algorithm": "none",
+        "backend_cross_edges": 923931,
+        "edge_cut_measured": false,
+        "seconds": 0,
+        "seed": 42
+      },
+      "backend_writers": {
+        "ArangoDB": {
+          "counts": {
+            "edges": 1311345,
+            "nodes": 302824,
+            "proxies": 15451
+          },
+          "bytes": 300071654,
+          "seconds": 37.493661592,
+          "bytes_per_second": 8003263.518653672
+        },
+        "Neo4J": {
+          "counts": {
+            "edges": 772198,
+            "nodes": 15278,
+            "proxies": 293383
+          },
+          "bytes": 130438539,
+          "seconds": 18.178971099,
+          "bytes_per_second": 7175243.213141762
+        },
+        "PostgreSQL": {
+          "counts": {
+            "edges": 318353,
+            "nodes": 9486,
+            "proxies": 304352
+          },
+          "bytes": 76072632,
+          "seconds": 7.503027192,
+          "bytes_per_second": 10138925.270204458
+        }
+      },
+      "allocated_artifact_bytes": 827207680,
+      "graph_identity_sha256": "2aca358e1bb287fb7079743cca45394a1f8ae538dbcd3d41da46158b91a11b34",
+      "strict_verified": true,
+      "verification_seconds": 81.2446038150083,
+      "artifacts_retained": true
+    },
+    {
+      "variant": "k2",
+      "repetition": 1,
+      "client": {
+        "wall_seconds": 143.5,
+        "cpu_user_seconds": 187.94,
+        "cpu_system_seconds": 5.65,
+        "average_cpu_percent": 134.90592334494772,
+        "peak_rss_bytes": 287113216
+      },
+      "timings": {
+        "edges_seconds": 44.941846523,
+        "input_edges_per_second": 32886.16544145818,
+        "input_nodes_per_second": 26124.077026662642,
+        "nodes_seconds": 12.539696605,
+        "normalization_seconds": 86.139690845,
+        "prepare_seconds": 142.957847481
+      },
+      "partitioning": {
+        "algorithm": "kaminpar",
+        "assignment_artifact": {
+          "bytes": 14101634,
+          "path": "generation-67bff26b8f2d09ef57e4a9b8/index/partitions.jsonl",
+          "records": 327588,
+          "sha256": "88b5d58428171fd9a4a66c648f78e2a5036f799726b1c54a08fda59fe207c5e8"
+        },
+        "assignment_seconds": 0.375212105,
+        "backend_cross_edges": 923931,
+        "balanced": true,
+        "buffer_estimate_bytes": 68214720,
+        "csr_bytes": 14432984,
+        "deterministic": true,
+        "duplicates_collapsed": 1431,
+        "edge_cut": 235394,
+        "edge_cut_measured": true,
+        "ignored_self_loops": 0,
+        "imbalance": 0.03,
+        "implementation": "KaMinPar/3.7.3;source:04dfa70cc3e6dbdf3c5fdf715d6e95beff267651;module-sha256:b6bb9e3b477e6bfc757eae48a79ef4c4c9623282dcccb38d442323e0576ab0f4;tbb-sha256:112a71e93e4b75ca16226a8e94db7a72d2d7d5281714c1e6e29386266281f423",
+        "input_relationships": 1477965,
+        "library_seconds": 4.55283522,
+        "maximum_block_size": 168707,
+        "metadata_seconds": 5.63713314,
+        "partition_call_seconds": 6.1805879,
+        "partition_cut_relationships": 235783,
+        "partitions": 2,
+        "populations": [
+          158881,
+          168707
+        ],
+        "preset": "default",
+        "projection": "simple-undirected-unit-weight",
+        "projection_seconds": 16.31561671,
+        "relation_cuts": [
+          {
+            "cut_relationships": 14456,
+            "relationships": 151043,
+            "type": "COMMENT_HASCREATOR_PERSON"
+          },
+          {
+            "cut_relationships": 43681,
+            "relationships": 191303,
+            "type": "COMMENT_HASTAG_TAG"
+          },
+          {
+            "cut_relationships": 15633,
+            "relationships": 151043,
+            "type": "COMMENT_ISLOCATEDIN_PLACE"
+          },
+          {
+            "cut_relationships": 18173,
+            "relationships": 76787,
+            "type": "COMMENT_REPLYOF_COMMENT"
+          },
+          {
+            "cut_relationships": 16954,
+            "relationships": 74256,
+            "type": "COMMENT_REPLYOF_POST"
+          },
+          {
+            "cut_relationships": 2954,
+            "relationships": 135701,
+            "type": "FORUM_CONTAINEROF_POST"
+          },
+          {
+            "cut_relationships": 37502,
+            "relationships": 123268,
+            "type": "FORUM_HASMEMBER_PERSON"
+          },
+          {
+            "cut_relationships": 525,
+            "relationships": 13750,
+            "type": "FORUM_HASMODERATOR_PERSON"
+          },
+          {
+            "cut_relationships": 9492,
+            "relationships": 47697,
+            "type": "FORUM_HASTAG_TAG"
+          },
+          {
+            "cut_relationships": 54,
+            "relationships": 7955,
+            "type": "ORGANISATION_ISLOCATEDIN_PLACE"
+          },
+          {
+            "cut_relationships": 14789,
+            "relationships": 35475,
+            "type": "PERSON_HASINTEREST_TAG"
+          },
+          {
+            "cut_relationships": 144,
+            "relationships": 1528,
+            "type": "PERSON_ISLOCATEDIN_PLACE"
+          },
+          {
+            "cut_relationships": 4082,
+            "relationships": 14073,
+            "type": "PERSON_KNOWS_PERSON"
+          },
+          {
+            "cut_relationships": 18665,
+            "relationships": 62225,
+            "type": "PERSON_LIKES_COMMENT"
+          },
+          {
+            "cut_relationships": 13414,
+            "relationships": 47215,
+            "type": "PERSON_LIKES_POST"
+          },
+          {
+            "cut_relationships": 114,
+            "relationships": 1209,
+            "type": "PERSON_STUDYAT_ORGANISATION"
+          },
+          {
+            "cut_relationships": 353,
+            "relationships": 3313,
+            "type": "PERSON_WORKAT_ORGANISATION"
+          },
+          {
+            "cut_relationships": 47,
+            "relationships": 1454,
+            "type": "PLACE_ISPARTOF_PLACE"
+          },
+          {
+            "cut_relationships": 2613,
+            "relationships": 135701,
+            "type": "POST_HASCREATOR_PERSON"
+          },
+          {
+            "cut_relationships": 14994,
+            "relationships": 51118,
+            "type": "POST_HASTAG_TAG"
+          },
+          {
+            "cut_relationships": 5241,
+            "relationships": 135701,
+            "type": "POST_ISLOCATEDIN_PLACE"
+          },
+          {
+            "cut_relationships": 5,
+            "relationships": 70,
+            "type": "TAGCLASS_ISSUBCLASSOF_TAGCLASS"
+          },
+          {
+            "cut_relationships": 1898,
+            "relationships": 16080,
+            "type": "TAG_HASTYPE_TAGCLASS"
+          }
+        ],
+        "seconds": 28.640611105999998,
+        "seed": 42,
+        "threads": 1,
+        "undirected_edges": 1476534,
+        "vertex_order": "source-key-lexical",
+        "vertices": 327588
+      },
+      "backend_writers": {
+        "ArangoDB": {
+          "counts": {
+            "edges": 1311345,
+            "nodes": 302824,
+            "proxies": 15451
+          },
+          "bytes": 393149487,
+          "seconds": 56.218263657,
+          "bytes_per_second": 6993269.827732346
+        },
+        "Neo4J": {
+          "counts": {
+            "edges": 772198,
+            "nodes": 15278,
+            "proxies": 293383
+          },
+          "bytes": 143910283,
+          "seconds": 42.165341315,
+          "bytes_per_second": 3412999.3618433014
+        },
+        "PostgreSQL": {
+          "counts": {
+            "edges": 318353,
+            "nodes": 9486,
+            "proxies": 304352
+          },
+          "bytes": 104938003,
+          "seconds": 9.240561058,
+          "bytes_per_second": 11356237.17448954
+        }
+      },
+      "allocated_artifact_bytes": 1094807552,
+      "graph_identity_sha256": "2aca358e1bb287fb7079743cca45394a1f8ae538dbcd3d41da46158b91a11b34",
+      "strict_verified": true,
+      "verification_seconds": 162.131207790997,
+      "artifacts_retained": true
+    },
+    {
+      "variant": "k8",
+      "repetition": 1,
+      "client": {
+        "wall_seconds": 146.97,
+        "cpu_user_seconds": 191.3,
+        "cpu_system_seconds": 5.7,
+        "average_cpu_percent": 134.04096074028715,
+        "peak_rss_bytes": 297439232
+      },
+      "timings": {
+        "edges_seconds": 44.792016088,
+        "input_edges_per_second": 32996.17050271497,
+        "input_nodes_per_second": 25537.4903274557,
+        "nodes_seconds": 12.827728794,
+        "normalization_seconds": 89.42790968,
+        "prepare_seconds": 146.508881376
+      },
+      "partitioning": {
+        "algorithm": "kaminpar",
+        "assignment_artifact": {
+          "bytes": 14101634,
+          "path": "generation-1f6cd22b118bc0826b867a5b/index/partitions.jsonl",
+          "records": 327588,
+          "sha256": "d1e02b496e1138ca85fd6c7ddbb665e5eccd0400d58c7e8a7cf487abe05cc76a"
+        },
+        "assignment_seconds": 0.374266934,
+        "backend_cross_edges": 923931,
+        "balanced": true,
+        "buffer_estimate_bytes": 68214720,
+        "csr_bytes": 14432984,
+        "deterministic": true,
+        "duplicates_collapsed": 1431,
+        "edge_cut": 514056,
+        "edge_cut_measured": true,
+        "ignored_self_loops": 0,
+        "imbalance": 0.03,
+        "implementation": "KaMinPar/3.7.3;source:04dfa70cc3e6dbdf3c5fdf715d6e95beff267651;module-sha256:b6bb9e3b477e6bfc757eae48a79ef4c4c9623282dcccb38d442323e0576ab0f4;tbb-sha256:112a71e93e4b75ca16226a8e94db7a72d2d7d5281714c1e6e29386266281f423",
+        "input_relationships": 1477965,
+        "library_seconds": 6.815042301,
+        "maximum_block_size": 42177,
+        "metadata_seconds": 6.187776102,
+        "partition_call_seconds": 8.478658396,
+        "partition_cut_relationships": 514789,
+        "partitions": 8,
+        "populations": [
+          40212,
+          40208,
+          40206,
+          42177,
+          40216,
+          42176,
+          42177,
+          40216
+        ],
+        "preset": "default",
+        "projection": "simple-undirected-unit-weight",
+        "projection_seconds": 16.616402385,
+        "relation_cuts": [
+          {
+            "cut_relationships": 27755,
+            "relationships": 151043,
+            "type": "COMMENT_HASCREATOR_PERSON"
+          },
+          {
+            "cut_relationships": 120455,
+            "relationships": 191303,
+            "type": "COMMENT_HASTAG_TAG"
+          },
+          {
+            "cut_relationships": 30215,
+            "relationships": 151043,
+            "type": "COMMENT_ISLOCATEDIN_PLACE"
+          },
+          {
+            "cut_relationships": 33946,
+            "relationships": 76787,
+            "type": "COMMENT_REPLYOF_COMMENT"
+          },
+          {
+            "cut_relationships": 33013,
+            "relationships": 74256,
+            "type": "COMMENT_REPLYOF_POST"
+          },
+          {
+            "cut_relationships": 3210,
+            "relationships": 135701,
+            "type": "FORUM_CONTAINEROF_POST"
+          },
+          {
+            "cut_relationships": 73254,
+            "relationships": 123268,
+            "type": "FORUM_HASMEMBER_PERSON"
+          },
+          {
+            "cut_relationships": 671,
+            "relationships": 13750,
+            "type": "FORUM_HASMODERATOR_PERSON"
+          },
+          {
+            "cut_relationships": 31793,
+            "relationships": 47697,
+            "type": "FORUM_HASTAG_TAG"
+          },
+          {
+            "cut_relationships": 95,
+            "relationships": 7955,
+            "type": "ORGANISATION_ISLOCATEDIN_PLACE"
+          },
+          {
+            "cut_relationships": 26650,
+            "relationships": 35475,
+            "type": "PERSON_HASINTEREST_TAG"
+          },
+          {
+            "cut_relationships": 295,
+            "relationships": 1528,
+            "type": "PERSON_ISLOCATEDIN_PLACE"
+          },
+          {
+            "cut_relationships": 8520,
+            "relationships": 14073,
+            "type": "PERSON_KNOWS_PERSON"
+          },
+          {
+            "cut_relationships": 38661,
+            "relationships": 62225,
+            "type": "PERSON_LIKES_COMMENT"
+          },
+          {
+            "cut_relationships": 27701,
+            "relationships": 47215,
+            "type": "PERSON_LIKES_POST"
+          },
+          {
+            "cut_relationships": 215,
+            "relationships": 1209,
+            "type": "PERSON_STUDYAT_ORGANISATION"
+          },
+          {
+            "cut_relationships": 705,
+            "relationships": 3313,
+            "type": "PERSON_WORKAT_ORGANISATION"
+          },
+          {
+            "cut_relationships": 177,
+            "relationships": 1454,
+            "type": "PLACE_ISPARTOF_PLACE"
+          },
+          {
+            "cut_relationships": 3953,
+            "relationships": 135701,
+            "type": "POST_HASCREATOR_PERSON"
+          },
+          {
+            "cut_relationships": 32097,
+            "relationships": 51118,
+            "type": "POST_HASTAG_TAG"
+          },
+          {
+            "cut_relationships": 14141,
+            "relationships": 135701,
+            "type": "POST_ISLOCATEDIN_PLACE"
+          },
+          {
+            "cut_relationships": 31,
+            "relationships": 70,
+            "type": "TAGCLASS_ISSUBCLASSOF_TAGCLASS"
+          },
+          {
+            "cut_relationships": 7236,
+            "relationships": 16080,
+            "type": "TAG_HASTYPE_TAGCLASS"
+          }
+        ],
+        "seconds": 31.788381649999998,
+        "seed": 42,
+        "threads": 1,
+        "undirected_edges": 1476534,
+        "vertex_order": "source-key-lexical",
+        "vertices": 327588
+      },
+      "backend_writers": {
+        "ArangoDB": {
+          "counts": {
+            "edges": 1311345,
+            "nodes": 302824,
+            "proxies": 15451
+          },
+          "bytes": 392911618,
+          "seconds": 56.504305909,
+          "bytes_per_second": 6953657.985513225
+        },
+        "Neo4J": {
+          "counts": {
+            "edges": 772198,
+            "nodes": 15278,
+            "proxies": 293383
+          },
+          "bytes": 143786003,
+          "seconds": 42.076065932,
+          "bytes_per_second": 3417287.234799364
+        },
+        "PostgreSQL": {
+          "counts": {
+            "edges": 318353,
+            "nodes": 9486,
+            "proxies": 304352
+          },
+          "bytes": 104908382,
+          "seconds": 9.225875184,
+          "bytes_per_second": 11371103.543860821
+        }
+      },
+      "allocated_artifact_bytes": 1094696960,
+      "graph_identity_sha256": "2aca358e1bb287fb7079743cca45394a1f8ae538dbcd3d41da46158b91a11b34",
+      "strict_verified": true,
+      "verification_seconds": 162.55149743700167,
+      "artifacts_retained": true
+    }
+  ],
+  "limitations": [
+    "Preparation only: no native database load or traversal performance claim.",
+    "Shared host, uncontrolled caches/swap; client maximum process RSS is not a hard memory budget.",
+    "Strict verification and graph fingerprinting are outside GNU-time preparation measurements.",
+    "Final allocated disk is measured before optional discard, not peak temporary disk or I/O bytes."
+  ],
+  "build_type": "Debug",
+  "compiler": "c++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "source": {
+    "adapter": "ldbc-snb",
+    "files": [
+      {
+        "bytes": 13218305,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/comment_0_0.csv",
+        "sha256": "7a61fad9c9230c0a512e3097cc9de9789c6ca23beafb26f25fda3785746ffee3"
+      },
+      {
+        "bytes": 3953993,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/comment_hasCreator_person_0_0.csv",
+        "sha256": "d8216c90b519a22fbfcdd9f8c4da9cd7c10ab9c01d9923cef66dbf3dc5cd93b1"
+      },
+      {
+        "bytes": 3459591,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/comment_hasTag_tag_0_0.csv",
+        "sha256": "3eb683f632f8a40b8b0a0e93c2567afb267e5f8a0904a74db33f4e295e37b75b"
+      },
+      {
+        "bytes": 2398376,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/comment_isLocatedIn_place_0_0.csv",
+        "sha256": "f1392ead20af1262e116520a3bfea5c9b0b98034973a9bb10a07318403246aec"
+      },
+      {
+        "bytes": 2006899,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/comment_replyOf_comment_0_0.csv",
+        "sha256": "e021bdf50628abec989e26b8c193c67d6374a727efe51b9ef273781f962868ca"
+      },
+      {
+        "bytes": 1942023,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/comment_replyOf_post_0_0.csv",
+        "sha256": "faea7f994a5aa16679d595602e2dc387db1c8f085acd1c86fbdd3a8c555b2584"
+      },
+      {
+        "bytes": 713464,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/forum_0_0.csv",
+        "sha256": "f881c221bb3cf45c2a521871781dca515edb8765ec3a5457e9e545c0de1e9311"
+      },
+      {
+        "bytes": 3535256,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/forum_containerOf_post_0_0.csv",
+        "sha256": "d049bc05cd1477569c170bb984f77bfa2cada4276f1aca2b5348f2f32b4f01d9"
+      },
+      {
+        "bytes": 5033179,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/forum_hasMember_person_0_0.csv",
+        "sha256": "ecc6ac977063e918d5bf2787647328ff724c16ba8c8614118ef5408d0f3ac0c6"
+      },
+      {
+        "bytes": 364464,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/forum_hasModerator_person_0_0.csv",
+        "sha256": "62acdc36dd39a0f2379b5f1eac96b7fb066c437c069c526f263656bcf715c856"
+      },
+      {
+        "bytes": 838260,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/forum_hasTag_tag_0_0.csv",
+        "sha256": "714acb5f812ab7b0e802134db03f22bbff05986931690f1b61dd16259cbdf616"
+      },
+      {
+        "bytes": 128884,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/person_0_0.csv",
+        "sha256": "fe79de0f2fe6cd23da5919a3207f4f7cda8988fcf22d5309c1cdf296edda82bc"
+      },
+      {
+        "bytes": 146096,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/person_email_emailaddress_0_0.csv",
+        "sha256": "e99c8db739d54e46e9b6c0b9aa97db245cae1057e05942994ffacd896dfdbb83"
+      },
+      {
+        "bytes": 676851,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/person_hasInterest_tag_0_0.csv",
+        "sha256": "32ddc6453110fa646e669782f529d2f73b4ca0555e326f126b2995e0c2967468"
+      },
+      {
+        "bytes": 28404,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/person_isLocatedIn_place_0_0.csv",
+        "sha256": "bd3b43330b765ac1af51651f937fdae95abbf9a0dd511370f685527c0b195ca4"
+      },
+      {
+        "bytes": 592535,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/person_knows_person_0_0.csv",
+        "sha256": "6a6fa1ef658e0fbfe8b0184575772217d5563ea9e8aa859b2d96d737e2ff3d25"
+      },
+      {
+        "bytes": 2567488,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/person_likes_comment_0_0.csv",
+        "sha256": "f1e4bb5b142cd9dae41041f8a8be191d29a2ce6b2bde7961f080ae4c6d6b8896"
+      },
+      {
+        "bytes": 1939177,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/person_likes_post_0_0.csv",
+        "sha256": "24fda1be6785da83fe4b7d15a4594157cf7813c0b23a03d4458da4561e8cea91"
+      },
+      {
+        "bytes": 58282,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/person_speaks_language_0_0.csv",
+        "sha256": "52b1da354b80c7f76d0bac697d973a7c07fbafc0987785007a63511de8321a35"
+      },
+      {
+        "bytes": 29287,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/person_studyAt_organisation_0_0.csv",
+        "sha256": "c1ca2230c1d693f4b3d389569eb2c8ce795210696de9e5d617c3fe0cd5640aa1"
+      },
+      {
+        "bytes": 77429,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/person_workAt_organisation_0_0.csv",
+        "sha256": "b1a6424f226e3d8082865183193faac5b13791ad7808b543bb6c186602a8848a"
+      },
+      {
+        "bytes": 12003836,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/post_0_0.csv",
+        "sha256": "92b35849a71fb33c48f233d0e4ac1c3341c6ca6f5bc15fff6a4e18b585455dc3"
+      },
+      {
+        "bytes": 3591800,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/post_hasCreator_person_0_0.csv",
+        "sha256": "36e6da71ecb1bf789d126d81c4f5e2fb32553a8e1343a547a797bdafb8062afc"
+      },
+      {
+        "bytes": 911075,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/post_hasTag_tag_0_0.csv",
+        "sha256": "cabbdf6b6912f737811639038bdb54ae67ece7e0a1390adc6a63d839be866957"
+      },
+      {
+        "bytes": 2155859,
+        "path": "data/ldbc-snb/sf0_1/raw/dynamic/post_isLocatedIn_place_0_0.csv",
+        "sha256": "0d8035b49aaa07b7be466e58defb06b56ca4402b18df308e4ceef5f5a7d58915"
+      },
+      {
+        "bytes": 819926,
+        "path": "data/ldbc-snb/sf0_1/raw/static/organisation_0_0.csv",
+        "sha256": "37415355e0d524be6f2f8321e4dd9290da7f94b955284bf8be443478fcbfe366"
+      },
+      {
+        "bytes": 70928,
+        "path": "data/ldbc-snb/sf0_1/raw/static/organisation_isLocatedIn_place_0_0.csv",
+        "sha256": "9783fac3ea1293775c80e9657c107679b4b9ac458555eae014a284ed2d9e8465"
+      },
+      {
+        "bytes": 81884,
+        "path": "data/ldbc-snb/sf0_1/raw/static/place_0_0.csv",
+        "sha256": "f2ecc4db415c122d5de97931f4b0c3aea93c318c849390ed01006fe860c48236"
+      },
+      {
+        "bytes": 10458,
+        "path": "data/ldbc-snb/sf0_1/raw/static/place_isPartOf_place_0_0.csv",
+        "sha256": "b3892a6708fe8315f3212382d903cde7b06238dece86d8c15776d64b996762b8"
+      },
+      {
+        "bytes": 1106348,
+        "path": "data/ldbc-snb/sf0_1/raw/static/tag_0_0.csv",
+        "sha256": "a1c976ef974519d52261800631e9038ddd9cd29e99727b06f1eda130b7700f1f"
+      },
+      {
+        "bytes": 147267,
+        "path": "data/ldbc-snb/sf0_1/raw/static/tag_hasType_tagclass_0_0.csv",
+        "sha256": "6afdf21e6a8c96b72e33f384a335b6cc69297b690376a367a9af05ca00ac4205"
+      },
+      {
+        "bytes": 3874,
+        "path": "data/ldbc-snb/sf0_1/raw/static/tagclass_0_0.csv",
+        "sha256": "433b19e0b95b0c9b8a3a1a4ca1c638fadc6fbd28f7501e57abd0b3f5b8d56a92"
+      },
+      {
+        "bytes": 545,
+        "path": "data/ldbc-snb/sf0_1/raw/static/tagclass_isSubclassOf_tagclass_0_0.csv",
+        "sha256": "9302ffa1c37648743864e32c2cca872abea3bf34f841729d5448f53976aa9d4d"
+      }
+    ],
+    "path": "data/ldbc-snb/sf0_1/raw"
+  },
+  "counts": {
+    "edges": 1477965,
+    "nodes": 327588
+  },
+  "placement": {
+    "nodeSources": {
+      "Comment": "ArangoDB",
+      "Forum": "Neo4J",
+      "Organisation": "PostgreSQL",
+      "Person": "Neo4J",
+      "Place": "PostgreSQL",
+      "Post": "ArangoDB",
+      "Tag": "ArangoDB",
+      "TagClass": "PostgreSQL"
+    },
+    "relationshipSources": {
+      "COMMENT_HASCREATOR_PERSON": "ArangoDB",
+      "COMMENT_HASTAG_TAG": "ArangoDB",
+      "COMMENT_ISLOCATEDIN_PLACE": "PostgreSQL",
+      "COMMENT_REPLYOF_COMMENT": "ArangoDB",
+      "COMMENT_REPLYOF_POST": "ArangoDB",
+      "FORUM_CONTAINEROF_POST": "ArangoDB",
+      "FORUM_HASMEMBER_PERSON": "Neo4J",
+      "FORUM_HASMODERATOR_PERSON": "Neo4J",
+      "FORUM_HASTAG_TAG": "ArangoDB",
+      "ORGANISATION_ISLOCATEDIN_PLACE": "PostgreSQL",
+      "PERSON_HASINTEREST_TAG": "ArangoDB",
+      "PERSON_ISLOCATEDIN_PLACE": "PostgreSQL",
+      "PERSON_KNOWS_PERSON": "Neo4J",
+      "PERSON_LIKES_COMMENT": "ArangoDB",
+      "PERSON_LIKES_POST": "ArangoDB",
+      "PERSON_STUDYAT_ORGANISATION": "Neo4J",
+      "PERSON_WORKAT_ORGANISATION": "Neo4J",
+      "PLACE_ISPARTOF_PLACE": "PostgreSQL",
+      "POST_HASCREATOR_PERSON": "ArangoDB",
+      "POST_HASTAG_TAG": "ArangoDB",
+      "POST_ISLOCATEDIN_PLACE": "PostgreSQL",
+      "TAGCLASS_ISSUBCLASSOF_TAGCLASS": "PostgreSQL",
+      "TAG_HASTYPE_TAGCLASS": "PostgreSQL"
+    },
+    "storageBackends": [
+      "Neo4J",
+      "ArangoDB",
+      "PostgreSQL"
+    ]
+  },
+  "summary": {
+    "none": {
+      "repetitions": 1,
+      "mean_prepare_wall_seconds": 84.61,
+      "min_prepare_wall_seconds": 84.61,
+      "max_prepare_wall_seconds": 84.61,
+      "sample_standard_deviation": null,
+      "overhead_seconds": 0.0,
+      "overhead_percent": 0.0
+    },
+    "k2": {
+      "repetitions": 1,
+      "mean_prepare_wall_seconds": 143.5,
+      "min_prepare_wall_seconds": 143.5,
+      "max_prepare_wall_seconds": 143.5,
+      "sample_standard_deviation": null,
+      "overhead_seconds": 58.89,
+      "overhead_percent": 69.60170192648623
+    },
+    "k8": {
+      "repetitions": 1,
+      "mean_prepare_wall_seconds": 146.97,
+      "min_prepare_wall_seconds": 146.97,
+      "max_prepare_wall_seconds": 146.97,
+      "sample_standard_deviation": null,
+      "overhead_seconds": 62.36,
+      "overhead_percent": 73.70287200094552
+    }
+  },
+  "host_after": {
+    "kernel": "6.8.0-138-generic",
+    "architecture": "x86_64",
+    "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "logical_cpus": 16,
+    "cpu_governor": "powersave",
+    "memory": {
+      "MemTotal_bytes": 33497423872,
+      "MemAvailable_bytes": 5507198976,
+      "SwapTotal_bytes": 10737410048,
+      "SwapFree_bytes": 741376
+    },
+    "load_average": [
+      2.11865234375,
+      2.4052734375,
+      2.62548828125
+    ],
+    "kernel_pressure": {
+      "memory": "some avg10=0.00 avg60=0.00 avg300=0.00 total=2639163506\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=2235468402",
+      "io": "some avg10=0.00 avg60=0.00 avg300=0.06 total=2980227886\nfull avg10=0.00 avg60=0.00 avg300=0.06 total=454486472"
+    }
+  },
+  "measurement": "Matched native preparation: none versus sequential KaMinPar, schema placement unchanged",
+  "evidence_directory": "build/ingestion-partition/sf01-overhead-complete-001",
+  "verification": {
+    "all_trials_strict_verified": true,
+    "identical_original_graphs": true,
+    "sequential_assignments_repeat": null
+  }
+}

@@ -27,6 +27,8 @@ cmake --build --preset gpu-bfs
 
 | Preset | Purpose |
 |---|---|
+| `cpu-tests` | CPU adapters, native ingestion, BFS and ordinary tests |
+| `cpu-partition-tests` | CPU ingestion/tests with optional real KaMinPar and TBB |
 | `cpu-core` | core library + tests, no backends/BFS |
 | `cpu-bfs` | release CPU BFS CLI/benchmark |
 | `cpu-bfs-debug` | debug CPU BFS |
@@ -77,3 +79,7 @@ cmake --build build/gpu-bfs --target polygraph-mg-cugraph-bfs
 ```
 
 MPI and CUDA-aware MPI executables are separate, and **are not part of production traversal**. See [the research source README](../../src/gpu/distributed/README.md).
+
+## Optional ingestion partitioning
+
+`cmake --preset cpu-partition-tests` enables `POLYGRAPH_INGESTION_KAMINPAR`. It uses an installed compatible KaMinPar package or fetches a pinned shared-memory library when dependency fetching is enabled. Ordinary presets leave it disabled. See [graph partitioning](GRAPH_PARTITIONING.md) for offline source overrides, prerequisites, build and load commands.

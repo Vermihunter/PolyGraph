@@ -51,7 +51,7 @@ cmake --build build/ingestion-only --target polygraph_bulk_import
 ```mermaid
 flowchart LR
   A[Streaming JSONL or CsvBasic adapter] --> N[Normalize properties and placement]
-  N --> P[Optional external partition mapping]
+  N --> P[Optional KaMinPar or external assignments]
   P --> I[Assign or validate canonical IDs]
   I --> D[(SQLite node and edge index)]
   D --> R[Resolve endpoints and adjacency replicas]
@@ -82,7 +82,9 @@ The existing placement format is used directly: `storageBackends`, `nodeSources`
 
 Vertex ownership and edge ownership remain independent. Every relationship is stored once at each distinct member of `{relationship owner, from-node owner, to-node owner}`. Each store gets only one proxy for each required remote endpoint. Neo4j and Arango proxies have type `Proxy`; **PostgreSQL proxies and `from_type`/`to_type` retain the logical node types**, as required by its current BFS adapter.
 
-`--partitioner none` performs no graph partitioning. **KaMinPar is not integrated in this release.** `--partitioner kaminpar` fails, and `POLYGRAPH_INGESTION_KAMINPAR=ON` fails configuration; neither silently substitutes another algorithm. There is consequently no claim about KaMinPar graph representation, memory use, determinism, edge-cut quality, weights or balance. An actual future integration must specify CSR/symmetrization of directed arcs, duplicate/self-loop treatment, vertex/edge weights, seed/thread determinism and balance constraints before enabling the flag.
+`--partitioner none` performs no graph partitioning. Optional real KaMinPar integration is enabled with `POLYGRAPH_INGESTION_KAMINPAR=ON` or the `cpu-partition-tests` preset. `--partitioner kaminpar --partitions 8` generates partitions before final IDs and adds partition properties while preserving schema ownership. Add an explicit `--partition-map` to choose raw node ownership by partition; relationship ownership still follows `relationshipSources`. Canonical IDs cannot be remapped. A build without KaMinPar rejects the request explicitly.
+
+See [Topology-aware native ingestion](GRAPH_PARTITIONING.md) for exact build/load commands, the undirected unit-weight CSR projection, seed/thread determinism, balance and memory limits, stored metadata and benchmarks.
 
 An existing external partition assignment can be used without pretending to run a partitioner:
 
@@ -96,7 +98,7 @@ build/cpu-tests/bin/polygraph_bulk_import prepare \
   --output-dir build/bulk-example/partitioned
 ```
 
-Assignment JSONL contains `{"key":"Person:1","partition":10}`; canonical input uses the owner-only decimal node ID as key. Every input node needs an assignment. The mapping JSON maps partition numbers to configured backend names. Partition numbers never become backend IDs. Mapping chooses node ownership before finalizing raw IDs; relationships retain schema ownership. It cannot rewrite existing canonical ownership. The manifest distinguishes `external` assignments from `none`, includes assignment/configuration hashes and the seed, and reports cross-backend edge counts. This is a backend-crossing metric, **not a measured partition edge cut**.
+Assignment JSONL contains `{"key":"Person:1","partition":10}`; canonical input uses the owner-only decimal node ID as key. Every input node needs an assignment. The mapping JSON maps partition numbers to configured backend names. Partition numbers never become backend IDs. Mapping chooses node ownership before finalizing raw IDs; relationships retain schema ownership. It cannot rewrite existing canonical ownership. The manifest distinguishes `external` assignments from `none`, includes assignment/configuration hashes and the seed, exports a checksummed assignment artifact and reports both partition cuts and cross-backend endpoint counts. These are separate metrics. Nodes/proxies carry `partition_id`; edges/replicas carry `from_partition_id`, `to_partition_id`, and `is_partition_cut`. PostgreSQL uses its existing JSONB properties; its COPY columns and tables remain unchanged.
 
 ## Artifacts and native execution
 
@@ -185,7 +187,7 @@ Alternatively configure `-DPOLYGRAPH_INGESTION_LIVE_TESTS=ON`, build importer/BF
 
 ## Memory, disk and measurement
 
-`--memory-limit-mb` budgets SQLite caches and record buffers; it is **not a hard RSS/cgroup limit**. `--max-record-mb` bounds individual CSV/JSONL/auxiliary records (default 8, no larger than one quarter of the memory budget). Cache use is divided across at most three backend workers. Prefixes are capped at 65,536 entries. Type metadata is capped at 4,096 types / 1 MiB, sanitized names at 200 bytes, and combined JSONL metadata at the record limit. Unicode label sanitization matches the Python code-point convention. Neo4j inferred schemas are capped at 1,024 columns and 64 KiB per type; larger schema unions fail explicitly. Memory otherwise depends on a record, bounded type/property metadata and input file metadata, rather than vertex/edge count. Disk use includes normalized graph/property data, ID indexes, replica/proxy tables, native files and temporary/checkpoint files. Allow substantial space beyond source size, especially with cross-backend replication. Use fast local SSD storage; network filesystem locking/fsync semantics must be suitable for recovery guarantees.
+`--memory-limit-mb` budgets SQLite caches and record buffers; it is **not a hard RSS/cgroup limit**. `--max-record-mb` bounds individual CSV/JSONL/auxiliary records (default 8, no larger than one quarter of the memory budget). Cache use is divided across at most three backend workers. Prefixes are capped at 65,536 entries. Type metadata is capped at 4,096 types / 1 MiB, sanitized names at 200 bytes, and combined JSONL metadata at the record limit. Unicode label sanitization matches the Python code-point convention. Neo4j inferred schemas are capped at 1,024 columns and 64 KiB per type; larger schema unions fail explicitly. Without generated partitioning, memory otherwise depends on a record, bounded type/property metadata and input file metadata, rather than vertex/edge count. KaMinPar additionally needs O(V+E) CSR/refinement memory; see the [partitioning budget and limitations](GRAPH_PARTITIONING.md#objective-determinism-and-memory). Disk use includes normalized graph/property data, ID indexes, replica/proxy tables, native files and temporary/checkpoint files. Allow substantial space beyond source size, especially with cross-backend replication. Use fast local SSD storage; network filesystem locking/fsync semantics must be suitable for recovery guarantees.
 
 Measure preparation separately from import:
 
@@ -198,7 +200,7 @@ python3 tools/ingestion/benchmark.py \
 
 The report records timings, nodes/s, edges/s, writer bytes/s, counts, RSS, partitioning availability and input hashes. It measures the existing Python converter on identical raw input too. These preparation stages produce different outputs; their elapsed times are not an equal-work speedup comparison. Optional `--native-import-command` and `--python-load-command` accept explicit JSON argv arrays for separately provisioned fresh targets; `--confirm-execute` is required. Match datasets, DB versions/settings, hardware and cleanup policy; record all of these with results. The harness never infers resets or cleanup. Native execution journals report per-backend native durations and end-to-end verification-inclusive elapsed time. No universal performance improvement is claimed.
 
-Current limitations: no KaMinPar implementation, no Parquet adapter, no online/incremental Neo4j import, no automatic DB provisioning in manual `execute` or uncertain-stage execution retries, and no large-scale native-versus-Python-loader import performance claim. Supported live versions and measured results should be reported with each test run.
+Current limitations: no weighted partition objectives, no Parquet adapter, no online/incremental Neo4j import, no automatic DB provisioning in manual `execute` or uncertain-stage execution retries, and no large-scale native-versus-Python-loader import performance claim. Supported live versions and measured results should be reported with each test run.
 
 ## Exit codes
 

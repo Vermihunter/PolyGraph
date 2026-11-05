@@ -70,8 +70,16 @@ namespace polygraph::ingestion::detail {
     [[nodiscard]] std::unique_ptr<IGraphInputAdapter> make_adapter(const PrepareOptions &options,
                                                                    const fs::path &scratch);
     [[nodiscard]] Json normalize(const PrepareOptions &options, const Placement &placement, const fs::path &scratch);
+    [[nodiscard]] bool partition_metadata_enabled(const PrepareOptions &options) noexcept;
+    [[nodiscard]] Json load_partition_mapping(const PrepareOptions &options, const Placement &placement);
+    [[nodiscard]] Json prepare_partition_assignments(const PrepareOptions &options, Database &db,
+                                                     const fs::path &scratch);
+    void finish_partition_metadata(const PrepareOptions &options, Database &db, const fs::path &scratch,
+                                   Json &partitioning);
+    void verify_partition_metadata(Database &db, const fs::path &root, const Json &manifest);
     [[nodiscard]] Json generate_backend(Backend backend, const PrepareOptions &options, const fs::path &scratch,
-                                        const fs::path &generation, const fs::path &root);
+                                        const fs::path &generation, const fs::path &root,
+                                        bool partition_metadata = false);
     [[nodiscard]] fs::path artifact_path(const fs::path &root, const Json &artifact);
     [[nodiscard]] Json input_identity(const PrepareOptions &options);
     [[nodiscard]] std::string csv_row(const std::vector<std::string> &fields);
