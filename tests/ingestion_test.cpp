@@ -391,6 +391,34 @@ TEST_F(IngestionTest, Neo4jDatabaseArgumentPrecedesVariadicFileOptions) {
     std::string text{std::istreambuf_iterator<char>(in), {}};
     EXPECT_TRUE(text.starts_with("database\nimport\nfull\nbulk-argument-test\n"));
 }
+
+TEST_F(IngestionTest, ArangoImportTuningIsValidatedBeforeRemotePreflight) {
+    auto o = fixture();
+    (void) prepare(o);
+    for (const auto &setting: std::vector<Json>{{{"import_concurrency", 0}},
+                                                {{"import_concurrency", 33}},
+                                                {{"import_concurrency", -1}},
+                                                {{"import_concurrency", 1.5}},
+                                                {{"import_concurrency", "4"}},
+                                                {{"import_batch_mb", 0}},
+                                                {{"import_buffer_mb", 0}},
+                                                {{"import_batch_mb", 8}, {"import_buffer_mb", 1}}}) {
+        auto target = setting;
+        target["database"] = "bulk-config-arango";
+        target["endpoint"] = "http://127.0.0.1:1";
+        write_json_atomic(dir / "targets.json", {{"targets",
+                                                  {{"ArangoDB", target},
+                                                   {"Neo4J", {{"database", "bulk-config-neo"}}},
+                                                   {"PostgreSQL", {{"database", "bulk_config_pg"}}}}}});
+        try {
+            execute(o.output_dir / "manifest.json", dir / "targets.json", true, 1, {}, VerificationMode::none);
+            FAIL() << "Invalid import settings were accepted: " << setting;
+        } catch (const Error &error) {
+            EXPECT_NE(std::string(error.what()).find("import_"), std::string::npos) << error.what();
+        }
+        EXPECT_FALSE(fs::exists(o.output_dir / "execution-state.json"));
+    }
+}
 TEST_F(IngestionTest, PostgreSqlProxiesRetainLogicalEndpointTypesForBfs) {
     auto o = fixture();
     const auto m = prepare(o);

@@ -37,7 +37,7 @@ PolyGraph is a C++23 research runtime that executes graph traversals over a **si
 
 ### Research · reproduce, do not assume
 
-[GPU experiments and findings](research/GPU_PERFORMANCE_EXPERIMENTS.md) · [Distributed GPU integration status](research/DISTRIBUTED_GPU.md) · [Standalone multi-GPU and MPI probes](../src/gpu/distributed/README.md) · [Arango sweep](research/ARANGO_CHUNK_SWEEP.md) · [SF1 distribution matrix](benchmarks/SF1_DISTRIBUTION_MATRIX.md) · [SF1 cache research](benchmarks/SF1_CACHE_RESEARCH.md) · [SF0.1 ingestion baseline](benchmarks/INGESTION_SF0_1_BASELINE.md) · [Benchmark notes](benchmarks/LOW_MEMORY_BFS_EXPERIMENT_V4.md) · [Historical revision notes](history/REVISION_NOTES.md)
+[GPU experiments and findings](research/GPU_PERFORMANCE_EXPERIMENTS.md) · [Distributed GPU integration status](research/DISTRIBUTED_GPU.md) · [Standalone multi-GPU and MPI probes](../src/gpu/distributed/README.md) · [Arango sweep](research/ARANGO_CHUNK_SWEEP.md) · [SF1 distribution matrix](benchmarks/SF1_DISTRIBUTION_MATRIX.md) · [SF1 cache research](benchmarks/SF1_CACHE_RESEARCH.md) · [SF0.1 ingestion baseline](benchmarks/INGESTION_SF0_1_BASELINE.md) · [Concurrent ingestion measurements](benchmarks/INGESTION_THROUGHPUT.md) · [Benchmark notes](benchmarks/LOW_MEMORY_BFS_EXPERIMENT_V4.md) · [Historical revision notes](history/REVISION_NOTES.md)
 
 ## Source reference
 

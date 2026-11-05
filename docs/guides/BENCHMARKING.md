@@ -6,6 +6,30 @@ This page documents repository tooling. The separate `docs/benchmarks/` thesis m
 
 The [LDBC SNB SF0.1 ingestion baseline](../benchmarks/INGESTION_SF0_1_BASELINE.md) publishes one measured import-only data point with preparation/native/end-to-end times, throughput, client CPU/RSS, sampled Docker resources and final disk allocation. It includes a [machine-readable record](../benchmarks/data/native-ingestion-sf0_1-2026-11-04.json), exact reproduction commands and the measured bottleneck. `tools/ingestion/benchmark_ldbc.py` measures a real raw dataset using fresh owned Docker targets; increasing scale factors and repeated trials can use the same tool with different input labels and fresh output directories. A single SF0.1 observation does not establish a scaling curve.
 
+The [concurrent ingestion comparison](../benchmarks/INGESTION_THROUGHPUT.md) records two matched SF0.1 runs per worker setting and explains the measured bottleneck.
+
+To compare serial and concurrent Arango loading, use the same executable, input, placement, images and batch/buffer sizes, changing only worker count. Each trial needs a fresh output directory:
+
+```bash
+for trial in 1 2 3; do
+  for workers in 1 4; do
+    python3 tools/ingestion/benchmark_ldbc.py \
+      --binary build/cpu-tests/bin/polygraph_bulk_import \
+      --input data/ldbc-snb/sf0_1/raw \
+      --placement-config tools/ldbc_snb/placement.schema-3db.json \
+      --scale-factor 0.1 --docker --threads 3 --memory-limit-mb 256 \
+      --arango-concurrency "$workers" --arango-batch-mb 1 --arango-buffer-mb 128 \
+      --output-dir "build/ingestion-benchmark/sf01-workers-${workers}-trial-${trial}"
+  done
+done
+```
+
+Add `--verify-after --bfs-binary build/cpu-tests/bin/polygraph_bfs` to a representative optimized trial to run strict artifact reconstruction, exact native ID/type/endpoint verification and cross-backend BFS **after** stopping the timing/resource measurements. The collector retains its owned services until verification completes, publishes `post_import_verification` only on success, and cleans up only those resources. A failed or interrupted import is never replayed; retain diagnostics and use a new directory. Exhaustive verification can take substantially longer than the import.
+
+Reports include the executable SHA-256, engine-source fingerprint, collector SHA-256, git revision/dirty state, input hashes, image IDs and host pressure indicators. Match these before attributing a difference to worker count. Arango reports document, edge and index times plus acknowledged batches and observed queue/payload limits; PostgreSQL and Neo4j report their native phases separately. Compare repeated trials, variation and resource costs, not only the fastest time.
+
+Monitoring is observational: a transient Docker stats timeout is recorded as `containers.sampling_errors` and does not cancel a healthy load. Starting/exiting containers with incomplete CPU/memory counters are counted in `unavailable_container_samples`; these observations are omitted, never fabricated as zero. Resource figures remain sampled lower bounds, including the auto-removed Neo4j importer's CPU tail. Exclude failed trials and flag incomplete monitoring when comparing resource costs. Final disk allocation is measured before verification/cleanup; neither verification nor cleanup belongs to the timed import.
+
 ## BFS benchmark executable
 
 The dedicated executable initializes the runtime once and runs repeated BFS measurements:

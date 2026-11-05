@@ -28,6 +28,7 @@ polygraph_bulk_import load --adapter <ldbc-snb|polygraph-jsonl> --input <directo
   [--output-dir <fresh-directory>] [--generation-name <readable-prefix>]
   [--threads 3] [--memory-limit-mb 256] [--chunk-size-mb 64] [--max-record-mb 8]
   [--partitioner none] [--concurrency 3] [--startup-timeout-seconds 180]
+  [--arango-concurrency 4] [--arango-batch-mb 1] [--arango-buffer-mb 128]
   [--neo-image <image>] [--arango-image <image>] [--pg-image <image>]
   [--skip-verification] [--verify-bfs] [--bfs-binary <polygraph_bfs>] [--bfs-max-vertices 100000]
     One command: prepare, strict verify, fresh isolated Docker resources, native
@@ -38,6 +39,8 @@ polygraph_bulk_import load --adapter <ldbc-snb|polygraph-jsonl> --input <directo
     Failures retain logs, stopped owned resources and import journals. No implicit retries.
     Image defaults prefer cached repository images, then fetch official images if missing.
     --verify-bfs additionally compares a depth-two distributed BFS with the source index.
+    ArangoDB uses bounded concurrent HTTP batches. The buffer budget includes queued
+    and in-flight payloads; producer/record buffers and response overhead are additional.
     --skip-verification imports without exhaustive artifact/live/BFS correctness checks.
     Checksums, fresh-target safeguards and importer error/count checks remain enabled.
     Successful unchecked loads report imported, verification skipped; use verify-load later.
@@ -100,17 +103,18 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
                        "--partitioner",   "--seed",          "--threads",          "--memory-limit-mb",
                        "--chunk-size-mb", "--max-record-mb", "--partition-file",   "--partition-map"};
         else if (command == "load")
-            allowed = {"--adapter",          "--input",
-                       "--placement-config", "--docker",
-                       "--keep-running",     "--output-dir",
-                       "--generation-name",  "--threads",
-                       "--memory-limit-mb",  "--chunk-size-mb",
-                       "--max-record-mb",    "--partitioner",
-                       "--concurrency",      "--startup-timeout-seconds",
-                       "--neo-image",        "--arango-image",
-                       "--pg-image",         "--verify-bfs",
-                       "--bfs-binary",       "--bfs-max-vertices",
-                       "--skip-verification"};
+            allowed = {"--adapter",           "--input",
+                       "--placement-config",  "--docker",
+                       "--keep-running",      "--output-dir",
+                       "--generation-name",   "--threads",
+                       "--memory-limit-mb",   "--chunk-size-mb",
+                       "--max-record-mb",     "--partitioner",
+                       "--concurrency",       "--startup-timeout-seconds",
+                       "--neo-image",         "--arango-image",
+                       "--pg-image",          "--verify-bfs",
+                       "--bfs-binary",        "--bfs-max-vertices",
+                       "--skip-verification", "--arango-concurrency",
+                       "--arango-batch-mb",   "--arango-buffer-mb"};
         else if (command == "verify-load")
             allowed = {"--output-dir", "--verify-bfs", "--bfs-binary", "--bfs-max-vertices"};
         else if (command == "verify")

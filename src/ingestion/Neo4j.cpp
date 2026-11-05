@@ -35,6 +35,7 @@ namespace polygraph::ingestion::detail {
                 (void) environment_secret(context_.target, "password_env");
             }
             Json run() override {
+                const auto run_start = Clock::now();
                 preflight();
                 auto argv = context_.target.value("runner", std::vector<std::string>{"neo4j-admin"});
                 if (argv.empty())
@@ -61,6 +62,7 @@ namespace polygraph::ingestion::detail {
                     throw Error("neo4j-admin full import failed (exit " + std::to_string(result.exit_code) +
                                 "); inspect logs/neo4j-import.*.log. Partial offline stores are never retried "
                                 "automatically");
+                const auto startup_start = Clock::now();
                 if (context_.target.contains("start_command")) {
                     const auto start = run_process(context_.target.at("start_command").get<std::vector<std::string>>(),
                                                    context_.root / "logs/neo4j-start");
@@ -82,6 +84,8 @@ namespace polygraph::ingestion::detail {
                 if (!online)
                     throw Error("Neo4j offline import completed, but online verification is unavailable; start the "
                                 "isolated database and run verify-live. execute will not claim success");
+                const auto startup_seconds = elapsed(startup_start);
+                const auto indexes_start = Clock::now();
                 (void) cypher("CREATE CONSTRAINT polygraph_vertex_local_id_unique IF NOT EXISTS FOR "
                               "(n:POLYGRAPHVertex) REQUIRE n.localId IS UNIQUE");
                 (void) cypher(
@@ -94,6 +98,8 @@ namespace polygraph::ingestion::detail {
                     for (const auto *property: {"localId", "uuid"})
                         (void) cypher("CREATE INDEX polygraph_ingestion_" + type + "_" + property +
                                       " IF NOT EXISTS FOR ()-[r:" + type + "]-() ON (r." + property + ")");
+                const auto indexes_seconds = elapsed(indexes_start);
+                const auto repairs_start = Clock::now();
                 // Batch representational repairs; node lookups use the identity constraint index.
                 for (const auto &artifact: context_.artifacts.at("artifacts"))
                     if (artifact.at("kind") == "fixups") {
@@ -132,6 +138,10 @@ namespace polygraph::ingestion::detail {
                         flush();
                     }
                 return {{"native_import_seconds", result.seconds},
+                        {"native_execution_seconds", elapsed(run_start)},
+                        {"startup_seconds", startup_seconds},
+                        {"index_creation_seconds", indexes_seconds},
+                        {"property_repair_seconds", elapsed(repairs_start)},
                         {"exit_code", result.exit_code},
                         {"mechanism", "neo4j-admin database import full"}};
             }

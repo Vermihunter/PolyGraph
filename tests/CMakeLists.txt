@@ -134,6 +134,8 @@ set_tests_properties(python.developer_quality PROPERTIES
 
 if(TARGET polygraph_ingestion)
     polygraph_add_unit_test(polygraph_ingestion_test ingestion_test.cpp polygraph::ingestion)
+    polygraph_add_unit_test(polygraph_ingestion_batch_test ingestion_batch_test.cpp polygraph::ingestion)
+    target_compile_definitions(polygraph_ingestion_batch_test PRIVATE _GLIBCXX_ASSERTIONS)
 endif()
 if(TARGET polygraph_bulk_import)
     add_test(NAME python.ingestion_semantics

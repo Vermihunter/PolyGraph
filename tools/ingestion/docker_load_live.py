@@ -10,6 +10,7 @@ import base64
 import json
 from pathlib import Path
 import secrets
+import sqlite3
 import shlex
 import subprocess
 import sys
@@ -43,7 +44,7 @@ def main():
     common = [args.binary.resolve(), 'load', '--adapter', 'ldbc-snb', '--input', ROOT / 'tests/fixtures/ingestion/raw',
               '--placement-config', ROOT / 'tests/fixtures/ingestion/placement.json', '--docker', '--generation-name', 'e2e']
     results = []
-    for mode in ('keep', 'remove', 'fail', 'deferred'):
+    for mode in ('keep', 'remove', 'fail', 'deferred', 'parallel'):
         output = root / mode
         command = [*common, '--output-dir', output]
         if mode == 'keep':
@@ -53,6 +54,13 @@ def main():
             command += ['--neo-image', 'postgres:17', '--skip-verification']
         if mode == 'deferred':
             command += ['--keep-running', '--skip-verification']
+        if mode == 'parallel':
+            from tools.ingestion.benchmark import dataset
+            source = root / 'parallel-input'
+            dataset(source, 6000)
+            command[command.index('--input') + 1] = source
+            command += ['--keep-running', '--skip-verification', '--arango-concurrency', '4',
+                        '--arango-batch-mb', '1', '--arango-buffer-mb', '8']
         with (root / f'{mode}.stdout.log').open('w') as out, (root / f'{mode}.stderr.log').open('w') as err:
             completed = subprocess.run(list(map(str, command)), stdout=out, stderr=err)
         environment = DockerEnvironment.from_state(output / 'environment.json')
@@ -70,9 +78,36 @@ def main():
             else:
                 assert completed.returncode == 0, (root / f'{mode}.stderr.log').read_text()
                 report = json.loads((output / 'load-result.json').read_text())
-                assert report['counts'] == {'nodes': 3, 'edges': 3}
+                expected_counts = {'nodes': 18000, 'edges': 18000} if mode == 'parallel' else {'nodes': 3, 'edges': 3}
+                assert report['counts'] == expected_counts
                 assert (environment.credentials_path.stat().st_mode & 0o777) == 0o600
-                if mode == 'deferred':
+                if mode == 'parallel':
+                    journal_path = environment.artifacts / 'execution-state.json'
+                    original_journal = journal_path.read_bytes()
+                    imported = json.loads(original_journal)['backends']['ArangoDB']['import']
+                    assert imported['created'] == 36000
+                    batching = imported['batching']
+                    assert batching['workers'] == 4 and batching['peak_active_batches'] >= 2
+                    assert batching['peak_buffered_bytes'] <= 8 * 1024 * 1024
+                    assert batching['peak_queued_batches'] <= 8
+                    assert batching['completed_batches'] > 5
+                    run([args.binary.resolve(), 'verify-load', '--output-dir', output,
+                         '--verify-bfs', '--bfs-binary', args.bfs.resolve()], capture_output=True)
+                    assert journal_path.read_bytes() == original_journal
+                    verified = json.loads((output / 'verification-result.json').read_text())
+                    assert verified['state'] == 'verified' and verified['bfs']['cross_backend']
+                    manifest = json.loads((environment.artifacts / 'manifest.json').read_text())
+                    index = environment.artifacts / manifest['index']['path']
+                    from tools.ingestion.docker_environment import request
+                    with sqlite3.connect(f'{index.as_uri()}?mode=ro', uri=True) as db:
+                        for order in ('ASC', 'DESC'):
+                            ident, properties = db.execute('SELECT id,properties FROM nodes WHERE type=? ORDER BY id ' + order + ' LIMIT 1', ('Post',)).fetchone()
+                            key = str(ident & ((1 << 64) - 1))
+                            stored = request(environment.targets['targets']['ArangoDB']['endpoint'] + '/_db/' +
+                                environment.database + '/_api/document/Post/' + key, 'root', environment.password)
+                            for name, value in json.loads(properties).items():
+                                assert stored[name] == value, (name, stored[name], value)
+                elif mode == 'deferred':
                     assert report['state'] == 'imported' and report['verification'] == 'skipped'
                     assert report['counts_source'] == 'manifest'
                     assert not (environment.artifacts / 'live-verification.json').exists()

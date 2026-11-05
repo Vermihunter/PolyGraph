@@ -25,6 +25,7 @@ namespace polygraph::ingestion::detail {
                 command(schema_sql);
                 command("LOCK TABLE public.polygraph_nodes,public.polygraph_edges IN ACCESS EXCLUSIVE MODE");
                 ensure_empty();
+                const auto copy_start = Clock::now();
                 for (const auto &a: context_.artifacts.at("artifacts")) {
                     const bool nodes = a.at("kind") == "nodes";
                     const std::string columns =
@@ -60,6 +61,8 @@ namespace polygraph::ingestion::detail {
                             fail("COPY finalization failed", remaining.get());
                     }
                 }
+                const auto copy_seconds = elapsed(copy_start);
+                const auto indexes_start = Clock::now();
                 if (context_.target.value("traversal_indexes", false))
                     command(R"(
                     CREATE INDEX IF NOT EXISTS polygraph_edges_from_idx ON public.polygraph_edges(from_id,edge_type) INCLUDE(to_id,to_type);
@@ -67,11 +70,21 @@ namespace polygraph::ingestion::detail {
                     CREATE INDEX IF NOT EXISTS polygraph_nodes_type_idx ON public.polygraph_nodes(type,id);
                 )");
                 command("ANALYZE public.polygraph_nodes; ANALYZE public.polygraph_edges");
+                const auto indexes_seconds = elapsed(indexes_start);
+                const auto verification_start = Clock::now();
                 // Validate in the importing transaction; failures roll back both COPY streams.
                 if (context_.verification == VerificationMode::full)
                     (void) verify();
+                const auto verification_seconds =
+                        context_.verification == VerificationMode::full ? elapsed(verification_start) : 0.0;
+                const auto commit_start = Clock::now();
                 command("COMMIT");
-                return {{"native_import_seconds", elapsed(start)}, {"mechanism", "libpq COPY FROM STDIN"}};
+                return {{"native_import_seconds", elapsed(start)},
+                        {"mechanism", "libpq COPY FROM STDIN"},
+                        {"copy_seconds", copy_seconds},
+                        {"index_and_analyze_seconds", indexes_seconds},
+                        {"verification_seconds", verification_seconds},
+                        {"commit_seconds", elapsed(commit_start)}};
             }
             Json verify() override {
                 connect();

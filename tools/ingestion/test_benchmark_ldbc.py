@@ -3,6 +3,7 @@ import unittest
 import signal
 import subprocess
 import sys
+import io
 
 from tools.ingestion.benchmark_ldbc import ResourceSamples, parse_time
 
@@ -44,6 +45,37 @@ class BenchmarkMetricsTest(unittest.TestCase):
     def test_missing_stats_are_explicitly_rejected(self):
         with self.assertRaises(ValueError):
             ResourceSamples().add_round({'pg': {'cpu_stats': {}, 'memory_stats': {}}})
+
+    def test_exiting_importer_without_memory_counters_is_an_explicit_missing_observation(self):
+        from tools.ingestion.benchmark_ldbc import DockerStats, OWNER_LABEL
+        monitor = DockerStats.__new__(DockerStats)
+        monitor.unavailable_container_samples = 0
+        def get(path):
+            if path.startswith('/containers/json?'):
+                return [{'Id': 'importer', 'Names': ['/fresh-admin'],
+                         'Labels': {OWNER_LABEL: 'fresh'}}]
+            return {'cpu_stats': {'cpu_usage': {'total_usage': 123}}, 'memory_stats': {}}
+        monitor.get = get
+        self.assertEqual(monitor.sample({'generation': 'fresh', 'names': {}}), {})
+        self.assertEqual(monitor.unavailable_container_samples, 1)
+
+    def test_transient_monitor_failure_does_not_cancel_the_ingestion_workload(self):
+        from tools.ingestion.benchmark_ldbc import sample_resources
+        class Monitor:
+            failed = False
+            def sample(self, state):
+                if not self.failed:
+                    self.failed = True
+                    raise TimeoutError('temporary Docker stats timeout')
+                return {'pg': {'cpu_stats': {'cpu_usage': {'total_usage': 2000000000}},
+                               'memory_stats': {'usage': 1024}}}
+        monitor, samples, output = Monitor(), ResourceSamples(), io.StringIO()
+        sample_resources(monitor, {}, samples, output)
+        sample_resources(monitor, {}, samples, output)
+        self.assertEqual(samples.sampling_errors, 1)
+        self.assertEqual(samples.rounds, 1)
+        self.assertEqual(samples.roles['pg']['cpu_seconds_to_last_sample'], 2)
+        self.assertIn('temporary Docker stats timeout', output.getvalue())
 
     def test_initial_cancellation_during_cleanup_does_not_leave_resources(self):
         from tools.ingestion.benchmark_ldbc import cleanup_environment

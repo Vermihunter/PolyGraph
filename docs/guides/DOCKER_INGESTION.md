@@ -127,6 +127,7 @@ After the first cancellation signal, repeated SIGINT/SIGTERM are ignored until l
 - `--keep-running`, `--output-dir`, `--generation-name`, `--skip-verification`.
 - Existing preparation limits: `--threads`, `--memory-limit-mb`, `--chunk-size-mb`, `--max-record-mb`, `--partitioner none`.
 - `--concurrency` for native backend execution and `--startup-timeout-seconds` (default 180).
+- `--arango-concurrency` (default 4, range 1–32), `--arango-batch-mb` (default 1, range 1–64) and `--arango-buffer-mb` (default 128, range 1–1024 and at least the batch target). These are independent of the backend concurrency limit. Set concurrency to 1 for serial Arango loading. At most eight batches wait in the queue; the byte budget includes active requests. Oversized records stay intact and must fit the buffer. The budget is for wire payloads, not whole-process memory.
 - `--neo-image`, `--arango-image`, `--pg-image` for image overrides. Defaults reuse cached repository images; unavailable defaults fall back to official images. Pulling adds missing image content but does not replace running containers.
 - `--verify-bfs`, `--bfs-binary`, `--bfs-max-vertices`.
 
@@ -148,7 +149,7 @@ cmake --preset cpu-tests -DPOLYGRAPH_INGESTION_LIVE_TESTS=ON
 ctest --test-dir build/cpu-tests -L live --output-on-failure
 ```
 
-Service-free tests cover ownership mismatches, credentials permissions/no secrets in argv, preparation failures, refusal to reuse output, interrupted container/network creation, cancellation propagation, process-group termination including a real grandchild, and heterogeneous native-valid edge schemas. Live tests verify imported counts/IDs/endpoints, actual cross-backend BFS, keep-running state, idempotent cleanup, failed native execution/journal retention and preservation of pre-existing containers. The shared Docker lifecycle is also exercised by `tools/ingestion/disposable_live.py`.
+Service-free tests cover ownership mismatches, credentials permissions/no secrets in argv, preparation failures, refusal to reuse output, interrupted container/network creation, cancellation propagation, process-group termination including a real grandchild, heterogeneous native-valid edge schemas and generated Arango tuning. Live tests verify imported counts/IDs/endpoints, actual cross-backend BFS, keep-running state, idempotent cleanup, failed native execution/journal retention and preservation of pre-existing containers. The parallel fixture imports 18,000 logical nodes and 18,000 edges, checks multiple concurrent Arango batches and their limits, then verifies exact native contents, Unicode properties and BFS without changing the import journal. The shared Docker lifecycle is also exercised by `tools/ingestion/disposable_live.py`.
 
 ## Original measured validation run
 

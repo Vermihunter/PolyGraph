@@ -156,7 +156,8 @@ class DockerEnvironmentTest(unittest.TestCase):
         output = self.env.output / 'failed-driver'
         argv = ['docker_load.py', 'load', '--binary', binary, '--adapter', 'ldbc-snb', '--input', 'missing-dataset',
                 '--placement-config', str(Path(__file__).resolve().parents[2] / 'tests/fixtures/ingestion/placement.json'),
-                '--docker', '--output-dir', str(output)]
+                '--docker', '--output-dir', str(output), '--arango-concurrency', '2', '--arango-batch-mb', '1',
+                '--arango-buffer-mb', '16']
         def create(path, generation, **kwargs):
             return DockerEnvironment(path, generation, runner=self.fake)
         with patch.object(sys, 'argv', argv), patch.object(docker_load, 'DockerEnvironment', side_effect=create), \
@@ -166,6 +167,10 @@ class DockerEnvironmentTest(unittest.TestCase):
             state = json.loads((output / 'environment.json').read_text())
             self.assertEqual(state['status'], 'failed')
             self.assertFalse(state['containers'])
+            target = json.loads((output / 'targets.json').read_text())['targets']['ArangoDB']
+            self.assertEqual(target['import_concurrency'], 2)
+            self.assertEqual(target['import_batch_mb'], 1)
+            self.assertEqual(target['import_buffer_mb'], 16)
             with self.assertRaisesRegex(WorkflowError, 'fresh output'):
                 docker_load.main()
         self.assertFalse(any(argv[1] in ('create', 'start') for argv, _ in self.fake.calls))
@@ -346,6 +351,20 @@ p=Path(sys.argv[sys.argv.index('--manifest')+1]).parent
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('cannot be combined', result.stderr)
         self.assertFalse(output.exists())
+
+    def test_invalid_arango_tuning_fails_before_creating_an_environment(self):
+        binary = os.environ.get('POLYGRAPH_BULK_IMPORT')
+        if not binary:
+            self.skipTest('CTest supplies the executable')
+        for tuning in (['--arango-concurrency', '0'], ['--arango-concurrency', '33'],
+                       ['--arango-batch-mb', '0'], ['--arango-buffer-mb', '1', '--arango-batch-mb', '8']):
+            output = self.env.output / 'invalid-tuning'
+            result = subprocess.run([binary, 'load', '--adapter', 'ldbc-snb', '--input', 'missing',
+                '--placement-config', 'missing', '--docker', '--output-dir', str(output), *tuning],
+                capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Arango import settings', result.stderr)
+            self.assertFalse(output.exists())
 
     def test_existing_generation_cannot_be_reused(self):
         with self.assertRaises(WorkflowError):

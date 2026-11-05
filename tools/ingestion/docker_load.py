@@ -265,6 +265,9 @@ def run_cli():
     load.add_argument('--chunk-size-mb', type=int, default=64)
     load.add_argument('--max-record-mb', type=int, default=8)
     load.add_argument('--concurrency', type=int, default=3)
+    load.add_argument('--arango-concurrency', type=int, default=4)
+    load.add_argument('--arango-batch-mb', type=int, default=1)
+    load.add_argument('--arango-buffer-mb', type=int, default=128)
     load.add_argument('--partitioner', choices=['none'], default='none')
     load.add_argument('--startup-timeout-seconds', type=int, default=180)
     load.add_argument('--neo-image'); load.add_argument('--arango-image'); load.add_argument('--pg-image')
@@ -290,6 +293,9 @@ def run_cli():
         return
     if not 1 <= args.concurrency <= 64 or not 1 <= args.startup_timeout_seconds <= 3600 or args.bfs_max_vertices < 1:
         parser.error('concurrency must be 1..64, startup timeout 1..3600, and BFS maximum positive')
+    if (not 1 <= args.arango_concurrency <= 32 or not 1 <= args.arango_batch_mb <= 64 or
+            not args.arango_batch_mb <= args.arango_buffer_mb <= 1024):
+        parser.error('Arango import settings require concurrency 1..32, batch 1..64 MiB, and buffer batch..1024 MiB')
     if args.skip_verification and args.verify_bfs:
         parser.error('--skip-verification cannot be combined with --verify-bfs; use verify-load afterward')
     binary = args.binary.resolve()
@@ -300,6 +306,9 @@ def run_cli():
     output = args.output_dir or Path.cwd() / 'build/ingestion-load' / generation
     environment = DockerEnvironment(output, generation, images={'neo': args.neo_image, 'arango': args.arango_image, 'pg': args.pg_image},
                                     timeout=args.startup_timeout_seconds, memory_mb=args.memory_limit_mb)
+    environment.targets['targets']['ArangoDB'].update(import_concurrency=args.arango_concurrency,
+        import_batch_mb=args.arango_batch_mb, import_buffer_mb=args.arango_buffer_mb)
+    private_json(environment.target_path, environment.targets)
     started = time.monotonic()
     try:
         stage(environment, 'prepare', [binary, 'prepare', '--adapter', args.adapter, '--input', args.input.resolve(),
