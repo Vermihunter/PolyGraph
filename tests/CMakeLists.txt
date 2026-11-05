@@ -159,6 +159,9 @@ if(TARGET polygraph_bulk_import)
         COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
                 "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_docker_workflow -v)
     set_tests_properties(python.ingestion_docker_workflow PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 60)
+    add_test(NAME python.ingestion_benchmark_metrics
+        COMMAND "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_benchmark_ldbc -v)
+    set_tests_properties(python.ingestion_benchmark_metrics PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 20)
 endif()
 if(POLYGRAPH_INGESTION_LIVE_TESTS)
     add_test(NAME integration.ingestion.docker-load

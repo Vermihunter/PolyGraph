@@ -2,6 +2,10 @@
 
 This page documents repository tooling. The separate `docs/benchmarks/` thesis material is intentionally left untouched.
 
+## Native ingestion baseline
+
+The [LDBC SNB SF0.1 ingestion baseline](../benchmarks/INGESTION_SF0_1_BASELINE.md) publishes one measured import-only data point with preparation/native/end-to-end times, throughput, client CPU/RSS, sampled Docker resources and final disk allocation. It includes a [machine-readable record](../benchmarks/data/native-ingestion-sf0_1-2026-11-04.json), exact reproduction commands and the measured bottleneck. `tools/ingestion/benchmark_ldbc.py` measures a real raw dataset using fresh owned Docker targets; increasing scale factors and repeated trials can use the same tool with different input labels and fresh output directories. A single SF0.1 observation does not establish a scaling curve.
+
 ## BFS benchmark executable
 
 The dedicated executable initializes the runtime once and runs repeated BFS measurements:

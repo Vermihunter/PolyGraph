@@ -1,0 +1,436 @@
+{
+  "schema_version": 1,
+  "started_at_utc": "2026-11-04T19:15:00.645738+00:00",
+  "repetitions": 1,
+  "engine_revision": "0ab26cd3a53624c00f25ab441e8dba63001aa2d2",
+  "native_binary_sha256": "95043487382675b39e32947be54f760d4ac8801e33add282bc89e1534308eaf2",
+  "benchmark_script_sha256": "926480c32fd8aae7e478b00f5ae4dd0859ce5ed5f0da2bd4821ae1808cea6c13",
+  "build_type": "Debug",
+  "compiler": "c++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "docker": {
+    "Version": "29.1.3",
+    "ApiVersion": "1.52",
+    "Os": "linux",
+    "Arch": "amd64"
+  },
+  "host_before": {
+    "kernel": "6.8.0-138-generic",
+    "architecture": "x86_64",
+    "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "logical_cpus": 16,
+    "cpu_governor": "powersave",
+    "memory": {
+      "MemTotal_bytes": 33497423872,
+      "MemAvailable_bytes": 6900797440,
+      "SwapTotal_bytes": 10737410048,
+      "SwapFree_bytes": 10948608
+    },
+    "load_average": [
+      2.36474609375,
+      2.77880859375,
+      6.60205078125
+    ]
+  },
+  "host_after": {
+    "kernel": "6.8.0-138-generic",
+    "architecture": "x86_64",
+    "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "logical_cpus": 16,
+    "cpu_governor": "powersave",
+    "memory": {
+      "MemTotal_bytes": 33497423872,
+      "MemAvailable_bytes": 4131835904,
+      "SwapTotal_bytes": 10737410048,
+      "SwapFree_bytes": 2199552
+    },
+    "load_average": [
+      4.29638671875,
+      3.7822265625,
+      5.931640625
+    ]
+  },
+  "dataset": {
+    "name": "LDBC SNB CsvBasic snapshot",
+    "scale_factor": 0.1,
+    "edges": 1477965,
+    "nodes": 327588,
+    "snapshot_bytes": 64612043,
+    "files": [
+      {
+        "path": "dynamic/comment_0_0.csv",
+        "bytes": 13218305,
+        "sha256": "7a61fad9c9230c0a512e3097cc9de9789c6ca23beafb26f25fda3785746ffee3"
+      },
+      {
+        "path": "dynamic/comment_hasCreator_person_0_0.csv",
+        "bytes": 3953993,
+        "sha256": "d8216c90b519a22fbfcdd9f8c4da9cd7c10ab9c01d9923cef66dbf3dc5cd93b1"
+      },
+      {
+        "path": "dynamic/comment_hasTag_tag_0_0.csv",
+        "bytes": 3459591,
+        "sha256": "3eb683f632f8a40b8b0a0e93c2567afb267e5f8a0904a74db33f4e295e37b75b"
+      },
+      {
+        "path": "dynamic/comment_isLocatedIn_place_0_0.csv",
+        "bytes": 2398376,
+        "sha256": "f1392ead20af1262e116520a3bfea5c9b0b98034973a9bb10a07318403246aec"
+      },
+      {
+        "path": "dynamic/comment_replyOf_comment_0_0.csv",
+        "bytes": 2006899,
+        "sha256": "e021bdf50628abec989e26b8c193c67d6374a727efe51b9ef273781f962868ca"
+      },
+      {
+        "path": "dynamic/comment_replyOf_post_0_0.csv",
+        "bytes": 1942023,
+        "sha256": "faea7f994a5aa16679d595602e2dc387db1c8f085acd1c86fbdd3a8c555b2584"
+      },
+      {
+        "path": "dynamic/forum_0_0.csv",
+        "bytes": 713464,
+        "sha256": "f881c221bb3cf45c2a521871781dca515edb8765ec3a5457e9e545c0de1e9311"
+      },
+      {
+        "path": "dynamic/forum_containerOf_post_0_0.csv",
+        "bytes": 3535256,
+        "sha256": "d049bc05cd1477569c170bb984f77bfa2cada4276f1aca2b5348f2f32b4f01d9"
+      },
+      {
+        "path": "dynamic/forum_hasMember_person_0_0.csv",
+        "bytes": 5033179,
+        "sha256": "ecc6ac977063e918d5bf2787647328ff724c16ba8c8614118ef5408d0f3ac0c6"
+      },
+      {
+        "path": "dynamic/forum_hasModerator_person_0_0.csv",
+        "bytes": 364464,
+        "sha256": "62acdc36dd39a0f2379b5f1eac96b7fb066c437c069c526f263656bcf715c856"
+      },
+      {
+        "path": "dynamic/forum_hasTag_tag_0_0.csv",
+        "bytes": 838260,
+        "sha256": "714acb5f812ab7b0e802134db03f22bbff05986931690f1b61dd16259cbdf616"
+      },
+      {
+        "path": "dynamic/person_0_0.csv",
+        "bytes": 128884,
+        "sha256": "fe79de0f2fe6cd23da5919a3207f4f7cda8988fcf22d5309c1cdf296edda82bc"
+      },
+      {
+        "path": "dynamic/person_email_emailaddress_0_0.csv",
+        "bytes": 146096,
+        "sha256": "e99c8db739d54e46e9b6c0b9aa97db245cae1057e05942994ffacd896dfdbb83"
+      },
+      {
+        "path": "dynamic/person_hasInterest_tag_0_0.csv",
+        "bytes": 676851,
+        "sha256": "32ddc6453110fa646e669782f529d2f73b4ca0555e326f126b2995e0c2967468"
+      },
+      {
+        "path": "dynamic/person_isLocatedIn_place_0_0.csv",
+        "bytes": 28404,
+        "sha256": "bd3b43330b765ac1af51651f937fdae95abbf9a0dd511370f685527c0b195ca4"
+      },
+      {
+        "path": "dynamic/person_knows_person_0_0.csv",
+        "bytes": 592535,
+        "sha256": "6a6fa1ef658e0fbfe8b0184575772217d5563ea9e8aa859b2d96d737e2ff3d25"
+      },
+      {
+        "path": "dynamic/person_likes_comment_0_0.csv",
+        "bytes": 2567488,
+        "sha256": "f1e4bb5b142cd9dae41041f8a8be191d29a2ce6b2bde7961f080ae4c6d6b8896"
+      },
+      {
+        "path": "dynamic/person_likes_post_0_0.csv",
+        "bytes": 1939177,
+        "sha256": "24fda1be6785da83fe4b7d15a4594157cf7813c0b23a03d4458da4561e8cea91"
+      },
+      {
+        "path": "dynamic/person_speaks_language_0_0.csv",
+        "bytes": 58282,
+        "sha256": "52b1da354b80c7f76d0bac697d973a7c07fbafc0987785007a63511de8321a35"
+      },
+      {
+        "path": "dynamic/person_studyAt_organisation_0_0.csv",
+        "bytes": 29287,
+        "sha256": "c1ca2230c1d693f4b3d389569eb2c8ce795210696de9e5d617c3fe0cd5640aa1"
+      },
+      {
+        "path": "dynamic/person_workAt_organisation_0_0.csv",
+        "bytes": 77429,
+        "sha256": "b1a6424f226e3d8082865183193faac5b13791ad7808b543bb6c186602a8848a"
+      },
+      {
+        "path": "dynamic/post_0_0.csv",
+        "bytes": 12003836,
+        "sha256": "92b35849a71fb33c48f233d0e4ac1c3341c6ca6f5bc15fff6a4e18b585455dc3"
+      },
+      {
+        "path": "dynamic/post_hasCreator_person_0_0.csv",
+        "bytes": 3591800,
+        "sha256": "36e6da71ecb1bf789d126d81c4f5e2fb32553a8e1343a547a797bdafb8062afc"
+      },
+      {
+        "path": "dynamic/post_hasTag_tag_0_0.csv",
+        "bytes": 911075,
+        "sha256": "cabbdf6b6912f737811639038bdb54ae67ece7e0a1390adc6a63d839be866957"
+      },
+      {
+        "path": "dynamic/post_isLocatedIn_place_0_0.csv",
+        "bytes": 2155859,
+        "sha256": "0d8035b49aaa07b7be466e58defb06b56ca4402b18df308e4ceef5f5a7d58915"
+      },
+      {
+        "path": "static/organisation_0_0.csv",
+        "bytes": 819926,
+        "sha256": "37415355e0d524be6f2f8321e4dd9290da7f94b955284bf8be443478fcbfe366"
+      },
+      {
+        "path": "static/organisation_isLocatedIn_place_0_0.csv",
+        "bytes": 70928,
+        "sha256": "9783fac3ea1293775c80e9657c107679b4b9ac458555eae014a284ed2d9e8465"
+      },
+      {
+        "path": "static/place_0_0.csv",
+        "bytes": 81884,
+        "sha256": "f2ecc4db415c122d5de97931f4b0c3aea93c318c849390ed01006fe860c48236"
+      },
+      {
+        "path": "static/place_isPartOf_place_0_0.csv",
+        "bytes": 10458,
+        "sha256": "b3892a6708fe8315f3212382d903cde7b06238dece86d8c15776d64b996762b8"
+      },
+      {
+        "path": "static/tag_0_0.csv",
+        "bytes": 1106348,
+        "sha256": "a1c976ef974519d52261800631e9038ddd9cd29e99727b06f1eda130b7700f1f"
+      },
+      {
+        "path": "static/tag_hasType_tagclass_0_0.csv",
+        "bytes": 147267,
+        "sha256": "6afdf21e6a8c96b72e33f384a335b6cc69297b690376a367a9af05ca00ac4205"
+      },
+      {
+        "path": "static/tagclass_0_0.csv",
+        "bytes": 3874,
+        "sha256": "433b19e0b95b0c9b8a3a1a4ca1c638fadc6fbd28f7501e57abd0b3f5b8d56a92"
+      },
+      {
+        "path": "static/tagclass_isSubclassOf_tagclass_0_0.csv",
+        "bytes": 545,
+        "sha256": "9302ffa1c37648743864e32c2cca872abea3bf34f841729d5448f53976aa9d4d"
+      }
+    ]
+  },
+  "settings": {
+    "verification": "skipped",
+    "partitioner": "none",
+    "threads": 3,
+    "memory_limit_mb": 256,
+    "placement": {
+      "storageBackends": [
+        "Neo4J",
+        "ArangoDB",
+        "PostgreSQL"
+      ],
+      "nodeSources": {
+        "Person": "Neo4J",
+        "Forum": "Neo4J",
+        "Post": "ArangoDB",
+        "Comment": "ArangoDB",
+        "Tag": "ArangoDB",
+        "Organisation": "PostgreSQL",
+        "Place": "PostgreSQL",
+        "TagClass": "PostgreSQL"
+      },
+      "relationshipSources": {
+        "FORUM_HASMEMBER_PERSON": "Neo4J",
+        "FORUM_HASMODERATOR_PERSON": "Neo4J",
+        "PERSON_KNOWS_PERSON": "Neo4J",
+        "PERSON_STUDYAT_ORGANISATION": "Neo4J",
+        "PERSON_WORKAT_ORGANISATION": "Neo4J",
+        "COMMENT_HASCREATOR_PERSON": "ArangoDB",
+        "COMMENT_HASTAG_TAG": "ArangoDB",
+        "COMMENT_REPLYOF_COMMENT": "ArangoDB",
+        "COMMENT_REPLYOF_POST": "ArangoDB",
+        "FORUM_CONTAINEROF_POST": "ArangoDB",
+        "FORUM_HASTAG_TAG": "ArangoDB",
+        "PERSON_HASINTEREST_TAG": "ArangoDB",
+        "PERSON_LIKES_COMMENT": "ArangoDB",
+        "PERSON_LIKES_POST": "ArangoDB",
+        "POST_HASCREATOR_PERSON": "ArangoDB",
+        "POST_HASTAG_TAG": "ArangoDB",
+        "COMMENT_ISLOCATEDIN_PLACE": "PostgreSQL",
+        "ORGANISATION_ISLOCATEDIN_PLACE": "PostgreSQL",
+        "PERSON_ISLOCATEDIN_PLACE": "PostgreSQL",
+        "POST_ISLOCATEDIN_PLACE": "PostgreSQL",
+        "TAG_HASTYPE_TAGCLASS": "PostgreSQL",
+        "TAGCLASS_ISSUBCLASSOF_TAGCLASS": "PostgreSQL",
+        "PLACE_ISPARTOF_PLACE": "PostgreSQL"
+      }
+    },
+    "images": {
+      "neo": {
+        "name": "polygraph-neo4j:5.26-enterprise",
+        "id": "sha256:164f72dbae40455ee67375fb8013665c1af2c2f46b46ccdca5624f774984bc71"
+      },
+      "arango": {
+        "name": "polygraph-arangodb:3.12",
+        "id": "sha256:d762b6f9554a58109f0e62f8b56ba735faf8a72aea5b43c9e7f9582ea12ebe52"
+      },
+      "pg": {
+        "name": "postgres:17",
+        "id": "sha256:7296f210ae81031ec955dbad9a67a84fe958572a2153b8d0826a647522904dc1"
+      }
+    }
+  },
+  "preparation": {
+    "timings": {
+      "edges_seconds": 34.559134772,
+      "input_edges_per_second": 42766.26164835166,
+      "input_nodes_per_second": 27160.424749355567,
+      "nodes_seconds": 12.061225221,
+      "normalization_seconds": 46.620364323,
+      "prepare_seconds": 86.440112294
+    },
+    "peak_client_rss_bytes": 234700800,
+    "entities_per_second": 20887.90669150169,
+    "writers": {
+      "ArangoDB": {
+        "bytes": 300071654,
+        "seconds": 39.428978516,
+        "bytes_per_second": 7610434.388459571,
+        "counts": {
+          "edges": 1311345,
+          "nodes": 302824,
+          "proxies": 15451
+        }
+      },
+      "Neo4J": {
+        "bytes": 130438539,
+        "seconds": 18.82024085,
+        "bytes_per_second": 6930758.22140714,
+        "counts": {
+          "edges": 772198,
+          "nodes": 15278,
+          "proxies": 293383
+        }
+      },
+      "PostgreSQL": {
+        "bytes": 76072632,
+        "seconds": 7.912550686,
+        "bytes_per_second": 9614173.105342431,
+        "counts": {
+          "edges": 318353,
+          "nodes": 9486,
+          "proxies": 304352
+        }
+      }
+    }
+  },
+  "native_execution": {
+    "wall_seconds": 224.107492189,
+    "peak_client_rss_bytes": 37527552,
+    "backends": {
+      "ArangoDB": {
+        "import": {
+          "bytes_per_second": 1338981.2838384905,
+          "created": 1629620,
+          "mechanism": "HTTP /_api/import",
+          "native_import_seconds": 224.104442401,
+          "records_per_second": 7271.698778215421
+        },
+        "state": "imported"
+      },
+      "Neo4J": {
+        "import": {
+          "bytes_per_second": 8315373.742260446,
+          "exit_code": 0,
+          "mechanism": "neo4j-admin database import full",
+          "native_import_seconds": 15.686431307,
+          "records_per_second": 68904.07249720792
+        },
+        "state": "imported"
+      },
+      "PostgreSQL": {
+        "import": {
+          "bytes_per_second": 40570449.39958015,
+          "mechanism": "libpq COPY FROM STDIN",
+          "native_import_seconds": 1.875074916,
+          "records_per_second": 337155.0622353907
+        },
+        "state": "imported"
+      }
+    },
+    "physical_records": 3342670,
+    "physical_records_per_second": 14915.47635177219
+  },
+  "end_to_end": {
+    "wall_seconds": 317.46,
+    "cpu_user_seconds": 111.24,
+    "cpu_system_seconds": 4.87,
+    "average_cpu_percent": 36.574686574686574,
+    "peak_rss_bytes": 234700800,
+    "load_controller_seconds": 317.3804424879927,
+    "entities_per_second": 5687.497637497638
+  },
+  "containers": {
+    "sample_interval_seconds": 2,
+    "rounds": 159,
+    "sampled_peak_round_memory_bytes": 2709135360,
+    "roles": {
+      "pg": {
+        "samples": 116,
+        "cpu_seconds_to_last_sample": 3.239086,
+        "sampled_peak_memory_bytes": 265560064
+      },
+      "arango": {
+        "samples": 115,
+        "cpu_seconds_to_last_sample": 237.07273,
+        "sampled_peak_memory_bytes": 1317453824
+      },
+      "admin": {
+        "samples": 8,
+        "cpu_seconds_to_last_sample": 57.067729,
+        "sampled_peak_memory_bytes": 1231032320
+      },
+      "neo": {
+        "samples": 105,
+        "cpu_seconds_to_last_sample": 52.852432,
+        "sampled_peak_memory_bytes": 1360363520
+      }
+    }
+  },
+  "disk": {
+    "artifacts_and_index_allocated_bytes": 827265024,
+    "database_binds_allocated_bytes": {
+      "pg": 241565696,
+      "arango": 626446336,
+      "neo": 804937728
+    },
+    "database_binds_total_allocated_bytes": 1672949760,
+    "method": "du -sk, KiB converted to bytes; final allocated blocks, not peak disk or I/O volume"
+  },
+  "limitations": [
+    "Single warm/uncontrolled-cache run on a shared host; not a scaling curve or speedup claim.",
+    "Verification and cleanup excluded from the timed load. No uncertain imports are retried.",
+    "Client CPU/RSS exclude Docker daemon/container processes. RSS is maximum process RSS, not summed concurrent RSS.",
+    "Docker memory includes cgroup page cache/kernel usage and is sampled, so between-sample peaks may be missed.",
+    "Container CPU is cumulative through its last sample; admin is auto-removed, so its final CPU tail may be missed.",
+    "Final allocated disk usage is measured while services are running; it is not peak temporary disk or I/O bytes."
+  ],
+  "cleanup": "Owned containers/network removed after measurement; artifacts and database binds retained",
+  "benchmark_id": "native-ingestion-ldbc-snb-sf0_1-2026-11-04",
+  "raw_results_directory": "build/ingestion-benchmark/ldbc-sf0_1-20261104-001",
+  "metric_scopes": {
+    "preparation": "Internal prepare timer; excludes the final backend checksum pass and manifest publication.",
+    "native_execution": "Concurrent backend execution from after initial artifact integrity checks and global preflight through backend completion; includes Neo4j startup, indexes and repairs.",
+    "backend_import": "Backend timer boundaries differ. Neo4j measures only neo4j-admin; PostgreSQL includes COPY/ANALYZE/commit; ArangoDB includes collection creation, HTTP import and UUID indexes.",
+    "end_to_end": "GNU time around load --docker --keep-running --skip-verification, including preparation/provisioning/import; excludes resource-report collection and cleanup.",
+    "container_memory": "Maximum sum of sequential same-round cgroup usage samples; not an instantaneous whole-host RSS peak.",
+    "client_resources": "GNU time local load-controller process family; CPU includes waited-for local children, excludes Docker daemon and container processes; RSS is max process RSS.",
+    "container_cpu": "Cumulative CPU through last sample before cleanup; auto-removed admin CPU tail may be missing."
+  },
+  "collector_provenance_note": "Exact measured collector snapshot is collector-at-launch.py in the raw directory. The current reproduction helper adds untimed cleanup signal protection and captures provenance before launch; the timed load and metric aggregation are unchanged."
+}
