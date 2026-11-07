@@ -62,6 +62,7 @@ namespace polygraph::ingestion {
         }
     } // namespace
     Json prepare(const PrepareOptions &o, const ProgressObserver &progress) {
+        const auto &adapter_definition = detail::input_adapters(o).get(o.adapter);
         check_options(o);
         const auto started = detail::Clock::now();
         detail::DirectoryLock lock(o.output_dir);
@@ -178,7 +179,9 @@ namespace polygraph::ingestion {
                          {"source", input},
                          {"configuration", config},
                          {"configuration_sha256", sha256_text(config.dump())},
-                         {"id_strategy", o.adapter == "ldbc-snb" ? "ldbc-block31-v3" : "preserve-canonical-v2"},
+                         {"id_strategy", adapter_definition.id_policy == InputIdPolicy::ldbc_block31
+                                                 ? "ldbc-block31-v3"
+                                                 : "preserve-canonical-v2"},
                          {"counts", normalized.at("counts")},
                          {"metadata", normalized.at("metadata")},
                          {"node_prefixes", normalized.at("node_prefixes")},

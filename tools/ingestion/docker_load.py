@@ -254,7 +254,7 @@ def run_cli():
     verify.add_argument('--bfs-max-vertices', type=int, default=100000)
     load = commands.add_parser('load')
     load.add_argument('--binary', type=Path, required=True)
-    load.add_argument('--adapter', choices=['ldbc-snb', 'polygraph-jsonl'], required=True)
+    load.add_argument('--adapter', required=True, help='Statically linked input adapter name; the native engine validates it')
     load.add_argument('--input', type=Path, required=True)
     load.add_argument('--placement-config', type=Path, required=True)
     load.add_argument('--docker', action='store_true', required=True)

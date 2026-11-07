@@ -6,12 +6,16 @@
 #include <set>
 #include <unistd.h>
 #include "ingestion/Import.hpp"
+#include "ingestion/InputAdapterRegistry.hpp"
 
 namespace {
     using namespace polygraph::ingestion;
     constexpr auto help = R"(PolyGraph standalone native bulk ingestion (C++23)
 
-polygraph_bulk_import prepare --adapter <ldbc-snb|polygraph-jsonl>
+polygraph_bulk_import adapters
+    List statically linked input adapter names, one per line.
+
+polygraph_bulk_import prepare --adapter <name>
   --input <directory|file> --placement-config <placement.json> --output-dir <directory>
   [--partitioner none|kaminpar] [--seed 42] [--threads 3] [--memory-limit-mb 256]
   [--partitions <count>] [--partition-threads 1] [--partition-imbalance 0.03]
@@ -30,7 +34,7 @@ polygraph_bulk_import prepare --adapter <ldbc-snb|polygraph-jsonl>
     Edges keep their independently configured schema ownership.
     memory-limit-mb budgets SQLite caches and record buffers, not a process RSS hard limit.
 
-polygraph_bulk_import load --adapter <ldbc-snb|polygraph-jsonl> --input <directory|file>
+polygraph_bulk_import load --adapter <name> --input <directory|file>
   --placement-config <placement.json> --docker [--keep-running]
   [--output-dir <fresh-directory>] [--generation-name <readable-prefix>]
   [--threads 3] [--memory-limit-mb 256] [--chunk-size-mb 64] [--max-record-mb 8]
@@ -118,7 +122,9 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
     };
     Arguments parse(int argc, char **argv, const std::string &command) {
         std::set<std::string> allowed;
-        if (command == "prepare")
+        if (command == "adapters")
+            allowed = {};
+        else if (command == "prepare")
             allowed = {"--adapter",       "--input",         "--placement-config", "--output-dir",
                        "--partitioner",   "--seed",          "--threads",          "--memory-limit-mb",
                        "--chunk-size-mb", "--max-record-mb", "--partition-file",   "--partition-map"};
@@ -187,11 +193,14 @@ int main(int argc, char **argv) {
         return 2;
     }
     try {
-        if (command == "load" || command == "verify-load") {
+        if (command == "adapters") {
+            for (const auto &name: default_input_adapters().names())
+                std::cout << name << '\n';
+        } else if (command == "load" || command == "verify-load") {
             if (command == "load") {
                 if (!args.flags.contains("--docker"))
                     throw Error("load requires --docker to create an isolated fresh environment");
-                (void) args.require("--adapter");
+                (void) default_input_adapters().get(args.require("--adapter"));
                 (void) args.require("--input");
                 (void) args.require("--placement-config");
             } else

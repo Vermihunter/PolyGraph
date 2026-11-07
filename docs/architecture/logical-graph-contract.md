@@ -7,10 +7,13 @@ It builds on the completed [audit (#28)](graph-extensibility-audit.md), the firs
 task referred to as “issue 01” in the issue sequence.
 
 **Status:** the existing record/streaming model remains the canonical pipeline.
+Issue #30 implements statically linked factory registration, discovery, input
+inventory and ID-policy selection; see [registration API](../guides/BULK_INGESTION.md#registering-a-statically-linked-input-adapter).
 Sections marked **extension contract** specify requirements for later adapter,
 manifest and normalization work (#30–#32); they are not new accepted JSONL fields,
-CLI options or implemented capabilities. This issue adds documentation, runnable
-examples and regression tests, without changing production behavior.
+CLI options unless explicitly described as implemented. Issue #29 added the
+specification and examples; source namespaces and generic ID allocation remain
+future work.
 
 ## Representation and ownership
 
@@ -185,11 +188,11 @@ pass, and JSONL record interleaving is handled by separate scans. No on-disk sou
 ordering of “edge after its nodes” is required. Edge-to-edge references and an
 unbounded live update stream are not this snapshot contract.
 
-The next extension uses **statically linked C++ adapter factories** selected by
-stable names, retaining `ldbc-snb` and `polygraph-jsonl`. A registry is #30, not an
-ABI contract: no `dlopen`, runtime dynamic libraries, code generation, scripting
-runtime, or new ingestion framework. The existing factory is
-`src/ingestion/Input.cpp::make_adapter`.
+`InputAdapterRegistry` uses **statically linked C++ adapter factories** selected
+by stable names, retaining `ldbc-snb` and `polygraph-jsonl`. It is not an ABI
+contract: no `dlopen`, runtime dynamic libraries, code generation, scripting
+runtime, or new ingestion framework. `src/ingestion/Input.cpp::make_adapter`
+delegates to the selected registry, which also provides the input inventory.
 
 | Boundary | Responsibility |
 | :-- | :-- |
@@ -200,8 +203,9 @@ runtime, or new ingestion framework. The existing factory is
 
 Adapter metadata can be finalized while streaming (the existing JSONL adapter
 learns leading metadata during scans); do not assume it is complete before the
-passes. Future preflight metadata/inventory must be available without loading the
-graph and declared explicitly in the evolved API. Final IDs cannot be allocated
+passes. Input inventory is now available separately through registry callbacks;
+future preflight metadata must also be available without loading the graph and
+declared explicitly in the evolved API. Final IDs cannot be allocated
 before a partition-to-owner map has selected raw vertex ownership.
 
 ## Compatibility and migration
@@ -210,8 +214,9 @@ before a partition-to-owner map has selected raw vertex ownership.
    order and `ldbc-block31-v3`/`preserve-canonical-v2` semantics. This contract alone
    does not change native manifest `schema_version`/`engine_version` or invalidate
    existing artifacts. Graph format/version and ID strategy are separate concepts.
-2. Add source namespace/type metadata and static registration through the existing
-   adapter seam in #30; add versioned graph configuration/preflight in #31. Map
+2. Static registration is implemented through the existing adapter seam in #30.
+   Source namespace/type metadata belongs to the remaining manifest and ID work;
+   add versioned graph configuration/preflight in #31. Map
    legacy CLI flags and `domain.json` into that configuration explicitly; continue
    accepting old SNB and canonical JSONL without mandatory new fields.
 3. Generalize source-key resolution in #32 while keeping the current SQLite index,

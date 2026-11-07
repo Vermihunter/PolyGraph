@@ -62,7 +62,81 @@ flowchart LR
   E --> L[Exact live ID and endpoint checks]
 ```
 
-Reusable interfaces live in `include/ingestion/Import.hpp`. `IGraphInputAdapter` streams nodes and then relationships to a record consumer. A future Parquet adapter implements these two passes and metadata without changing the planner or backend writers. `Placement` validates typed backend routes; the LDBC assigner implements the Python block31 conventions. The SQLite index separates identity, graph records, adjacency replicas and deduplicated proxy sets. Writers own their read connections and buffered files. `IImportExecutor` and an injectable `ExecutorFactory` separate native execution from lifecycle orchestration and allow service-free failure/concurrency tests.
+Reusable interfaces live in `include/ingestion/Import.hpp`. `IGraphInputAdapter` streams nodes and then relationships to a record consumer. Statically linked adapters register through `InputAdapterRegistry`; they reuse the existing planner and writers. New adapters currently emit canonical IDs; arbitrary typed source-ID allocation remains separate work. `Placement` validates typed backend routes; the LDBC assigner implements the Python block31 conventions. The SQLite index separates identity, graph records, adjacency replicas and deduplicated proxy sets. Writers own their read connections and buffered files. `IImportExecutor` and an injectable `ExecutorFactory` separate native execution from lifecycle orchestration and allow service-free failure/concurrency tests.
+
+### Registering a statically linked input adapter
+
+`polygraph_bulk_import adapters` prints available adapter names, one per line.
+The default registry contains `ldbc-snb` and `polygraph-jsonl`. `prepare --adapter`
+and `load --adapter` use these stable, case-sensitive names; an unknown name fails
+with the available names before input scanning or Docker provisioning.
+
+Implement the existing `IGraphInputAdapter` methods and link the implementation
+into the application. Register it during application setup using
+[`InputAdapterRegistry.hpp`](../../include/ingestion/InputAdapterRegistry.hpp):
+
+```cpp
+auto registry = polygraph::ingestion::default_input_adapters();
+registry.add({
+    .name = "my-format",
+    .factory = make_my_input_adapter,
+    .input_files = my_input_files,
+    .version = "1"
+});
+polygraph::ingestion::PrepareOptions options;
+// Set input, placement_config, output_dir and other existing options as usual.
+options.adapter = "my-format";
+options.input_adapters = &registry;
+auto manifest = polygraph::ingestion::prepare(options);
+```
+
+The application supplies `make_my_input_adapter(const PrepareOptions &, const fs::path &)`
+returning `std::unique_ptr<IGraphInputAdapter>`, and `my_input_files(const PrepareOptions &)`
+returning `std::vector<fs::path>`. There
+is no runtime shared-library loading, static-initializer self-registration or
+new import engine. The stock CLI's linked built-ins are assembled in
+`src/ingestion/Input.cpp::default_input_adapters`; an application can assemble its
+own registry without changing normalization, CLI selection or backend writers.
+Its selected registry must be used by each invocation of its import executable.
+The Docker helper forwards adapter names to that executable rather than maintaining
+a separate list. Registry names use lowercase ASCII letters, digits, `-`, `_`,
+or `.`; duplicate names and missing factory/inventory callbacks are errors.
+
+The registry is configured before use. The caller owns a custom registry and
+must keep it and any dependencies captured by its callbacks alive until
+`prepare()` returns, and must not change registrations during preparation.
+A null `PrepareOptions::input_adapters` selects the immutable
+default registry, preserving existing callers and signatures.
+
+The factory creates an adapter for the existing two synchronous streaming passes.
+It may initialize bounded indexes under `scratch`, but must not materialize the
+whole graph. Callbacks are invoked immediately; consumer exceptions must propagate
+and stop the pass. Report parsing errors with source path and record context.
+Partition topology projection may create a second instance, so immutable input
+must yield the same keys and order on replay.
+
+The inventory callback returns **every source file affecting emitted records**,
+including auxiliary files, and must be repeatable without streaming records.
+Paths are resolved against the process working directory, canonicalized, sorted
+and hashed by the engine; duplicate canonical paths are rejected. `options.input`
+must exist and is recorded as the source root. Version defaults to `"1"`; change
+it when parser/translation semantics change. Custom registration rejects empty
+versions. Versions and the selected
+ID strategy participate in generation identity. Empty versions are reserved for
+the two legacy built-ins, whose fingerprint shape and existing checkpoints remain
+unchanged. Inventory or version changes reject reuse of an existing output directory.
+
+The default `InputIdPolicy::canonical` requires a canonical GlobalId on each node
+and edge, resolvable `Record.key/from/to` references, and metadata with matching
+`idRouting` and the 16/48-bit layout. Missing IDs fail explicitly; they do not
+fall back to LDBC allocation. `InputIdPolicy::ldbc_block31` selects the existing
+LDBC numeric-key/catalog conventions for the built-in adapter; it is not a generic
+external-ID allocator. Neither policy changes placement, endpoint closure, proxy
+creation, property validation or backend serialization. See the
+[logical graph contract](../architecture/logical-graph-contract.md) for identity
+and validation rules. A linked generated adapter in
+[`tests/input_adapter_registry_test.cpp`](../../tests/input_adapter_registry_test.cpp)
+exercises this registration path through all three native writers and strict verification.
 
 The library uses exceptions of type `ingestion::Error` for domain failures and RAII for connections, prepared statements, files, process descriptors and directory locks. CLI JSON/I/O diagnostics include the source context. POSIX `posix_spawnp` receives an argv vector; configuration strings are never interpolated into a shell command. Complete subprocess output goes to `logs/`, with bounded captured tails and exit status/duration. Inspect or tail those logs for importer progress.
 

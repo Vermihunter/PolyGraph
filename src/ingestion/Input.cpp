@@ -306,27 +306,54 @@ namespace polygraph::ingestion::detail {
         };
     } // namespace
     std::unique_ptr<IGraphInputAdapter> make_adapter(const PrepareOptions &o, const fs::path &scratch) {
-        if (o.adapter == "polygraph-jsonl")
-            return std::make_unique<JsonlAdapter>(o);
-        if (o.adapter == "ldbc-snb")
-            return std::make_unique<LdbcAdapter>(o, scratch);
-        throw Error("Unknown adapter: " + o.adapter + " (expected ldbc-snb or polygraph-jsonl)");
+        return input_adapters(o).create(o, scratch);
     }
     Json input_identity(const PrepareOptions &o) {
-        std::vector<fs::path> files;
-        if (o.adapter == "polygraph-jsonl")
-            files.push_back(fs::canonical(o.input));
-        else if (o.adapter == "ldbc-snb") {
-            if (!fs::is_directory(o.input))
-                throw Error("LDBC input must be a directory");
-            for (const auto &path: snapshot_csv_paths(o.input))
-                files.push_back(fs::canonical(path));
-            std::ranges::sort(files);
-        } else
-            throw Error("Unknown adapter: " + o.adapter);
+        const auto &definition = input_adapters(o).get(o.adapter);
+        auto files = definition.input_files(o);
+        for (auto &path: files)
+            path = fs::canonical(path);
+        std::ranges::sort(files);
+        if (std::adjacent_find(files.begin(), files.end()) != files.end())
+            throw Error("Adapter " + o.adapter + " input inventory contains duplicate files");
         Json entries = Json::array();
         for (const auto &path: files)
             entries.push_back({{"path", path.string()}, {"bytes", fs::file_size(path)}, {"sha256", sha256_file(path)}});
-        return {{"adapter", o.adapter}, {"path", fs::canonical(o.input).string()}, {"files", entries}};
+        Json identity = {{"adapter", o.adapter}, {"path", fs::canonical(o.input).string()}, {"files", entries}};
+        if (!definition.version.empty()) {
+            identity["adapter_version"] = definition.version;
+            identity["id_strategy"] =
+                    definition.id_policy == InputIdPolicy::ldbc_block31 ? "ldbc-block31-v3" : "preserve-canonical-v2";
+        }
+        return identity;
     }
 } // namespace polygraph::ingestion::detail
+
+namespace polygraph::ingestion {
+    const InputAdapterRegistry &default_input_adapters() {
+        static const auto registry = [] {
+            InputAdapterRegistry result;
+            result.add_definition(
+                    {.name = "polygraph-jsonl",
+                     .factory = [](const PrepareOptions &o,
+                                   const fs::path &) { return std::make_unique<detail::JsonlAdapter>(o); },
+                     .input_files = [](const PrepareOptions &o) { return std::vector<fs::path>{o.input}; },
+                     .version = {}});
+            result.add_definition({.name = "ldbc-snb",
+                                   .factory =
+                                           [](const PrepareOptions &o, const fs::path &scratch) {
+                                               return std::make_unique<detail::LdbcAdapter>(o, scratch);
+                                           },
+                                   .input_files =
+                                           [](const PrepareOptions &o) {
+                                               if (!fs::is_directory(o.input))
+                                                   throw Error("LDBC input must be a directory");
+                                               return detail::snapshot_csv_paths(o.input);
+                                           },
+                                   .id_policy = InputIdPolicy::ldbc_block31,
+                                   .version = {}});
+            return result;
+        }();
+        return registry;
+    }
+} // namespace polygraph::ingestion

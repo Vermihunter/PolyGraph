@@ -68,6 +68,7 @@ namespace polygraph::ingestion::detail {
         const auto partition_map = load_partition_mapping(o, placement);
         auto partitioning = prepare_partition_assignments(o, db, scratch);
         auto adapter = make_adapter(o, scratch);
+        const auto id_policy = input_adapters(o).get(o.adapter).id_policy;
         auto entity = db.statement("INSERT INTO identities VALUES(?)");
         auto node_insert = db.statement("INSERT INTO nodes VALUES(?,?,?,?,?,?,?)");
         auto edge_insert = db.statement("INSERT INTO edges VALUES(?,?,?,?,?,?,?)");
@@ -100,6 +101,8 @@ namespace polygraph::ingestion::detail {
         const auto node_start = Clock::now();
         db.exec("BEGIN");
         adapter->nodes([&](Record r) {
+            if (!r.id && id_policy == InputIdPolicy::canonical)
+                throw Error("Adapter " + o.adapter + " requires canonical GlobalId on node " + r.key);
             validate_record(r);
             check_type(r.type);
             auto home = placement.route(r, false);
@@ -141,6 +144,8 @@ namespace polygraph::ingestion::detail {
         const auto node_seconds = elapsed(node_start);
         const auto edge_start = Clock::now();
         adapter->relationships([&](Record r) {
+            if (!r.id && id_policy == InputIdPolicy::canonical)
+                throw Error("Adapter " + o.adapter + " requires canonical GlobalId on relationship " + r.type);
             validate_record(r);
             check_type(r.type);
             const auto home = placement.route(r, true);
@@ -199,9 +204,9 @@ namespace polygraph::ingestion::detail {
         db.exec("COMMIT");
         const auto edge_seconds = elapsed(edge_start);
         const auto metadata = adapter->metadata();
-        if (o.adapter == "polygraph-jsonl") {
+        if (id_policy == InputIdPolicy::canonical) {
             if (!metadata.contains("idRouting") || !metadata["idRouting"].is_array())
-                throw Error("Canonical JSONL metadata requires idRouting array");
+                throw Error("Canonical adapter " + o.adapter + " metadata requires idRouting array");
             std::set<Backend> configured;
             for (const auto &name: metadata["idRouting"]) {
                 const auto backend = parse_backend(name.get<std::string>());
@@ -210,9 +215,10 @@ namespace polygraph::ingestion::detail {
                     throw Error("Duplicate idRouting entry");
             }
             if (configured != std::set<Backend>(placement.backends.begin(), placement.backends.end()))
-                throw Error("JSONL idRouting differs from placement storageBackends");
+                throw Error("Canonical adapter " + o.adapter + " idRouting differs from placement storageBackends");
             if (metadata.value("idRoutingBits", 16) != 16 || metadata.value("idPayloadBits", 48) != 48)
-                throw Error("Unsupported JSONL ID layout; expected 16 location / 48 payload bits");
+                throw Error("Unsupported canonical ID layout for adapter " + o.adapter +
+                            "; expected 16 location / 48 payload bits");
         }
         finish_partition_metadata(o, db, scratch, partitioning);
         partitioning["backend_cross_edges"] = cut;

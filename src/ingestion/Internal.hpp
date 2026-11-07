@@ -5,8 +5,12 @@
 #include <span>
 #include <sqlite3.h>
 #include "ingestion/Import.hpp"
+#include "ingestion/InputAdapterRegistry.hpp"
 
 namespace polygraph::ingestion::detail {
+    inline const InputAdapterRegistry &input_adapters(const PrepareOptions &options) {
+        return options.input_adapters ? *options.input_adapters : default_input_adapters();
+    }
     using Clock = std::chrono::steady_clock;
     inline double elapsed(Clock::time_point start) {
         return std::chrono::duration<double>(Clock::now() - start).count();

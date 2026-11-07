@@ -53,6 +53,7 @@ namespace polygraph::ingestion {
         [[nodiscard]] virtual Json metadata() const = 0;
     };
 
+    class InputAdapterRegistry;
     struct PrepareOptions {
         std::string adapter;
         fs::path input;
@@ -67,6 +68,8 @@ namespace polygraph::ingestion {
         unsigned memory_limit_mb = 256;
         unsigned chunk_size_mb = 64;
         unsigned max_record_mb = 8;
+        // Optional caller-owned registry; must outlive prepare(). Null selects immutable built-ins.
+        const InputAdapterRegistry *input_adapters = nullptr;
     };
     struct Placement {
         Json configuration;
