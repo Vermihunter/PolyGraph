@@ -25,6 +25,7 @@ namespace polygraph::ingestion::detail {
                 command(schema_sql);
                 command("LOCK TABLE public.polygraph_nodes,public.polygraph_edges IN ACCESS EXCLUSIVE MODE");
                 ensure_empty();
+                const auto copy_start = Clock::now();
                 for (const auto &a: context_.artifacts.at("artifacts")) {
                     const bool nodes = a.at("kind") == "nodes";
                     const std::string columns =
@@ -60,6 +61,8 @@ namespace polygraph::ingestion::detail {
                             fail("COPY finalization failed", remaining.get());
                     }
                 }
+                const auto copy_seconds = elapsed(copy_start);
+                const auto indexes_start = Clock::now();
                 if (context_.target.value("traversal_indexes", false))
                     command(R"(
                     CREATE INDEX IF NOT EXISTS polygraph_edges_from_idx ON public.polygraph_edges(from_id,edge_type) INCLUDE(to_id,to_type);
@@ -67,14 +70,25 @@ namespace polygraph::ingestion::detail {
                     CREATE INDEX IF NOT EXISTS polygraph_nodes_type_idx ON public.polygraph_nodes(type,id);
                 )");
                 command("ANALYZE public.polygraph_nodes; ANALYZE public.polygraph_edges");
+                const auto indexes_seconds = elapsed(indexes_start);
+                const auto verification_start = Clock::now();
                 // Validate in the importing transaction; failures roll back both COPY streams.
                 if (context_.verification == VerificationMode::full)
                     (void) verify();
+                const auto verification_seconds =
+                        context_.verification == VerificationMode::full ? elapsed(verification_start) : 0.0;
+                const auto commit_start = Clock::now();
                 command("COMMIT");
-                return {{"native_import_seconds", elapsed(start)}, {"mechanism", "libpq COPY FROM STDIN"}};
+                return {{"native_import_seconds", elapsed(start)},
+                        {"mechanism", "libpq COPY FROM STDIN"},
+                        {"copy_seconds", copy_seconds},
+                        {"index_and_analyze_seconds", indexes_seconds},
+                        {"verification_seconds", verification_seconds},
+                        {"commit_seconds", elapsed(commit_start)}};
             }
             Json verify() override {
                 connect();
+                const bool partitioned = expects_partition_metadata(context_);
                 const auto expected = expected_counts(context_);
                 auto counts = query(
                         "SELECT (SELECT count(*) FROM public.polygraph_nodes WHERE NOT is_proxy),(SELECT count(*) FROM "
@@ -90,13 +104,21 @@ namespace polygraph::ingestion::detail {
                 if (std::string(PQgetvalue(missing.get(), 0, 0)) != "0")
                     throw Error("PostgreSQL traversal has unresolved endpoints");
                 verify_expected_rows(context_, [&](bool edge, const Json &batch) {
-                    const std::string sql = edge ? "SELECT count(*) FROM jsonb_to_recordset($1::jsonb) AS x(id "
-                                                   "bigint,\"from\" bigint,\"to\" bigint,type text,source text) JOIN "
-                                                   "public.polygraph_edges e ON e.id=x.id AND e.from_id=x.\"from\" AND "
-                                                   "e.to_id=x.\"to\" AND e.edge_type=x.type AND e.source=x.source"
-                                                 : "SELECT count(*) FROM jsonb_to_recordset($1::jsonb) AS x(id "
-                                                   "bigint,type text,proxy boolean) JOIN public.polygraph_nodes n ON "
-                                                   "n.id=x.id AND n.type=x.type AND n.is_proxy=x.proxy";
+                    std::string fields = edge ? "id bigint,\"from\" bigint,\"to\" bigint,type text,source text"
+                                              : "id bigint,type text,proxy boolean";
+                    if (partitioned)
+                        fields += edge ? ",from_partition_id bigint,to_partition_id bigint,is_partition_cut boolean"
+                                       : ",partition_id bigint";
+                    std::string sql =
+                            "SELECT count(*) FROM jsonb_to_recordset($1::jsonb) AS x(" + fields + ") JOIN " +
+                            (edge ? "public.polygraph_edges e ON e.id=x.id AND e.from_id=x.\"from\" AND "
+                                    "e.to_id=x.\"to\" "
+                                    "AND e.edge_type=x.type AND e.source=x.source"
+                                  : "public.polygraph_nodes n ON n.id=x.id AND n.type=x.type AND n.is_proxy=x.proxy");
+                    if (partitioned)
+                        sql += edge ? " AND e.properties @> jsonb_build_object('from_partition_id',x.from_partition_id,"
+                                      "'to_partition_id',x.to_partition_id,'is_partition_cut',x.is_partition_cut)"
+                                    : " AND n.properties @> jsonb_build_object('partition_id',x.partition_id)";
                     const auto body = batch.dump();
                     const char *values[] = {body.c_str()};
                     Result result(PQexecParams(connection_.get(), sql.c_str(), 1, nullptr, values, nullptr, nullptr, 0),
@@ -104,9 +126,12 @@ namespace polygraph::ingestion::detail {
                     if (!result || PQresultStatus(result.get()) != PGRES_TUPLES_OK)
                         fail("PostgreSQL ID verification failed", result.get());
                     if (std::stoull(PQgetvalue(result.get(), 0, 0)) != batch.size())
-                        throw Error("PostgreSQL canonical ID/type/endpoint mismatch");
+                        throw Error("PostgreSQL canonical ID/type/endpoint/partition metadata mismatch");
                 });
-                return {{"counts", expected}, {"exact_ids", true}, {"endpoint_traversal", true}};
+                Json verified = {{"counts", expected}, {"exact_ids", true}, {"endpoint_traversal", true}};
+                if (partitioned)
+                    verified["partition_metadata"] = true;
+                return verified;
             }
 
         private:

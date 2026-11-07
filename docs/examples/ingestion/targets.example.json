@@ -13,6 +13,9 @@
       "endpoint": "http://127.0.0.1:8529",
       "username": "polygraph_import",
       "password_env": "POLYGRAPH_IMPORT_ARANGO_PASSWORD",
+      "import_concurrency": 4,
+      "import_batch_mb": 1,
+      "import_buffer_mb": 128,
       "timeout_seconds": 900
     },
     "Neo4J": {

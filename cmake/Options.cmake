@@ -20,10 +20,7 @@ option(POLYGRAPH_BUILD_DISTRIBUTED_GPU_EXPERIMENTS "Build standalone MPI/cuGraph
 option(POLYGRAPH_BUILD_BULK_IMPORT "Build standalone native ingestion CLI" ON)
 option(POLYGRAPH_INGESTION_LIVE_TESTS "Enable opt-in disposable Docker ingestion integration tests" OFF)
 option(POLYGRAPH_INGESTION_NATIVE_EXECUTORS "Enable libpq and HTTP native import executors when available" ON)
-option(POLYGRAPH_INGESTION_KAMINPAR "Request KaMinPar ingestion support (currently unavailable)" OFF)
-if(POLYGRAPH_INGESTION_KAMINPAR)
-    message(FATAL_ERROR "KaMinPar ingestion integration is not available; configure with POLYGRAPH_INGESTION_KAMINPAR=OFF. Runtime requests are rejected, never silently substituted.")
-endif()
+option(POLYGRAPH_INGESTION_KAMINPAR "Enable optional shared-memory KaMinPar ingestion partitioning" OFF)
 
 # Dependency acquisition
 option(

@@ -10,6 +10,7 @@ import csv
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import math
 import hashlib
 import os
 from pathlib import Path
@@ -265,7 +266,17 @@ def run_cli():
     load.add_argument('--chunk-size-mb', type=int, default=64)
     load.add_argument('--max-record-mb', type=int, default=8)
     load.add_argument('--concurrency', type=int, default=3)
-    load.add_argument('--partitioner', choices=['none'], default='none')
+    load.add_argument('--arango-concurrency', type=int, default=4)
+    load.add_argument('--arango-batch-mb', type=int, default=1)
+    load.add_argument('--arango-buffer-mb', type=int, default=128)
+    load.add_argument('--partitioner', choices=['none', 'kaminpar'], default='none')
+    load.add_argument('--partitions', type=int, default=0)
+    load.add_argument('--partition-threads', type=int, default=1)
+    load.add_argument('--partition-imbalance', type=float, default=0.03)
+    load.add_argument('--partition-preset', choices=['default', 'eco', 'strong'], default='default')
+    load.add_argument('--seed', type=int, default=42)
+    load.add_argument('--partition-file', type=Path)
+    load.add_argument('--partition-map', type=Path)
     load.add_argument('--startup-timeout-seconds', type=int, default=180)
     load.add_argument('--neo-image'); load.add_argument('--arango-image'); load.add_argument('--pg-image')
     load.add_argument('--verify-bfs', action='store_true')
@@ -290,6 +301,24 @@ def run_cli():
         return
     if not 1 <= args.concurrency <= 64 or not 1 <= args.startup_timeout_seconds <= 3600 or args.bfs_max_vertices < 1:
         parser.error('concurrency must be 1..64, startup timeout 1..3600, and BFS maximum positive')
+    if (not 1 <= args.arango_concurrency <= 32 or not 1 <= args.arango_batch_mb <= 64 or
+            not args.arango_batch_mb <= args.arango_buffer_mb <= 1024):
+        parser.error('Arango import settings require concurrency 1..32, batch 1..64 MiB, and buffer batch..1024 MiB')
+    if args.partitioner == 'kaminpar':
+        if (not 2 <= args.partitions < 2**32 - 1 or not 1 <= args.partition_threads <= 256 or
+                not math.isfinite(args.partition_imbalance) or not 0 <= args.partition_imbalance <= 1 or
+                not 0 <= args.seed <= 2**31 - 1 or args.partition_file):
+            parser.error('Partition settings require count >=2, threads 1..256, finite imbalance 0..1, '
+                         'signed nonnegative seed and no external partition file')
+    elif (args.partitions != 0 or args.partition_threads != 1 or args.partition_imbalance != 0.03 or
+          args.partition_preset != 'default'):
+        parser.error('Partition controls require --partitioner kaminpar')
+    if not 0 <= args.seed <= 2**32 - 1:
+        parser.error('Partition seed must be a uint32')
+    if args.partition_file and not args.partition_map:
+        parser.error('Partition file requires --partition-map')
+    if args.partition_map and args.partitioner != 'kaminpar' and not args.partition_file:
+        parser.error('Partition map requires --partitioner kaminpar or --partition-file')
     if args.skip_verification and args.verify_bfs:
         parser.error('--skip-verification cannot be combined with --verify-bfs; use verify-load afterward')
     binary = args.binary.resolve()
@@ -300,11 +329,22 @@ def run_cli():
     output = args.output_dir or Path.cwd() / 'build/ingestion-load' / generation
     environment = DockerEnvironment(output, generation, images={'neo': args.neo_image, 'arango': args.arango_image, 'pg': args.pg_image},
                                     timeout=args.startup_timeout_seconds, memory_mb=args.memory_limit_mb)
+    environment.targets['targets']['ArangoDB'].update(import_concurrency=args.arango_concurrency,
+        import_batch_mb=args.arango_batch_mb, import_buffer_mb=args.arango_buffer_mb)
+    private_json(environment.target_path, environment.targets)
     started = time.monotonic()
     try:
-        stage(environment, 'prepare', [binary, 'prepare', '--adapter', args.adapter, '--input', args.input.resolve(),
+        prepare_args = [binary, 'prepare', '--adapter', args.adapter, '--input', args.input.resolve(),
             '--placement-config', args.placement_config.resolve(), '--partitioner', args.partitioner, '--output-dir', environment.artifacts,
-            '--threads', str(args.threads), '--memory-limit-mb', str(args.memory_limit_mb), '--chunk-size-mb', str(args.chunk_size_mb), '--max-record-mb', str(args.max_record_mb)])
+            '--threads', str(args.threads), '--memory-limit-mb', str(args.memory_limit_mb), '--chunk-size-mb', str(args.chunk_size_mb),
+            '--max-record-mb', str(args.max_record_mb), '--seed', str(args.seed)]
+        if args.partitioner == 'kaminpar':
+            prepare_args += ['--partitions', str(args.partitions), '--partition-threads', str(args.partition_threads),
+                '--partition-imbalance', str(args.partition_imbalance), '--partition-preset', args.partition_preset]
+        for flag, path in [('--partition-file', args.partition_file), ('--partition-map', args.partition_map)]:
+            if path:
+                prepare_args += [flag, path.resolve()]
+        stage(environment, 'prepare', prepare_args)
         manifest_path = environment.artifacts / 'manifest.json'
         if not args.skip_verification:
             stage(environment, 'verify-strict', [binary, 'verify', '--manifest', manifest_path, '--strict'])

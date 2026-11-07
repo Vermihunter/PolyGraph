@@ -9,10 +9,17 @@
 namespace polygraph::ingestion {
     namespace {
         void check_options(const PrepareOptions &o) {
-            if (o.partitioner != "none")
-                throw Error("Partitioner '" + o.partitioner +
-                            "' is unavailable: this build has no KaMinPar integration; use none or supply external "
-                            "partitions");
+            if (o.partitioner != "none" && o.partitioner != "kaminpar")
+                throw Error("--partitioner must be none or kaminpar");
+            if (o.partitioner == "kaminpar") {
+                if (!kaminpar_available())
+                    throw Error("KaMinPar is unavailable; build with POLYGRAPH_INGESTION_KAMINPAR=ON");
+                validate_partition_options(o.partition_options, o.seed);
+                if (!o.partition_file.empty())
+                    throw Error("Generated KaMinPar partitions and --partition-file are mutually exclusive");
+            } else if (o.partition_options.count != 0 || o.partition_options.threads != 1 ||
+                       o.partition_options.imbalance != 0.03 || o.partition_options.preset != "default")
+                throw Error("Partition count/threads/imbalance/preset require --partitioner kaminpar");
             if (o.threads < 1 || o.threads > 256)
                 throw Error("--threads must be in [1,256]");
             if (o.memory_limit_mb < 16 || o.memory_limit_mb > 1048576)
@@ -35,6 +42,14 @@ namespace polygraph::ingestion {
                 j["partition_file_sha256"] = sha256_file(o.partition_file);
             if (!o.partition_map.empty())
                 j["partition_mapping"] = read_json(o.partition_map);
+            if (detail::partition_metadata_enabled(o))
+                j["partition_metadata_version"] = 1;
+            if (o.partitioner == "kaminpar")
+                j["kaminpar"] = {{"partitions", o.partition_options.count},
+                                 {"threads", o.partition_options.threads},
+                                 {"imbalance", o.partition_options.imbalance},
+                                 {"preset", o.partition_options.preset},
+                                 {"implementation", kaminpar_identity()}};
             return j;
         }
         void check_backend_artifacts(const fs::path &root, const Json &backend) {
@@ -51,6 +66,7 @@ namespace polygraph::ingestion {
         const auto started = detail::Clock::now();
         detail::DirectoryLock lock(o.output_dir);
         const auto placement = load_placement(o.placement_config);
+        (void) detail::load_partition_mapping(o, placement);
         const auto input = detail::input_identity(o);
         const auto config = configuration(o, placement);
         const auto identity = sha256_text(Json{{"input", input}, {"config", config}}.dump());
@@ -94,6 +110,10 @@ namespace polygraph::ingestion {
             if (sha256_file(scratch / "graph.sqlite3") != stage.at("index_sha256"))
                 throw Error("Normalization checkpoint is corrupt; use a fresh output directory");
             normalized = stage.at("normalization");
+            if (config.contains("partition_metadata_version"))
+                check_backend_artifacts(
+                        o.output_dir,
+                        {{"artifacts", Json::array({normalized.at("partitioning").at("assignment_artifact")})}});
         } else {
             fs::remove_all(generation);
             fs::create_directories(scratch);
@@ -127,7 +147,8 @@ namespace polygraph::ingestion {
                 const auto backend = pending[index];
                 try {
                     fs::remove_all(generation / backend_name(backend));
-                    auto result = detail::generate_backend(backend, o, scratch, generation, o.output_dir);
+                    auto result = detail::generate_backend(backend, o, scratch, generation, o.output_dir,
+                                                           detail::partition_metadata_enabled(o));
                     std::scoped_lock guard(results_mutex);
                     stage["backends"][backend_name(backend)] = std::move(result);
                     write_json_atomic(stage_path, stage);
@@ -183,6 +204,10 @@ namespace polygraph::ingestion {
         // Publish only after closed endpoints, all writers, and checksum validation have succeeded.
         for (const auto &backend: manifest["backends"])
             check_backend_artifacts(o.output_dir, backend);
+        if (config.contains("partition_metadata_version"))
+            check_backend_artifacts(
+                    o.output_dir,
+                    {{"artifacts", Json::array({normalized.at("partitioning").at("assignment_artifact")})}});
         write_json_atomic(manifest_path, manifest);
         return manifest;
     }
@@ -222,6 +247,14 @@ namespace polygraph::ingestion {
         if (fs::file_size(index) != m["index"]["bytes"].get<std::uint64_t>() ||
             sha256_file(index) != m["index"]["sha256"])
             throw Error("Endpoint index checksum mismatch");
+        if (m.at("configuration").contains("partition_metadata_version")) {
+            if (m["configuration"]["partition_metadata_version"] != 1)
+                throw Error("Unsupported partition metadata version");
+            const auto &assignment = m.at("partitioning").at("assignment_artifact");
+            check_backend_artifacts(root, {{"artifacts", Json::array({assignment})}});
+            if (!paths.insert(detail::artifact_path(root, assignment)).second)
+                throw Error("Duplicate partition assignment artifact path");
+        }
         if (strict)
             detail::verify_semantics(root, m);
         return m;
@@ -238,6 +271,7 @@ namespace polygraph::ingestion::detail {
                                     "t.id=e.to_id WHERE f.id IS NULL OR t.id IS NULL LIMIT 1");
         if (missing.step())
             throw Error("Unresolved endpoint in normalized index");
+        verify_partition_metadata(db, root, manifest);
         for (const auto &[table, label]:
              std::array<std::pair<std::string, std::string>, 2>{{{"nodes", "nodes"}, {"edges", "edges"}}}) {
             auto count = db.statement("SELECT count(*) FROM " + table);
@@ -259,7 +293,8 @@ namespace polygraph::ingestion::detail {
             }
         } cleanup{tmp};
         for (const auto &[name, expected]: manifest.at("backends").items()) {
-            const auto actual = generate_backend(parse_backend(name), o, scratch, tmp, tmp);
+            const auto actual = generate_backend(parse_backend(name), o, scratch, tmp, tmp,
+                                                 manifest.at("configuration").contains("partition_metadata_version"));
             if (actual.at("counts") != expected.at("counts") ||
                 actual.at("artifacts").size() != expected.at("artifacts").size())
                 throw Error("Native artifact counts disagree with endpoint index: " + name);

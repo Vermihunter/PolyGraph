@@ -177,11 +177,20 @@ namespace polygraph::ingestion::detail {
         std::string signed_text(std::int64_t id) { return std::to_string(id); }
         std::string unsigned_text(std::int64_t id) { return std::to_string(std::bit_cast<Id>(id)); }
         std::string payload_text(std::int64_t id) { return std::to_string(local_id(std::bit_cast<Id>(id))); }
-        Json proxy_properties(const std::string &type, const std::string &source) {
-            return {{"is_proxy", true}, {"remote-type", type}, {"remote-source", source}};
+        Json proxy_properties(const std::string &type, const std::string &source, std::int64_t partition) {
+            Json properties = {{"is_proxy", true}, {"remote-type", type}, {"remote-source", source}};
+            if (partition >= 0)
+                properties["partition_id"] = partition;
+            return properties;
+        }
+        std::string proxy_query(const std::string &backend, bool partition_metadata) {
+            return "SELECT n.id,n.type,n.owner," + std::string(partition_metadata ? "coalesce(q.partition,-1)" : "-1") +
+                   " FROM proxies p JOIN nodes n ON n.id=p.node_id " +
+                   (partition_metadata ? "LEFT JOIN partitions q ON q.key=n.key " : "") + "WHERE p.backend='" +
+                   backend + "' ORDER BY n.id";
         }
         void postgres(Database &db, const PrepareOptions &o, const fs::path &directory, const fs::path &root,
-                      Json &artifacts, Counts &counts) {
+                      Json &artifacts, Counts &counts, bool partition_metadata) {
             Chunks nodes(directory, root, "nodes", ".csv", artifacts, o.chunk_size_mb, "nodes");
             auto n =
                     db.statement("SELECT id,type,properties,residency FROM nodes WHERE owner='PostgreSQL' ORDER BY id");
@@ -192,10 +201,11 @@ namespace polygraph::ingestion::detail {
                                    std::to_string(n.integer(3)), props.dump()}));
                 ++counts.nodes;
             }
-            auto p = db.statement("SELECT n.id,n.type,n.owner FROM proxies p JOIN nodes n ON n.id=p.node_id WHERE "
-                                  "p.backend='PostgreSQL' ORDER BY n.id");
+            auto p = db.statement(proxy_query("PostgreSQL", partition_metadata));
             while (p.step()) {
-                auto props = proxy_properties(p.text(1), p.text(2));
+                if (partition_metadata && p.integer(3) < 0)
+                    throw Error("Proxy has no partition assignment");
+                auto props = proxy_properties(p.text(1), p.text(2), p.integer(3));
                 props.erase("is_proxy");
                 nodes.row(csv_row({signed_text(p.integer(0)), p.text(1), "PostgreSQL", "true", "0", props.dump()}));
                 ++counts.proxies;
@@ -213,7 +223,7 @@ namespace polygraph::ingestion::detail {
             edges.close();
         }
         void arango(Database &db, const PrepareOptions &o, const fs::path &directory, const fs::path &root,
-                    Json &artifacts, Counts &counts) {
+                    Json &artifacts, Counts &counts, bool partition_metadata) {
             auto types = db.statement("SELECT DISTINCT type FROM nodes WHERE owner='ArangoDB' ORDER BY type");
             while (types.step()) {
                 const auto type = types.text(0), collection = sanitize_name(type);
@@ -236,10 +246,11 @@ namespace polygraph::ingestion::detail {
                 chunks.close();
             }
             Chunks proxies(directory, root, "proxies", ".jsonl", artifacts, o.chunk_size_mb, "proxies", "Proxy");
-            auto p = db.statement("SELECT n.id,n.type,n.owner FROM proxies p JOIN nodes n ON n.id=p.node_id WHERE "
-                                  "p.backend='ArangoDB' ORDER BY n.id");
+            auto p = db.statement(proxy_query("ArangoDB", partition_metadata));
             while (p.step()) {
-                auto doc = proxy_properties(p.text(1), p.text(2));
+                if (partition_metadata && p.integer(3) < 0)
+                    throw Error("Proxy has no partition assignment");
+                auto doc = proxy_properties(p.text(1), p.text(2), p.integer(3));
                 doc["_key"] = unsigned_text(p.integer(0));
                 doc["uuid"] = p.integer(0);
                 doc["type"] = "Proxy";
@@ -279,7 +290,7 @@ namespace polygraph::ingestion::detail {
             }
         }
         void neo4j(Database &db, const PrepareOptions &o, const fs::path &directory, const fs::path &root,
-                   Json &artifacts, Counts &counts) {
+                   Json &artifacts, Counts &counts, bool partition_metadata) {
             Chunks fixups(directory, root, "property-fixups", ".jsonl", artifacts, o.chunk_size_mb, "fixups");
             auto types = db.statement("SELECT DISTINCT type FROM nodes WHERE owner='Neo4J' ORDER BY type");
             while (types.step()) {
@@ -319,16 +330,35 @@ namespace polygraph::ingestion::detail {
                 }
                 chunks.close();
             }
+            std::vector<std::string> proxy_header{":ID",
+                                                  "uuid:long",
+                                                  "type:string",
+                                                  "source:string",
+                                                  "is_proxy:boolean",
+                                                  "remote-type:string",
+                                                  "remote-source:string",
+                                                  ":LABEL"};
+            if (partition_metadata)
+                proxy_header.push_back("partition_id:long");
             Chunks proxies(directory, root, "proxies", ".csv", artifacts, o.chunk_size_mb, "proxies", "Proxy",
-                           csv_row({":ID", "uuid:long", "type:string", "source:string", "is_proxy:boolean",
-                                    "remote-type:string", "remote-source:string", ":LABEL"}));
-            auto p = db.statement("SELECT n.id,n.type,n.owner FROM proxies p JOIN nodes n ON n.id=p.node_id WHERE "
-                                  "p.backend='Neo4J' ORDER BY n.id");
+                           csv_row(proxy_header));
+            auto p = db.statement(proxy_query("Neo4J", partition_metadata));
             while (p.step()) {
-                proxies.row(csv_row({unsigned_text(p.integer(0)), signed_text(p.integer(0)), "Proxy", "Neo4J", "true",
-                                     p.text(1), p.text(2),
-                                     std::string("Proxy") + array_delimiter + "POLYGRAPHVertex" + array_delimiter +
-                                             "__GraphNode"}));
+                std::vector<std::string> row{unsigned_text(p.integer(0)),
+                                             signed_text(p.integer(0)),
+                                             "Proxy",
+                                             "Neo4J",
+                                             "true",
+                                             p.text(1),
+                                             p.text(2),
+                                             std::string("Proxy") + array_delimiter + "POLYGRAPHVertex" +
+                                                     array_delimiter + "__GraphNode"};
+                if (partition_metadata) {
+                    if (p.integer(3) < 0)
+                        throw Error("Proxy has no partition assignment");
+                    row.push_back(std::to_string(p.integer(3)));
+                }
+                proxies.row(csv_row(row));
                 ++counts.proxies;
             }
             proxies.close();
@@ -370,7 +400,7 @@ namespace polygraph::ingestion::detail {
         }
     } // namespace
     Json generate_backend(Backend backend, const PrepareOptions &o, const fs::path &scratch, const fs::path &generation,
-                          const fs::path &root) {
+                          const fs::path &root, bool partition_metadata) {
         const auto started = Clock::now();
         const auto name = backend_name(backend);
         const auto directory = generation / name;
@@ -380,13 +410,13 @@ namespace polygraph::ingestion::detail {
         Json artifacts = Json::array();
         switch (backend) {
             case Backend::postgresql:
-                postgres(db, o, directory, root, artifacts, counts);
+                postgres(db, o, directory, root, artifacts, counts, partition_metadata);
                 break;
             case Backend::arango:
-                arango(db, o, directory, root, artifacts, counts);
+                arango(db, o, directory, root, artifacts, counts, partition_metadata);
                 break;
             case Backend::neo4j:
-                neo4j(db, o, directory, root, artifacts, counts);
+                neo4j(db, o, directory, root, artifacts, counts, partition_metadata);
                 break;
         }
         std::uint64_t bytes = 0;

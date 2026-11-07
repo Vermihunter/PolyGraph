@@ -13,12 +13,19 @@ namespace {
 
 polygraph_bulk_import prepare --adapter <ldbc-snb|polygraph-jsonl>
   --input <directory|file> --placement-config <placement.json> --output-dir <directory>
-  [--partitioner none] [--seed 42] [--threads 3] [--memory-limit-mb 256]
+  [--partitioner none|kaminpar] [--seed 42] [--threads 3] [--memory-limit-mb 256]
+  [--partitions <count>] [--partition-threads 1] [--partition-imbalance 0.03]
+  [--partition-preset default|eco|strong] [--partition-map <partition-backends.json>]
   [--chunk-size-mb 64] [--max-record-mb 8]
   [--partition-file <assignments.jsonl> --partition-map <partition-backends.json>]
     prepare is offline: never connects to databases. Existing valid artifacts/checkpoints
     are reused only when input and configuration SHA-256 hashes match.
-    KaMinPar is unavailable in this release; requests fail explicitly.
+    KaMinPar requires the optional POLYGRAPH_INGESTION_KAMINPAR build and --partitions.
+    Directed/multiple edges project to unit-weight simple undirected CSR; self loops
+    do not affect its cut. Original import records and canonical IDs are preserved.
+    Default placement is schema-based; an explicit map selects raw node owners before IDs.
+    Partition fields are native properties, separate from authoritative backend bits.
+    One partition thread plus a fixed seed is reproducible; parallel calls may differ.
     External partitions map node source keys to partitions, then partitions to backends.
     Edges keep their independently configured schema ownership.
     memory-limit-mb budgets SQLite caches and record buffers, not a process RSS hard limit.
@@ -27,7 +34,11 @@ polygraph_bulk_import load --adapter <ldbc-snb|polygraph-jsonl> --input <directo
   --placement-config <placement.json> --docker [--keep-running]
   [--output-dir <fresh-directory>] [--generation-name <readable-prefix>]
   [--threads 3] [--memory-limit-mb 256] [--chunk-size-mb 64] [--max-record-mb 8]
-  [--partitioner none] [--concurrency 3] [--startup-timeout-seconds 180]
+  [--partitioner none|kaminpar] [--concurrency 3] [--startup-timeout-seconds 180]
+  [--partitions <count>] [--partition-threads 1] [--partition-imbalance 0.03]
+  [--partition-preset default|eco|strong] [--seed 42]
+  [--partition-file <assignments.jsonl>] [--partition-map <partition-backends.json>]
+  [--arango-concurrency 4] [--arango-batch-mb 1] [--arango-buffer-mb 128]
   [--neo-image <image>] [--arango-image <image>] [--pg-image <image>]
   [--skip-verification] [--verify-bfs] [--bfs-binary <polygraph_bfs>] [--bfs-max-vertices 100000]
     One command: prepare, strict verify, fresh isolated Docker resources, native
@@ -38,6 +49,8 @@ polygraph_bulk_import load --adapter <ldbc-snb|polygraph-jsonl> --input <directo
     Failures retain logs, stopped owned resources and import journals. No implicit retries.
     Image defaults prefer cached repository images, then fetch official images if missing.
     --verify-bfs additionally compares a depth-two distributed BFS with the source index.
+    ArangoDB uses bounded concurrent HTTP batches. The buffer budget includes queued
+    and in-flight payloads; producer/record buffers and response overhead are additional.
     --skip-verification imports without exhaustive artifact/live/BFS correctness checks.
     Checksums, fresh-target safeguards and importer error/count checks remain enabled.
     Successful unchecked loads report imported, verification skipped; use verify-load later.
@@ -92,6 +105,16 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
                 throw Error("Expected unsigned integer for " + key);
             return result;
         }
+        double real(const std::string &key, double fallback) const {
+            if (!values.contains(key))
+                return fallback;
+            const auto &text = values.at(key);
+            double result = 0;
+            const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), result);
+            if (error != std::errc{} || end != text.data() + text.size())
+                throw Error("Expected floating-point number for " + key);
+            return result;
+        }
     };
     Arguments parse(int argc, char **argv, const std::string &command) {
         std::set<std::string> allowed;
@@ -100,17 +123,18 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
                        "--partitioner",   "--seed",          "--threads",          "--memory-limit-mb",
                        "--chunk-size-mb", "--max-record-mb", "--partition-file",   "--partition-map"};
         else if (command == "load")
-            allowed = {"--adapter",          "--input",
-                       "--placement-config", "--docker",
-                       "--keep-running",     "--output-dir",
-                       "--generation-name",  "--threads",
-                       "--memory-limit-mb",  "--chunk-size-mb",
-                       "--max-record-mb",    "--partitioner",
-                       "--concurrency",      "--startup-timeout-seconds",
-                       "--neo-image",        "--arango-image",
-                       "--pg-image",         "--verify-bfs",
-                       "--bfs-binary",       "--bfs-max-vertices",
-                       "--skip-verification"};
+            allowed = {"--adapter",           "--input",
+                       "--placement-config",  "--docker",
+                       "--keep-running",      "--output-dir",
+                       "--generation-name",   "--threads",
+                       "--memory-limit-mb",   "--chunk-size-mb",
+                       "--max-record-mb",     "--partitioner",
+                       "--concurrency",       "--startup-timeout-seconds",
+                       "--neo-image",         "--arango-image",
+                       "--pg-image",          "--verify-bfs",
+                       "--bfs-binary",        "--bfs-max-vertices",
+                       "--skip-verification", "--arango-concurrency",
+                       "--arango-batch-mb",   "--arango-buffer-mb"};
         else if (command == "verify-load")
             allowed = {"--output-dir", "--verify-bfs", "--bfs-binary", "--bfs-max-vertices"};
         else if (command == "verify")
@@ -121,6 +145,10 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
             allowed = {"--manifest", "--target-config"};
         else
             throw Error("Unknown command: " + command);
+        if (command == "prepare" || command == "load")
+            for (const auto *key: {"--partitions", "--partition-threads", "--partition-imbalance", "--partition-preset",
+                                   "--seed", "--partition-file", "--partition-map"})
+                allowed.insert(key);
         Arguments result;
         for (int i = 2; i < argc; ++i) {
             const std::string key = argv[i];
@@ -191,6 +219,10 @@ int main(int argc, char **argv) {
             options.output_dir = args.require("--output-dir");
             options.partitioner = args.get("--partitioner", "none");
             options.seed = args.number("--seed", 42);
+            options.partition_options.count = args.number("--partitions", 0);
+            options.partition_options.threads = args.number("--partition-threads", 1);
+            options.partition_options.imbalance = args.real("--partition-imbalance", 0.03);
+            options.partition_options.preset = args.get("--partition-preset", "default");
             options.threads = args.number("--threads", 3);
             options.memory_limit_mb = args.number("--memory-limit-mb", 256);
             options.chunk_size_mb = args.number("--chunk-size-mb", 64);

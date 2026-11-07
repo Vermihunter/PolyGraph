@@ -10,6 +10,7 @@ namespace polygraph::ingestion::detail {
     [[nodiscard]] Json http_json(const Json &target, const std::string &method, const std::string &path,
                                  const std::string &body = {}, bool allow_not_found = false);
     [[nodiscard]] Json expected_counts(const ImportContext &context);
+    [[nodiscard]] bool expects_partition_metadata(const ImportContext &context);
     void verify_expected_rows(const ImportContext &context, const std::function<void(bool, const Json &)> &check);
 } // namespace polygraph::ingestion::detail
 #endif

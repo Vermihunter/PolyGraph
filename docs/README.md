@@ -21,7 +21,7 @@ PolyGraph is a C++23 research runtime that executes graph traversals over a **si
 
 ### Guides · do something
 
-[Getting started](guides/GETTING_STARTED.md) · [Building](guides/BUILDING.md) · [Data loading](guides/DATA_LOADING.md) · [Native bulk ingestion](guides/BULK_INGESTION.md) · [Docker load](guides/DOCKER_INGESTION.md) · [LDBC fast preparation](guides/FAST_LDBC_PREPARATION.md) · [Benchmarking](guides/BENCHMARKING.md) · [Scripts](guides/SCRIPTS.md) · [Testing](guides/TESTING.md) · [Troubleshooting](guides/TROUBLESHOOTING.md)
+[Getting started](guides/GETTING_STARTED.md) · [Building](guides/BUILDING.md) · [Data loading](guides/DATA_LOADING.md) · [Native bulk ingestion](guides/BULK_INGESTION.md) · [Docker load](guides/DOCKER_INGESTION.md) · [Graph partitioning](guides/GRAPH_PARTITIONING.md) · [LDBC fast preparation](guides/FAST_LDBC_PREPARATION.md) · [Benchmarking](guides/BENCHMARKING.md) · [Scripts](guides/SCRIPTS.md) · [Testing](guides/TESTING.md) · [Troubleshooting](guides/TROUBLESHOOTING.md)
 
 ### Architecture · understand how it works
 
@@ -37,7 +37,7 @@ PolyGraph is a C++23 research runtime that executes graph traversals over a **si
 
 ### Research · reproduce, do not assume
 
-[GPU experiments and findings](research/GPU_PERFORMANCE_EXPERIMENTS.md) · [Distributed GPU integration status](research/DISTRIBUTED_GPU.md) · [Standalone multi-GPU and MPI probes](../src/gpu/distributed/README.md) · [Arango sweep](research/ARANGO_CHUNK_SWEEP.md) · [SF1 distribution matrix](benchmarks/SF1_DISTRIBUTION_MATRIX.md) · [SF1 cache research](benchmarks/SF1_CACHE_RESEARCH.md) · [Benchmark notes](benchmarks/LOW_MEMORY_BFS_EXPERIMENT_V4.md) · [Historical revision notes](history/REVISION_NOTES.md)
+[GPU experiments and findings](research/GPU_PERFORMANCE_EXPERIMENTS.md) · [Distributed GPU integration status](research/DISTRIBUTED_GPU.md) · [Standalone multi-GPU and MPI probes](../src/gpu/distributed/README.md) · [Arango sweep](research/ARANGO_CHUNK_SWEEP.md) · [SF1 distribution matrix](benchmarks/SF1_DISTRIBUTION_MATRIX.md) · [SF1 cache research](benchmarks/SF1_CACHE_RESEARCH.md) · [SF0.1 ingestion baseline](benchmarks/INGESTION_SF0_1_BASELINE.md) · [Concurrent ingestion measurements](benchmarks/INGESTION_THROUGHPUT.md) · [Partitioning overhead](benchmarks/INGESTION_PARTITIONING.md) · [Benchmark notes](benchmarks/LOW_MEMORY_BFS_EXPERIMENT_V4.md) · [Historical revision notes](history/REVISION_NOTES.md)
 
 ## Source reference
 

@@ -198,19 +198,28 @@ namespace polygraph::ingestion::detail {
         return value;
     }
     Json expected_counts(const ImportContext &context) { return context.artifacts.at("counts"); }
+    bool expects_partition_metadata(const ImportContext &context) {
+        return read_json(context.root / "manifest.json").at("configuration").contains("partition_metadata_version");
+    }
     void verify_expected_rows(const ImportContext &c, const std::function<void(bool, const Json &)> &check) {
         // Bound requests and responses independently of graph size.
         const auto manifest = read_json(c.root / "manifest.json");
         Database db(artifact_path(c.root, manifest.at("index")), 4, true);
         const auto name = backend_name(c.backend);
-        auto nodes = db.statement("SELECT id,type,0 FROM nodes WHERE owner=? UNION ALL SELECT n.id," +
-                                  std::string(c.backend == Backend::postgresql ? "n.type" : "'Proxy'") +
-                                  ",1 FROM proxies p JOIN nodes n ON n.id=p.node_id WHERE p.backend=? ORDER BY 1");
+        const bool partitioned = manifest.at("configuration").contains("partition_metadata_version");
+        const std::string column = partitioned ? ",q.partition" : "";
+        const std::string join = partitioned ? " JOIN partitions q ON q.key=n.key " : " ";
+        auto nodes = db.statement(
+                "SELECT n.id,n.type,0" + column + " FROM nodes n" + join + "WHERE n.owner=? UNION ALL SELECT n.id," +
+                std::string(c.backend == Backend::postgresql ? "n.type" : "'Proxy'") + ",1" + column +
+                " FROM proxies p JOIN nodes n ON n.id=p.node_id" + join + "WHERE p.backend=? ORDER BY 1");
         nodes.bind(1, name);
         nodes.bind(2, name);
         Json batch = Json::array();
         while (nodes.step()) {
             batch.push_back({{"id", nodes.integer(0)}, {"type", nodes.text(1)}, {"proxy", nodes.integer(2) != 0}});
+            if (partitioned)
+                batch.back()["partition_id"] = nodes.integer(3);
             if (batch.size() == 1000) {
                 check(false, batch);
                 batch = Json::array();
@@ -218,8 +227,13 @@ namespace polygraph::ingestion::detail {
         }
         if (!batch.empty())
             check(false, batch);
-        auto edges = db.statement("SELECT e.id,e.from_id,e.to_id,e.type,e.owner FROM replicas r JOIN edges e ON "
-                                  "e.id=r.edge_id WHERE r.backend=? ORDER BY e.id");
+        auto edges = db.statement("SELECT e.id,e.from_id,e.to_id,e.type,e.owner" +
+                                  std::string(partitioned ? ",f.partition,t.partition" : "") +
+                                  " FROM replicas r JOIN edges e ON e.id=r.edge_id " +
+                                  (partitioned ? "JOIN nodes fn ON fn.id=e.from_id JOIN nodes tn ON tn.id=e.to_id "
+                                                 "JOIN partitions f ON f.key=fn.key JOIN partitions t ON t.key=tn.key "
+                                               : "") +
+                                  "WHERE r.backend=? ORDER BY e.id");
         edges.bind(1, name);
         batch = Json::array();
         while (edges.step()) {
@@ -228,6 +242,11 @@ namespace polygraph::ingestion::detail {
                              {"to", edges.integer(2)},
                              {"type", edges.text(3)},
                              {"source", edges.text(4)}});
+            if (partitioned) {
+                batch.back()["from_partition_id"] = edges.integer(5);
+                batch.back()["to_partition_id"] = edges.integer(6);
+                batch.back()["is_partition_cut"] = edges.integer(5) != edges.integer(6);
+            }
             if (batch.size() == 1000) {
                 check(true, batch);
                 batch = Json::array();

@@ -3,12 +3,14 @@ find_package(OpenSSL REQUIRED COMPONENTS SSL Crypto)
 find_package(Threads REQUIRED)
 add_library(polygraph_ingestion STATIC
     Config.cpp Storage.cpp Input.cpp Normalize.cpp Writers.cpp Import.cpp Process.cpp
-    Execute.cpp Postgres.cpp Http.cpp Arango.cpp Neo4j.cpp
+    Execute.cpp Postgres.cpp Http.cpp Arango.cpp Neo4j.cpp BatchImport.cpp Partition.cpp Kaminpar.cpp PartitionStage.cpp
     "${PROJECT_SOURCE_DIR}/src/insertion/BackendEncodedUuid.cpp"
 )
 add_library(polygraph::ingestion ALIAS polygraph_ingestion)
 target_link_libraries(polygraph_ingestion PUBLIC SQLite::SQLite3 OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
 polygraph_configure_target(polygraph_ingestion)
+include("${PROJECT_SOURCE_DIR}/cmake/KaMinPar.cmake")
+polygraph_enable_kaminpar(polygraph_ingestion)
 
 file(READ "${PROJECT_SOURCE_DIR}/storage_layer/postgresql/init/001_polygraph.sql" POLYGRAPH_INGESTION_SCHEMA)
 string(REPLACE "CREATE TABLE IF NOT EXISTS polygraph_" "CREATE TABLE IF NOT EXISTS public.polygraph_" POLYGRAPH_INGESTION_SCHEMA "${POLYGRAPH_INGESTION_SCHEMA}")

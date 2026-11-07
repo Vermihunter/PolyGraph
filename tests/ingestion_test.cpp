@@ -73,6 +73,122 @@ TEST_F(IngestionTest, CodecMatchesPythonAndSignedStorage) {
     EXPECT_EQ(canonical_id(make_id(Backend::neo4j, 9) | (8ULL << 48)), make_id(Backend::neo4j, 9));
 }
 
+TEST_F(IngestionTest, ExternalPartitionsPublishVersionedMetadataAndChecksummedAssignments) {
+    auto o = fixture();
+    o.partition_file = dir / "assignments.jsonl";
+    o.partition_map = dir / "mapping.json";
+    write(o.partition_file, "{\"key\":\"Person:1\",\"partition\":40}\n"
+                            "{\"key\":\"Post:2\",\"partition\":41}\n"
+                            "{\"key\":\"Place:3\",\"partition\":42}\n");
+    write(o.partition_map, R"({"40":"Neo4J","41":"ArangoDB","42":"PostgreSQL"})");
+    const auto m = prepare(o);
+    ASSERT_TRUE(m["configuration"].contains("partition_metadata_version"));
+    EXPECT_EQ(m["configuration"]["partition_metadata_version"], 1);
+    ASSERT_TRUE(m["partitioning"].contains("assignment_artifact"));
+    const auto &assignment = m["partitioning"]["assignment_artifact"];
+    EXPECT_EQ(assignment["records"], 3);
+    EXPECT_EQ(sha256_file(o.output_dir / assignment["path"].get<std::string>()), assignment["sha256"]);
+    EXPECT_EQ(m["partitioning"]["partition_cut_relationships"], 2);
+    for (const auto &artifact: m["backends"]["Neo4J"]["artifacts"]) {
+        std::ifstream stream(o.output_dir / artifact["path"].get<std::string>());
+        std::string contents{std::istreambuf_iterator<char>(stream), {}};
+        if (artifact["kind"] == "nodes" || artifact["kind"] == "proxies")
+            EXPECT_NE(contents.find("partition_id:long"), std::string::npos);
+        if (artifact["kind"] == "edges")
+            EXPECT_NE(contents.find("is_partition_cut:boolean"), std::string::npos);
+    }
+    for (const auto &artifact: m["backends"]["ArangoDB"]["artifacts"]) {
+        std::ifstream stream(o.output_dir / artifact["path"].get<std::string>());
+        std::string line;
+        while (std::getline(stream, line)) {
+            const auto row = Json::parse(line);
+            if (artifact["kind"] == "edges") {
+                ASSERT_TRUE(row.contains("from_partition_id") && row.contains("to_partition_id") &&
+                            row.contains("is_partition_cut"));
+                EXPECT_TRUE(row["from_partition_id"].is_number_integer());
+                EXPECT_TRUE(row["to_partition_id"].is_number_integer());
+                EXPECT_EQ(row["is_partition_cut"], true);
+            } else {
+                ASSERT_TRUE(row.contains("partition_id"));
+                EXPECT_TRUE(row["partition_id"].is_number_integer());
+            }
+        }
+    }
+    EXPECT_NO_THROW((void) verify(o.output_dir / "manifest.json", true));
+    write(o.output_dir / assignment["path"].get<std::string>(), "corrupt assignment artifact\n");
+    EXPECT_THROW((void) verify(o.output_dir / "manifest.json", false), Error);
+}
+
+TEST_F(IngestionTest, ExternalPartitionsRejectFractionalNegativeAndUnknownAssignments) {
+    for (const std::string value: {"40.5", "-4294967256", "\"40\""}) {
+        auto o = fixture();
+        o.output_dir = dir / ("out-" + sha256_text(value));
+        o.partition_file = dir / "assignments.jsonl";
+        o.partition_map = dir / "mapping.json";
+        write(o.partition_file, "{\"key\":\"Person:1\",\"partition\":" + value +
+                                        "}\n"
+                                        "{\"key\":\"Post:2\",\"partition\":41}\n"
+                                        "{\"key\":\"Place:3\",\"partition\":42}\n");
+        write(o.partition_map, R"({"40":"Neo4J","41":"ArangoDB","42":"PostgreSQL"})");
+        EXPECT_THROW((void) prepare(o), Error) << value;
+        EXPECT_FALSE(fs::exists(o.output_dir / "manifest.json"));
+    }
+    auto o = fixture();
+    o.partition_file = dir / "extra.jsonl";
+    o.partition_map = dir / "mapping.json";
+    write(o.partition_file, "{\"key\":\"Person:1\",\"partition\":40}\n"
+                            "{\"key\":\"Post:2\",\"partition\":41}\n"
+                            "{\"key\":\"Place:3\",\"partition\":42}\n"
+                            "{\"key\":\"Person:999\",\"partition\":40}\n");
+    EXPECT_THROW((void) prepare(o), Error);
+}
+
+TEST_F(IngestionTest, PartitionCheckpointRejectsMissingOrCorruptAssignmentsBeforePublication) {
+    auto o = fixture();
+    o.partition_file = dir / "assignments.jsonl";
+    o.partition_map = dir / "mapping.json";
+    write(o.partition_file, "{\"key\":\"Person:1\",\"partition\":0}\n"
+                            "{\"key\":\"Post:2\",\"partition\":1}\n"
+                            "{\"key\":\"Place:3\",\"partition\":2}\n");
+    write(o.partition_map, R"({"0":"Neo4J","1":"ArangoDB","2":"PostgreSQL"})");
+    for (const bool missing: {false, true}) {
+        o.output_dir = dir / (missing ? "missing" : "corrupt");
+        const auto manifest = prepare(o);
+        fs::remove(o.output_dir / "manifest.json");
+        const auto assignment =
+                o.output_dir / manifest["partitioning"]["assignment_artifact"]["path"].get<std::string>();
+        if (missing)
+            fs::remove(assignment);
+        else
+            write(assignment, "corrupt\n");
+        EXPECT_ANY_THROW((void) prepare(o));
+        EXPECT_FALSE(fs::exists(o.output_dir / "manifest.json"));
+    }
+    o.output_dir = dir / "changed-before-publication";
+    EXPECT_ANY_THROW((void) prepare(o, [&](std::string_view stage) {
+        if (stage == "artifacts-ready") {
+            const auto checkpoint = read_json(o.output_dir / "generation-state.json");
+            write(o.output_dir /
+                          checkpoint["normalization"]["partitioning"]["assignment_artifact"]["path"].get<std::string>(),
+                  "corrupt\n");
+        }
+    }));
+    EXPECT_FALSE(fs::exists(o.output_dir / "manifest.json"));
+}
+
+TEST_F(IngestionTest, PartitionMetadataCannotOverwriteInputProperties) {
+    auto o = fixture();
+    o.partition_file = dir / "assignments.jsonl";
+    o.partition_map = dir / "mapping.json";
+    write(o.partition_file, "{\"key\":\"Person:1\",\"partition\":40}\n"
+                            "{\"key\":\"Post:2\",\"partition\":41}\n"
+                            "{\"key\":\"Place:3\",\"partition\":42}\n");
+    write(o.partition_map, R"({"40":"Neo4J","41":"ArangoDB","42":"PostgreSQL"})");
+    write(o.input / "dynamic/person_0_0.csv", "id|partition_id\n1|999\n");
+    EXPECT_THROW((void) prepare(o), Error);
+    EXPECT_FALSE(fs::exists(o.output_dir / "manifest.json"));
+}
+
 TEST_F(IngestionTest, MissingEndpointAndCollisionDoNotPublish) {
     auto o = fixture();
     write(o.input / "dynamic/person_likes_post_0_0.csv", "from|to\n1|999\n");
@@ -390,6 +506,34 @@ TEST_F(IngestionTest, Neo4jDatabaseArgumentPrecedesVariadicFileOptions) {
     std::ifstream in(o.output_dir / "logs/neo4j-import.stdout.log");
     std::string text{std::istreambuf_iterator<char>(in), {}};
     EXPECT_TRUE(text.starts_with("database\nimport\nfull\nbulk-argument-test\n"));
+}
+
+TEST_F(IngestionTest, ArangoImportTuningIsValidatedBeforeRemotePreflight) {
+    auto o = fixture();
+    (void) prepare(o);
+    for (const auto &setting: std::vector<Json>{{{"import_concurrency", 0}},
+                                                {{"import_concurrency", 33}},
+                                                {{"import_concurrency", -1}},
+                                                {{"import_concurrency", 1.5}},
+                                                {{"import_concurrency", "4"}},
+                                                {{"import_batch_mb", 0}},
+                                                {{"import_buffer_mb", 0}},
+                                                {{"import_batch_mb", 8}, {"import_buffer_mb", 1}}}) {
+        auto target = setting;
+        target["database"] = "bulk-config-arango";
+        target["endpoint"] = "http://127.0.0.1:1";
+        write_json_atomic(dir / "targets.json", {{"targets",
+                                                  {{"ArangoDB", target},
+                                                   {"Neo4J", {{"database", "bulk-config-neo"}}},
+                                                   {"PostgreSQL", {{"database", "bulk_config_pg"}}}}}});
+        try {
+            execute(o.output_dir / "manifest.json", dir / "targets.json", true, 1, {}, VerificationMode::none);
+            FAIL() << "Invalid import settings were accepted: " << setting;
+        } catch (const Error &error) {
+            EXPECT_NE(std::string(error.what()).find("import_"), std::string::npos) << error.what();
+        }
+        EXPECT_FALSE(fs::exists(o.output_dir / "execution-state.json"));
+    }
 }
 TEST_F(IngestionTest, PostgreSqlProxiesRetainLogicalEndpointTypesForBfs) {
     auto o = fixture();
