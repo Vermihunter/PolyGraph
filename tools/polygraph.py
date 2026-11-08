@@ -4,7 +4,8 @@ from __future__ import annotations
 import sys
 
 # The validation entry point must not create import caches in a fresh checkout.
-if len(sys.argv) > 1 and sys.argv[1] in {"validate", "import"}:
+if len(sys.argv) > 1 and (sys.argv[1] in {"validate", "import"} or
+        (sys.argv[1] == "load" and any(value.split("=", 1)[0] == "--graph-manifest" for value in sys.argv[2:]))):
     sys.dont_write_bytecode = True
 
 import argparse
@@ -29,6 +30,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.graphio.domain import (
+    DomainConfig,
     discover_domain_manifests,
     find_first_node,
     generate_sample_graph,
@@ -36,6 +38,7 @@ from tools.graphio.domain import (
     materialize_graph_jsonl,
     record_native_id_resolution,
     resolve_domain,
+    resolve_graph_manifest,
     resolve_domain_node_id,
     select_roots,
     validate_graph,
@@ -52,10 +55,6 @@ from tools.graphio.loaders import (
 from tools.graphio.reader import open_graph_reader
 from tools.graphio.cache_planner import load_cache_config, plan_graph_caches
 from tools.graphio.gpu_storage_planner import load_gpu_distribution_config, plan_gpu_storage
-from tools.ldbc_snb.convert import convert_dataset
-from tools.ldbc_snb.statistics import analyze_dataset as analyze_ldbc_dataset
-from tools.ldbc_snb.statistics import print_report as print_ldbc_statistics_report
-from tools.ldbc_snb.statistics import write_report_outputs as write_ldbc_statistics_outputs
 
 DATA_ROOT = ROOT / "data"
 STORAGE_ROOT = ROOT / "storage_layer"
@@ -63,7 +62,6 @@ COMPOSE_FILE = STORAGE_ROOT / "docker-compose.yml"
 COMPOSE_ENV_FILE = STORAGE_ROOT / ".env"
 COMPOSE_INSTANCES_FILE = STORAGE_ROOT / "environments.json"
 UNIVERSITY_SCHEMA = DATA_ROOT / "university" / "schema" / "sample-university-domain.graph-shape.json"
-DATAGEN_DOCKERFILE = ROOT / "tools" / "ldbc_snb" / "Dockerfile.datagen"
 
 
 @dataclass(frozen=True)
@@ -195,23 +193,9 @@ def _slug(value: str) -> str:
 
 
 def _normalize_scale_factor(value: str) -> str:
-    """Canonicalize user-facing SF spellings to the on-disk sfX_Y form.
-
-    Examples: 1, 1.0, sf1 and sf1_0 all become sf1_0; 0.1 becomes sf0_1.
-    """
-    normalized = value.strip().lower()
-    if normalized.startswith("sf"):
-        normalized = normalized[2:]
-    normalized = normalized.replace("_", ".")
-    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", normalized):
-        raise ValueError(f"Invalid scale factor: {value!r}")
-    whole, dot, fraction = normalized.partition(".")
-    whole = str(int(whole))
-    if not dot:
-        fraction = "0"
-    else:
-        fraction = fraction.rstrip("0") or "0"
-    return f"sf{whole}_{fraction}"
+    """Compatibility alias for tools.ldbc_snb.support._normalize_scale_factor."""
+    from tools.ldbc_snb.support import _normalize_scale_factor as implementation
+    return implementation(value)
 
 
 def _compose_instance_key(scale_factor: str, distribution: str) -> str:
@@ -264,6 +248,7 @@ def resolve_compose_instance(
     if not isinstance(defaults, dict) or not isinstance(instances, dict):
         raise ValueError("environments.json must contain object fields 'defaults' and 'instances'")
 
+    from tools.ldbc_snb.support import default_domain_reference
     key = _compose_instance_key(scale_factor, distribution)
     entry = instances.get(key)
     if entry is None:
@@ -273,7 +258,7 @@ def resolve_compose_instance(
         scale, distribution_slug = key.split("/", 1)
         entry = {
             "project": f"polygraph-{scale.replace('_', '-')}-{distribution_slug}",
-            "domain": f"data/ldbc-snb/{scale}/{distribution_slug}/domain.json",
+            "domain": default_domain_reference(scale, distribution_slug),
         }
     elif not isinstance(entry, dict):
         raise ValueError(f"Compose instance {key!r} must be a JSON object")
@@ -481,40 +466,21 @@ def sha256(path: Path) -> str:
 
 
 def sf_key(scale_factor: str) -> str:
-    return _normalize_scale_factor(scale_factor)
+    """Compatibility alias for tools.ldbc_snb.support.sf_key."""
+    from tools.ldbc_snb.support import sf_key as implementation
+    return implementation(scale_factor)
 
 
 def infer_scale_factor(path: Path) -> str | None:
-    for part in (path.name, *[parent.name for parent in path.parents[:3]]):
-        match = re.search(r"sf([0-9]+(?:\.[0-9]+)?)", part, flags=re.IGNORECASE)
-        if match:
-            return match.group(1)
-    return None
+    """Compatibility alias for tools.ldbc_snb.support.infer_scale_factor."""
+    from tools.ldbc_snb.support import infer_scale_factor as implementation
+    return implementation(path)
 
 
 def resolve_social_network_dir(input_path: str | Path) -> Path:
-    candidate = Path(input_path).expanduser().resolve()
-    if not candidate.is_dir():
-        raise FileNotFoundError(f"LDBC dataset directory does not exist: {candidate}")
-    if (candidate / "static").is_dir() and (candidate / "dynamic").is_dir():
-        return candidate
-    nested = candidate / "social_network"
-    if (nested / "static").is_dir() and (nested / "dynamic").is_dir():
-        return nested
-    matches = sorted(
-        parent
-        for dynamic in candidate.glob("**/dynamic")
-        if dynamic.is_dir() and (parent := dynamic.parent).joinpath("static").is_dir()
-    )
-    unique = list(dict.fromkeys(matches))
-    if len(unique) == 1:
-        return unique[0]
-    if not unique:
-        raise FileNotFoundError(
-            f"Could not find sibling static/ and dynamic/ directories below {candidate}"
-        )
-    rendered = "\n".join(f"  {item}" for item in unique)
-    raise ValueError(f"More than one social_network directory was found:\n{rendered}")
+    """Compatibility alias for tools.ldbc_snb.support.resolve_social_network_dir."""
+    from tools.ldbc_snb.support import resolve_social_network_dir as implementation
+    return implementation(input_path)
 
 
 def write_benchmark_config(domain_id: str, *, schema: Path, data: Path, backends: Path) -> Path:
@@ -643,6 +609,8 @@ def prepare_university(args: argparse.Namespace) -> Path:
 
 
 def prepare_ldbc(args: argparse.Namespace) -> Path:
+    from tools.ldbc_snb.convert import convert_dataset
+    from tools.ldbc_snb.support import default_dataset_root
     social_network = resolve_social_network_dir(args.input)
     scale_factor = args.sf or infer_scale_factor(social_network) or "0.1"
     key = sf_key(scale_factor)
@@ -650,7 +618,7 @@ def prepare_ldbc(args: argparse.Namespace) -> Path:
     output_root = (
         Path(args.output_dir).expanduser().resolve()
         if getattr(args, "output_dir", None)
-        else DATA_ROOT / "ldbc-snb" / key
+        else default_dataset_root(DATA_ROOT, key)
     )
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -727,7 +695,7 @@ def prepare_ldbc(args: argparse.Namespace) -> Path:
         count=args.root_count,
         seed=args.seed,
     )
-    roots_path = write_roots_csv(output_root / "bfs_roots.csv", roots)
+    roots_path = write_roots_csv(output_root / "bfs_roots.csv", roots, external_id_property="ldbc_id")
     (output_root / "start_uuids.txt").write_text(
         "".join(f"{node.uuid}\n" for node in roots), encoding="utf-8"
     )
@@ -809,34 +777,20 @@ def prepare_ldbc(args: argparse.Namespace) -> Path:
 
 
 def update_datagen_params(path: Path, scale_factor: str, partitions: int) -> None:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    result: list[str] = []
-    scale_written = False
-    partition_written = False
-    for line in lines:
-        if line.startswith("ldbc.snb.datagen.generator.scaleFactor:"):
-            result.append(f"ldbc.snb.datagen.generator.scaleFactor:snb.interactive.{scale_factor}")
-            scale_written = True
-        elif line.startswith("ldbc.snb.datagen.serializer.numUpdatePartitions:"):
-            result.append(f"ldbc.snb.datagen.serializer.numUpdatePartitions:{partitions}")
-            partition_written = True
-        else:
-            result.append(line)
-    if not scale_written:
-        result.append(f"ldbc.snb.datagen.generator.scaleFactor:snb.interactive.{scale_factor}")
-    if not partition_written:
-        result.append(f"ldbc.snb.datagen.serializer.numUpdatePartitions:{partitions}")
-    path.write_text("\n".join(result) + "\n", encoding="utf-8")
+    """Compatibility alias for tools.ldbc_snb.support.update_datagen_params."""
+    from tools.ldbc_snb.support import update_datagen_params as implementation
+    return implementation(path, scale_factor, partitions)
 
 
 def generate_ldbc(args: argparse.Namespace) -> Path:
+    from tools.ldbc_snb.support import default_dataset_root, datagen_dockerfile
     require("git")
     require("docker")
     tag = args.tag
     scale_factor = args.sf or "0.1"
     work_root = ROOT / "tools" / "ldbc_snb" / ".datagen"
     repository = work_root / "ldbc_snb_datagen_hadoop"
-    output_root = DATA_ROOT / "ldbc-snb" / sf_key(scale_factor)
+    output_root = default_dataset_root(DATA_ROOT, sf_key(scale_factor))
     raw = output_root / "raw"
     params = output_root / "params.ini"
     work_root.mkdir(parents=True, exist_ok=True)
@@ -871,7 +825,7 @@ def generate_ldbc(args: argparse.Namespace) -> Path:
             "--tag",
             image,
             "--file",
-            DATAGEN_DOCKERFILE,
+            datagen_dockerfile(ROOT),
             repository,
         ]
     )
@@ -1210,7 +1164,7 @@ def load_domain(
     *,
     connection_overrides: dict[str, BackendConnection] | None = None,
 ) -> None:
-    domain = resolve_domain(args.domain, DATA_ROOT)
+    domain = resolve_graph_config(args)
     step(f"Loading domain {domain.domain_id}")
     selected = args.only_source or None
     # Stable 48-bit payload IDs mean cache reconfiguration never requires an
@@ -1302,7 +1256,7 @@ def _rewrite_backend_cache_config(
 
 
 def reconfigure_cache(args: argparse.Namespace) -> None:
-    domain = resolve_domain(args.domain, DATA_ROOT)
+    domain = resolve_graph_config(args)
     config_path = Path(args.cache_config).expanduser().resolve()
     config = load_cache_config(config_path)
     output_dir = (
@@ -1364,7 +1318,7 @@ def sync_domain_cache_residency(
     *,
     connection_overrides: dict[str, BackendConnection] | None = None,
 ) -> None:
-    domain = resolve_domain(args.domain, DATA_ROOT)
+    domain = resolve_graph_config(args)
     step(f"Synchronizing cache_residency metadata for {domain.domain_id}")
     result = sync_cache_residency(
         domain.paths.data,
@@ -1379,7 +1333,7 @@ def sync_domain_cache_residency(
 def load_redis_cache(args: argparse.Namespace) -> None:
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be positive")
-    domain = resolve_domain(args.domain, DATA_ROOT)
+    domain = resolve_graph_config(args)
     from tools.cache.load_redis import load as load_redis_artifact
 
     step(f"Loading generated Redis cache for {domain.domain_id}")
@@ -1394,7 +1348,7 @@ def load_redis_cache(args: argparse.Namespace) -> None:
 
 def build_gpu_storage(args: argparse.Namespace) -> None:
     """Rebuild authoritative GPU distribution from an already prepared graph."""
-    domain = resolve_domain(args.domain, DATA_ROOT)
+    domain = resolve_graph_config(args)
     config_path = Path(args.config).expanduser().resolve() if args.config else None
     distribution = load_gpu_distribution_config(config_path)
     output_dir = (
@@ -1459,7 +1413,7 @@ def build_cache_plans(args: argparse.Namespace) -> None:
     """Build one or more independent cache plans from one reusable graph index."""
     if args.redis_batch_size <= 0:
         raise ValueError("--redis-batch-size must be positive")
-    domain = resolve_domain(args.domain, DATA_ROOT)
+    domain = resolve_graph_config(args)
     from tools.cache.load_redis import load as load_redis_artifact
     from tools.graphio.cache_planner import load_cache_config, plan_graph_caches
 
@@ -1621,7 +1575,7 @@ def read_start_uuids(path: str | Path) -> list[str]:
 
 
 def run_domain(args: argparse.Namespace) -> None:
-    domain = resolve_domain(args.domain, DATA_ROOT)
+    domain = resolve_graph_config(args)
     binary = find_bfs_binary(domain.paths.backends, getattr(args, "binary", None))
     extras = list(getattr(args, "bfs_args", None) or [])
     if extras and extras[0] == "--":
@@ -1636,23 +1590,35 @@ def run_domain(args: argparse.Namespace) -> None:
     if has_cli_option(extras, "--start-type"):
         raise ValueError(
             "--start-type is no longer supported by the BFS executable; "
-            "provide only --start-uuid."
+            "provide --start-uuid or --start-source instead."
         )
 
+    forwarded_source, extras = pop_cli_option(extras, "--start-source")
     forwarded_start_uuid, extras = pop_cli_option(extras, "--start-uuid")
 
     wrapper_start_uuid = getattr(args, "start_uuid", None)
     start_uuids_file = getattr(args, "start_uuids_file", None)
-    if start_uuids_file and (wrapper_start_uuid or forwarded_start_uuid):
-        raise ValueError("--start-uuids-file cannot be combined with --start-uuid")
-    if wrapper_start_uuid and forwarded_start_uuid:
-        raise ValueError("--start-uuid was supplied both before and after '--'")
-
-    if start_uuids_file:
+    wrapper_source = getattr(args, "start_source", None)
+    selectors = (start_uuids_file, wrapper_start_uuid, forwarded_start_uuid, wrapper_source, forwarded_source)
+    selected = [value for value in selectors if value is not None]
+    if len(selected) > 1:
+        raise ValueError("Choose only one root selector: --start-uuid, --start-source or --start-uuids-file (including after '--')")
+    typed_source = wrapper_source if wrapper_source is not None else forwarded_source
+    if not selected:
+        typed_source = domain.start_source
+    if typed_source is not None:
+        # Serialize only for forwarding/reporting; ID interpretation stays native.
+        value = json.loads(typed_source) if isinstance(typed_source, str) else typed_source
+        typed_source = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        start_uuids = [typed_source]
+    elif start_uuids_file:
         start_uuids = read_start_uuids(start_uuids_file)
     else:
-        start_uuids = [wrapper_start_uuid or forwarded_start_uuid or domain.start_uuid]
-    if domain.paths.native_id_map:
+        root = wrapper_start_uuid or forwarded_start_uuid or domain.start_uuid
+        if root is None:
+            raise ValueError("No BFS root configured; provide --start-uuid or --start-source")
+        start_uuids = [root]
+    if typed_source is None and domain.paths.native_id_map:
         start_uuids = [str(resolve_domain_node_id(domain, value)) for value in start_uuids]
 
     repetitions = int(getattr(args, "repetitions", 1))
@@ -1663,7 +1629,11 @@ def run_domain(args: argparse.Namespace) -> None:
         f"{domain.domain_id}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
     )
     run_id = safe_path_component(run_id, label="run id")
-    measurement_root = ROOT / "measurements" / run_id
+    measurement_root = (
+        Path(args.output_dir).expanduser().resolve()
+        if getattr(args, "output_dir", None)
+        else ROOT / "measurements" / run_id
+    )
     measurement_root.mkdir(parents=True, exist_ok=True)
     overwrite_logs = bool(getattr(args, "overwrite_logs", False))
 
@@ -1704,6 +1674,9 @@ def run_domain(args: argparse.Namespace) -> None:
         "same_as_first",
     ]
 
+    if typed_source is not None:
+        fieldnames.insert(3, "start_source")
+
     if measurements_csv.exists() and not overwrite_logs:
         raise ValueError(
             f"Measurement file already exists: {measurements_csv}. "
@@ -1725,7 +1698,11 @@ def run_domain(args: argparse.Namespace) -> None:
         writer.writeheader()
 
         for start_uuid in start_uuids:
-            uuid_directory = safe_path_component(start_uuid, label="start ID")
+            uuid_directory = (
+                "source-" + hashlib.sha256(start_uuid.encode()).hexdigest()[:24]
+                if typed_source is not None
+                else safe_path_component(start_uuid, label="start ID")
+            )
             for repetition in range(1, repetitions + 1):
                 current_run += 1
                 event_file = measurement_root / "events" / uuid_directory / f"{repetition}.events.jsonl"
@@ -1749,7 +1726,7 @@ def run_domain(args: argparse.Namespace) -> None:
 
                 command = [
                     *common_command,
-                    "--start-uuid",
+                    "--start-source" if typed_source is not None else "--start-uuid",
                     start_uuid,
                     "--event-file",
                     event_file,
@@ -1797,7 +1774,8 @@ def run_domain(args: argparse.Namespace) -> None:
                     {
                         "run_id": run_id,
                         "domain": domain.domain_id,
-                        "start_uuid": start_uuid,
+                        "start_uuid": "" if typed_source is not None else start_uuid,
+                        **({"start_source": typed_source} if typed_source is not None else {}),
                         "repetition": repetition,
                         "seconds": f"{elapsed:.9f}",
                         "status": status,
@@ -1835,7 +1813,8 @@ def run_domain(args: argparse.Namespace) -> None:
         {
             "runId": run_id,
             "domain": domain.domain_id,
-            "startUuidCount": len(start_uuids),
+            "startUuidCount": 0 if typed_source is not None else len(start_uuids),
+            "startSourceCount": 1 if typed_source is not None else 0,
             "repetitions": repetitions,
             "totalRuns": total_runs,
             "successfulRuns": successful_runs,
@@ -1973,7 +1952,7 @@ def register_domain(args: argparse.Namespace) -> None:
 
 def list_domains(_args: argparse.Namespace) -> None:
     rows: list[tuple[str, str, Path]] = []
-    for manifest in discover_domain_manifests(DATA_ROOT):
+    for manifest in discover_domain_manifests(getattr(_args, "data_root", None) or DATA_ROOT):
         try:
             domain = load_domain_manifest(manifest)
         except Exception as exc:  # noqa: BLE001 - list invalid manifests without aborting
@@ -2045,7 +2024,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
 
 def benchmark_cache_configurations(args: argparse.Namespace) -> None:
     """Benchmark generated cache configs or reuse existing cache plans."""
-    domain = resolve_domain(args.domain, DATA_ROOT)
+    domain = resolve_graph_config(args)
     command: list[str | os.PathLike[str]] = [
         sys.executable,
         ROOT / "tools" / "measurement" / "benchmark_cache_configs.py",
@@ -2167,6 +2146,11 @@ def add_university_options(parser: argparse.ArgumentParser) -> None:
 
 
 def show_ldbc_statistics(args: argparse.Namespace) -> None:
+    from tools.ldbc_snb.statistics import (
+        analyze_dataset as analyze_ldbc_dataset,
+        print_report as print_ldbc_statistics_report,
+        write_report_outputs as write_ldbc_statistics_outputs,
+    )
     report = analyze_ldbc_dataset(
         args.input,
         placement_config=args.placement_config,
@@ -2282,12 +2266,46 @@ def add_datagen_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--force", action="store_true")
 
 
+def load_domain_compat(args: argparse.Namespace) -> int | None:
+    """Keep positional legacy loading; explicit manifest mode uses native import."""
+    if getattr(args, "graph_manifest", None):
+        if getattr(args, "domain", None):
+            raise ValueError("Choose either positional legacy domain or --graph-manifest native mode")
+        if args.reset or args.batch_size != 20000 or args.workers != 4 or args.postgres_indexes or args.only_source:
+            raise ValueError("Native --graph-manifest mode cannot mix legacy reset/batch/backend flags; use import --execute --confirm-create or retain load DOMAIN")
+        return import_native_graph(args)
+    if args.binary or args.dry_run or args.execute or args.confirm_create or args.concurrency is not None:
+        raise ValueError("Native import options require --graph-manifest; positional load DOMAIN retains legacy behavior")
+    return load_domain(args)
+
+
+def add_graph_reference(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("domain", nargs="?", help="Domain ID, manifest path or graph directory (legacy positional alias).")
+    parser.add_argument("--graph-manifest", help="Graph configuration file, graph directory or registered domain ID.")
+    parser.add_argument("--data-root", help="Search this directory for graph IDs; defaults to repository data/.")
+
+
+def resolve_graph_config(args: argparse.Namespace) -> DomainConfig:
+    positional = getattr(args, "domain", None)
+    explicit = getattr(args, "graph_manifest", None)
+    if positional and explicit:
+        raise ValueError("Choose either the positional domain or --graph-manifest, not both")
+    reference = explicit or positional
+    if not reference:
+        raise ValueError("Provide a domain or --graph-manifest")
+    return resolve_domain(reference, getattr(args, "data_root", None) or DATA_ROOT)
+
+
 def native_graph_command(args: argparse.Namespace, command: str) -> list[str]:
     """Resolve the native entry point without building or provisioning services."""
-    binary = Path(args.binary).expanduser().resolve() if args.binary else ROOT / 'build/cpu-tests/bin/polygraph_bulk_import'
-    if not binary.is_file():
-        raise FileNotFoundError(f'Native importer is unavailable: {binary}; provide --binary or build it separately')
-    return [str(binary), command, '--graph-manifest', str(Path(args.graph_manifest).expanduser().resolve())]
+    binary = (
+        Path(args.binary).expanduser().resolve()
+        if args.binary else ROOT / 'build/cpu-tests/bin/polygraph_bulk_import'
+    )
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise FileNotFoundError(f'Native importer is unavailable or not executable: {binary}; provide --binary or build it separately')
+    manifest = resolve_graph_manifest(args.graph_manifest, getattr(args, 'data_root', None) or DATA_ROOT)
+    return [str(binary), command, '--graph-manifest', str(manifest)]
 
 
 def validate_native_graph(args: argparse.Namespace) -> None:
@@ -2316,6 +2334,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     native_import = commands.add_parser("import", help="Generic native graph import; prepares offline unless execution is explicit.")
     native_import.add_argument("--graph-manifest", required=True)
+    native_import.add_argument("--data-root", help="Search root for graph IDs; explicit files/directories also work.")
     native_import.add_argument("--binary", help="Native importer executable; defaults to build/cpu-tests/bin/polygraph_bulk_import.")
     native_import.add_argument("--dry-run", action="store_true", help="Read-only configuration/inventory checks; no artifacts or services.")
     native_import.add_argument("--execute", action="store_true", help="Execute native imports against isolated fresh configured targets.")
@@ -2325,6 +2344,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate = commands.add_parser("validate", help="Read-only native graph-manifest preflight; no build or services.")
     validate.add_argument("--graph-manifest", required=True)
+    validate.add_argument("--data-root", help="Search root for graph IDs; explicit files/directories also work.")
     validate.add_argument("--binary", help="Native importer executable; defaults to build/cpu-tests/bin/polygraph_bulk_import.")
     validate.add_argument("--execution", action="store_true", help="Also check offline execution prerequisites.")
     validate.set_defaults(handler=validate_native_graph)
@@ -2531,8 +2551,8 @@ def build_parser() -> argparse.ArgumentParser:
     instance_options.add_argument("--show-secrets", action="store_true")
     instance_options.set_defaults(handler=manage_compose_instance)
 
-    load = commands.add_parser("load", help="Load a prepared domain into its persistent backends.")
-    load.add_argument("domain")
+    load = commands.add_parser("load", help="Legacy load DOMAIN; --graph-manifest selects native import (offline by default).")
+    add_graph_reference(load)
     load.add_argument("--reset", action="store_true")
     load.add_argument("--batch-size", type=int, default=20000)
     load.add_argument(
@@ -2547,7 +2567,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--only-source", action="append", default=[],
         help="Load/inspect only one configured source (e.g. Neo4J, ArangoDB, GPU:0). May be repeated.",
     )
-    load.set_defaults(handler=load_domain)
+    load.add_argument("--binary", help="Native importer; used only with --graph-manifest.")
+    load.add_argument("--dry-run", action="store_true")
+    load.add_argument("--execute", action="store_true")
+    load.add_argument("--confirm-create", action="store_true")
+    load.add_argument("--concurrency")
+    load.set_defaults(handler=load_domain_compat)
 
     gpu_storage = commands.add_parser(
         "gpu-storage",
@@ -2558,7 +2583,7 @@ def build_parser() -> argparse.ArgumentParser:
         "build",
         help="Materialize/rebalance authoritative GPU-owned vertices across GPU devices.",
     )
-    gpu_storage_build.add_argument("domain")
+    add_graph_reference(gpu_storage_build)
     gpu_storage_build.add_argument(
         "--config",
         help="GPU distribution JSON. Omitted means all authoritative GPU data on GPU:0.",
@@ -2579,7 +2604,7 @@ def build_parser() -> argparse.ArgumentParser:
         "build",
         help="Build independent cache plans while reusing one cache-plan.sqlite3 graph/index database.",
     )
-    cache_build.add_argument("domain")
+    add_graph_reference(cache_build)
     cache_build.add_argument(
         "--config", nargs="+", required=True,
         help="One or more cache configuration JSON files. Each becomes its own cache directory.",
@@ -2595,7 +2620,7 @@ def build_parser() -> argparse.ArgumentParser:
     cache_build.set_defaults(handler=build_cache_plans)
 
     redis_load = cache_actions.add_parser("redis-load", help="Load generated adjacency blobs into Redis.")
-    redis_load.add_argument("domain")
+    add_graph_reference(redis_load)
     redis_load.add_argument("--cache-plan", help="cache-plan.json to materialize; otherwise use domain.paths.cachePlan.")
     redis_load.add_argument("--no-reset", action="store_true", help="Do not FLUSHDB before loading (reset is the safe default).")
     redis_load.add_argument("--batch-size", type=int, default=10000)
@@ -2605,7 +2630,7 @@ def build_parser() -> argparse.ArgumentParser:
         "reconfigure",
         help="Re-plan GPU/Redis/mmap caches from an already generated graph without re-reading raw SNB CSVs.",
     )
-    cache_reconfigure.add_argument("domain")
+    add_graph_reference(cache_reconfigure)
     cache_reconfigure.add_argument("--cache-config", required=True)
     cache_reconfigure.add_argument(
         "--output-dir",
@@ -2637,7 +2662,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sync-residency",
         help="Update only Neo4j/ArangoDB cache_residency node attributes from the active graph.",
     )
-    cache_sync.add_argument("domain")
+    add_graph_reference(cache_sync)
     cache_sync.add_argument("--batch-size", type=int, default=20000)
     cache_sync.add_argument(
         "--only-source", choices=["Neo4J", "ArangoDB", "PostgreSQL"], action="append", default=[]
@@ -2645,7 +2670,7 @@ def build_parser() -> argparse.ArgumentParser:
     cache_sync.set_defaults(handler=sync_domain_cache_residency)
 
     run_parser = commands.add_parser("run", help="Run the C++ BFS executable for a prepared domain.")
-    run_parser.add_argument("domain")
+    add_graph_reference(run_parser)
     run_parser.add_argument("--binary")
     run_parser.add_argument(
         "--run-id",
@@ -2655,6 +2680,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     roots = run_parser.add_mutually_exclusive_group()
+    run_parser.add_argument("--output-dir", help="Measurement directory; defaults to measurements/<run-id>.")
+    roots.add_argument("--start-source", help="Typed source JSON forwarded to the C++ resolver.")
     roots.add_argument("--start-uuid", help="Run from one uint64 global ID instead of the domain default.")
     roots.add_argument(
         "--start-uuids-file",
@@ -2762,7 +2789,7 @@ def build_parser() -> argparse.ArgumentParser:
         "benchmark-caches",
         help="Compare generated cache configurations or existing cache plans on one immutable graph.",
     )
-    benchmark_caches.add_argument("domain", help="Domain ID or domain.json path.")
+    add_graph_reference(benchmark_caches)
     cache_inputs = benchmark_caches.add_mutually_exclusive_group(required=True)
     cache_inputs.add_argument(
         "--cache-configs",
@@ -2892,6 +2919,7 @@ def build_parser() -> argparse.ArgumentParser:
     register.set_defaults(handler=register_domain)
 
     listing = commands.add_parser("list", help="List prepared runtime domains.")
+    listing.add_argument("--data-root", help="Search this graph workspace instead of repository data/.")
     listing.set_defaults(handler=list_domains)
 
     quickstart = commands.add_parser("quickstart", help="Prepare, build, start databases, load, and optionally run.")
@@ -2933,7 +2961,7 @@ def main() -> int:
     args.bfs_args = bfs_args
     try:
         result = args.handler(args)
-        return result if args.command == "import" else 0
+        return result if args.command in {"import", "load"} and isinstance(result, int) else 0
     except (FileNotFoundError, ValueError, RuntimeError, TimeoutError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

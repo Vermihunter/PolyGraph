@@ -131,3 +131,8 @@ test stores, and checks type/edge filters and reverse traversal. It also exercis
 the actual BFS executable at depth zero without database requests, plus legacy
 native-ID-map roots and read-only/malformed-index regressions. Live database
 traversal and GPU execution require separate integration environments.
+
+Python `polygraph.py run --graph-manifest ...` now accepts the same typed root
+selector and domain default, forwarding resolution to C++. See
+[Graph-aware Python tools](GRAPH_TOOLS.md) for measurement outputs and legacy
+benchmark/reference compatibility.

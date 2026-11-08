@@ -1,6 +1,6 @@
 # Native bulk ingestion
 
-`polygraph_bulk_import` is a standalone C++23 preparation and native import tool. It does not link the BFS coordinator, query execution, servers, or GPU runtime. Legacy `tools/polygraph.py load` is unchanged.
+`polygraph_bulk_import` is a standalone C++23 preparation and native import tool. It does not link the BFS coordinator, query execution, servers, or GPU runtime. Legacy positional `tools/polygraph.py load DOMAIN` is unchanged.
 
 `validate --graph-manifest domain.json` provides read-only preflight, and
 `prepare --graph-manifest domain.json` uses the same configuration with the
@@ -412,3 +412,7 @@ Current limitations: no weighted partition objectives, no Parquet adapter, no on
 `0` success; `2` argument/configuration JSON error; `3` preparation/artifact verification error; `4` execution/live-verification failure; `5` unexpected I/O/internal error. `--help` documents every CLI option. Invalid operational settings may report code 3/4 with their actionable domain error after parsing.
 
 Measured development results and exact validation commands are recorded in [Native ingestion validation and measurements](../benchmarks/NATIVE_BULK_INGESTION.md) and the [matched SF0.1 concurrency comparison](../benchmarks/INGESTION_THROUGHPUT.md). Import contracts: [Neo4j full import](https://neo4j.com/docs/operations-manual/current/import/), [libpq COPY](https://www.postgresql.org/docs/current/libpq-copy.html), [ArangoDB HTTP import](https://docs.arango.ai/arangodb/stable/develop/http-api/import/).
+
+Python manifest selectors also accept graph directories or IDs under `--data-root`.
+Explicit manifest-mode load aliases forward to this same native import workflow;
+see [Graph-aware Python tools](GRAPH_TOOLS.md) for migration and path rules.

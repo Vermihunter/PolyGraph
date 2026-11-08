@@ -277,10 +277,12 @@ def _write_comparison(output_dir: Path, rows: list[dict]) -> None:
     (output_dir / "comparison.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _read_start_uuids(single: str | None, file_path: str | None, fallback: str) -> list[str]:
+def _read_start_uuids(single: str | None, file_path: str | None, fallback: str | None) -> list[str]:
     if single:
         return [single]
     if not file_path:
+        if fallback is None:
+            raise ValueError("Cache benchmarks require --start-uuid or --start-uuids-file for typed/import-only graphs; use polygraph.py run --start-source for typed-root measurements")
         return [fallback]
     path = Path(file_path).expanduser().resolve()
     values: list[str] = []
@@ -1233,6 +1235,10 @@ def main() -> int:
         parser.error("--http-request-plan requires --transport http")
 
     domain = load_domain_manifest(args.domain)
+    try:
+        start_uuids = _read_start_uuids(args.start_uuid, args.start_uuids_file, domain.start_uuid)
+    except ValueError as error:
+        parser.error(str(error))
     timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     output_dir = (
         Path(args.output_dir).expanduser().resolve()
@@ -1268,7 +1274,6 @@ def main() -> int:
     http_server_config = Path(args.http_server_config).expanduser().resolve()
     if args.transport == "http" and not http_server_config.is_file():
         raise FileNotFoundError(http_server_config)
-    start_uuids = _read_start_uuids(args.start_uuid, args.start_uuids_file, domain.start_uuid)
     http_payload = (
         _http_bfs_payload(
             extra,

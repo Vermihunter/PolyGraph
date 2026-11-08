@@ -351,7 +351,7 @@ def prepare(args: argparse.Namespace) -> dict:
         arango_database=arango_database,
     )
 
-    roots_csv = write_roots_csv(output / "bfs_roots.csv", roots)
+    roots_csv = write_roots_csv(output / "bfs_roots.csv", roots, external_id_property="ldbc_id")
     (output / "start_uuids.txt").write_text(
         "".join(f"{root.uuid}\n" for root in roots), encoding="utf-8"
     )

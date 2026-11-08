@@ -37,6 +37,7 @@ class DomainPaths:
     cache_plan: Path | None = None
     gpu_distribution_config: Path | None = None
     gpu_storage_plan: Path | None = None
+    ingestion_artifacts: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -47,9 +48,10 @@ class DomainConfig:
     paths: DomainPaths
     graph_version: int
     verbose: bool
-    start_uuid: str
+    start_uuid: str | None
     max_depth: int
     direction: str
+    start_source: dict[str, Any] | None = None
 
 
 def _resolve_relative(base: Path, value: str) -> Path:
@@ -206,12 +208,24 @@ def write_domain_manifest(
 def load_domain_manifest(path: str | Path) -> DomainConfig:
     manifest = Path(path).expanduser().resolve()
     raw = json.loads(manifest.read_text(encoding="utf-8"))
-    if raw.get("format") != "polygraph.domain" or raw.get("version") != 1:
+    if not isinstance(raw, dict) or raw.get("format") != "polygraph.domain" or raw.get("version") != 1:
         raise ValueError(f"Unsupported domain manifest: {manifest}")
     paths = raw.get("paths", {})
     runtime = raw.get("runtime", {})
-    bfs = raw.get("defaults", {}).get("bfs", {})
+    defaults = raw.get("defaults", {})
+    if not isinstance(paths, dict) or not isinstance(runtime, dict) or not isinstance(defaults, dict):
+        raise ValueError("domain.paths, runtime and defaults must be objects")
+    for field in ("schema", "data", "backendConfig"):
+        if field not in paths:
+            raise ValueError(f"domain.paths.{field} is required: {manifest}")
+    bfs = defaults.get("bfs", {})
+    if not isinstance(bfs, dict):
+        raise ValueError("domain.defaults.bfs must be an object")
     base = manifest.parent
+    if bfs.get("startUuid") not in (None, "") and bfs.get("startSource") is not None:
+        raise ValueError("Choose only one domain BFS default: startUuid or startSource")
+    if bfs.get("startSource") is not None and not isinstance(bfs["startSource"], dict):
+        raise ValueError("domain.defaults.bfs.startSource must be an object")
     return DomainConfig(
         domain_id=str(raw.get("id", manifest.parent.name)),
         name=str(raw.get("name", raw.get("id", manifest.parent.name))),
@@ -250,6 +264,7 @@ def load_domain_manifest(path: str | Path) -> DomainConfig:
                 if paths.get("gpuDistributionConfig")
                 else None
             ),
+            ingestion_artifacts=(_resolve_relative(base, str(paths["ingestionArtifacts"])) if paths.get("ingestionArtifacts") else None),
             gpu_storage_plan=(
                 _resolve_relative(base, str(paths["gpuStoragePlan"]))
                 if paths.get("gpuStoragePlan")
@@ -258,7 +273,8 @@ def load_domain_manifest(path: str | Path) -> DomainConfig:
         ),
         graph_version=int(runtime.get("graphVersion", 1)),
         verbose=bool(runtime.get("verbose", False)),
-        start_uuid=str(bfs["startUuid"]),
+        start_uuid=str(bfs["startUuid"]) if bfs.get("startUuid") not in (None, "") else None,
+        start_source=bfs.get("startSource"),
         max_depth=int(bfs.get("maxDepth", 7)),
         direction=str(bfs.get("direction", "undirected")),
     )
@@ -303,25 +319,43 @@ def discover_domain_manifests(data_root: str | Path) -> list[Path]:
     return sorted(root.rglob("domain.json"))
 
 
-def resolve_domain(reference: str | Path, data_root: str | Path) -> DomainConfig:
-    candidate = Path(reference).expanduser()
-    if candidate.is_file():
-        return load_domain_manifest(candidate)
+def resolve_graph_manifest(reference: str | Path, data_root: str | Path | None = None) -> Path:
+    """Select one graph configuration without interpreting ingestion or root IDs.
 
-    matches: list[DomainConfig] = []
-    for manifest in discover_domain_manifests(data_root):
+    Explicit files are passed through for the authoritative command to validate.
+    Paths follow the invocation cwd; paths inside a manifest follow its directory.
+    """
+    if not str(reference).strip():
+        raise ValueError("Provide a graph manifest, graph directory or domain ID")
+    candidate = Path(os.path.expandvars(str(reference))).expanduser()
+    if candidate.is_file():
+        return candidate.resolve()
+    if candidate.is_dir():
+        manifest = candidate / "domain.json"
+        if manifest.is_file():
+            return manifest.resolve()
+        raise FileNotFoundError(f"Graph directory has no domain.json: {candidate}")
+    root = data_root if data_root is not None else Path(__file__).resolve().parents[2] / "data"
+    matches = []
+    for manifest in discover_domain_manifests(root):
         try:
-            domain = load_domain_manifest(manifest)
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            raw = json.loads(manifest.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict) or raw.get("format") != "polygraph.domain" or raw.get("version") != 1:
+                continue
+        except (OSError, ValueError):
             continue
-        if domain.domain_id == str(reference) or manifest.parent.name == str(reference):
-            matches.append(domain)
+        if raw.get("id", manifest.parent.name) == str(reference) or manifest.parent.name == str(reference):
+            matches.append(manifest.resolve())
     if not matches:
-        raise FileNotFoundError(f"Unknown domain '{reference}'. Run 'python3 tools/polygraph.py list'.")
+        raise FileNotFoundError(f"Unknown domain '{reference}' under {Path(root)}. Provide a manifest path or --data-root.")
     if len(matches) > 1:
-        rendered = "\n".join(f"  {item.paths.manifest}" for item in matches)
+        rendered = "\n".join(f"  {item}" for item in matches)
         raise ValueError(f"Domain reference '{reference}' is ambiguous:\n{rendered}")
     return matches[0]
+
+
+def resolve_domain(reference: str | Path, data_root: str | Path | None = None) -> DomainConfig:
+    return load_domain_manifest(resolve_graph_manifest(reference, data_root))
 
 
 def sanitize_name(value: str) -> str:
@@ -1052,7 +1086,7 @@ def select_roots(
     return selected
 
 
-def write_roots_csv(path: str | Path, roots: Iterable[NodeRecord]) -> Path:
+def write_roots_csv(path: str | Path, roots: Iterable[NodeRecord], *, external_id_property: str = "external_id") -> Path:
     import csv
 
     output = Path(path).expanduser().resolve()
@@ -1061,5 +1095,5 @@ def write_roots_csv(path: str | Path, roots: Iterable[NodeRecord]) -> Path:
         writer = csv.writer(handle)
         writer.writerow(["uuid", "type", "source", "external_id"])
         for node in roots:
-            writer.writerow([node.uuid, node.type, node.source, node.properties.get("ldbc_id", "")])
+            writer.writerow([node.uuid, node.type, node.source, node.properties.get(external_id_property, "")])
     return output
