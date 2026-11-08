@@ -767,3 +767,35 @@ TEST_F(IngestionTest, NativeFailuresIdentifyBackendAndExecutionPhase) {
             EXPECT_EQ(state.imports, 0);
     }
 }
+
+TEST_F(IngestionTest, UnfamiliarMixedSchemaPreservesPropertiesParallelEdgesAndProxies) {
+    const auto fixture_dir = fs::path(POLYGRAPH_PROJECT_ROOT) / "tests/fixtures/schema_agnostic";
+    PrepareOptions o{.adapter = "polygraph-jsonl",
+                     .input = fixture_dir / "graph.jsonl",
+                     .placement_config = fixture_dir / "placement.json",
+                     .output_dir = dir / "out"};
+    const auto manifest = prepare(o);
+    EXPECT_EQ(manifest.at("counts").at("nodes"), 4);
+    EXPECT_EQ(manifest.at("counts").at("edges"), 6);
+    EXPECT_NO_THROW((void) verify(o.output_dir / "manifest.json", true));
+    for (const auto *backend: {"Neo4J", "ArangoDB", "PostgreSQL"}) {
+        EXPECT_GT(manifest["backends"][backend]["counts"]["nodes"].get<int>(), 0);
+        EXPECT_GT(manifest["backends"][backend]["counts"]["edges"].get<int>(), 0);
+        EXPECT_GT(manifest["backends"][backend]["counts"]["proxies"].get<int>(), 0);
+    }
+}
+
+TEST_F(IngestionTest, UnfamiliarSchemaPartitionsUseCanonicalKeys) {
+    const auto fixture_dir = fs::path(POLYGRAPH_PROJECT_ROOT) / "tests/fixtures/schema_agnostic";
+    PrepareOptions o{.adapter = "polygraph-jsonl",
+                     .input = fixture_dir / "graph.jsonl",
+                     .placement_config = fixture_dir / "placement.json",
+                     .output_dir = dir / "out"};
+    o.partition_file = fixture_dir / "assignments.jsonl";
+    o.partition_map = fixture_dir / "partition-map.json";
+    const auto manifest = prepare(o);
+    EXPECT_EQ(manifest["partitioning"]["assignment_artifact"]["records"], 4);
+    EXPECT_EQ(manifest["partitioning"]["partition_cut_relationships"], 4);
+    EXPECT_EQ(manifest["counts"]["edges"], 6);
+    EXPECT_NO_THROW((void) verify(o.output_dir / "manifest.json", true));
+}

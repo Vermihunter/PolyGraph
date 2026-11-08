@@ -208,3 +208,16 @@ if(POLYGRAPH_INGESTION_LIVE_TESTS)
         set_tests_properties(integration.ingestion.kaminpar PROPERTIES LABELS "integration;live;ingestion;kaminpar" TIMEOUT 600 RUN_SERIAL TRUE)
     endif()
 endif()
+
+polygraph_add_unit_test(polygraph_storage_type_names_test storage_type_names_test.cpp polygraph::core)
+if(TARGET polygraph_backends)
+    polygraph_add_unit_test(polygraph_neo4j_storage_names_test neo4j_storage_names_test.cpp polygraph::backends)
+endif()
+if(TARGET polygraph_runtime)
+    polygraph_add_unit_test(polygraph_schema_backend_live_test schema_backend_live_test.cpp polygraph::runtime)
+endif()
+
+add_test(NAME python.schema_agnostic_cache
+    COMMAND "${Python3_EXECUTABLE}" -m unittest tests.test_schema_agnostic_cache)
+set_tests_properties(python.schema_agnostic_cache PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;cache" TIMEOUT 30)

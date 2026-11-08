@@ -4,6 +4,7 @@
 #include "Internal.hpp"
 #include "insertion/BackendEncodedUuid.hpp"
 #include "utilities/BackendIds.hpp"
+#include "utilities/StorageNames.hpp"
 
 namespace polygraph::ingestion {
     using Codec = insertion::BackendEncodedId;
@@ -87,29 +88,11 @@ namespace polygraph::ingestion {
         throw Error("GlobalId must be an exact uint64 or signed BIGINT decimal: " + value.dump());
     }
     std::string sanitize_name(const std::string &name) {
-        // Same ASCII collection/label spelling as graphio.domain.sanitize_name.
-        std::string result;
-        for (std::size_t i = 0; i < name.size(); ++i) {
-            const auto c = static_cast<unsigned char>(name[i]);
-            if (c >= 128) {
-                const std::size_t width = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 0;
-                if (width == 0 || i + width > name.size())
-                    throw Error("Invalid UTF-8 in type name");
-                for (std::size_t j = 1; j < width; ++j)
-                    if ((static_cast<unsigned char>(name[i + j]) & 0xC0) != 0x80)
-                        throw Error("Invalid UTF-8 in type name");
-                result += '_';
-                i += width - 1;
-            } else
-                result += ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')
-                                  ? static_cast<char>(c)
-                                  : '_';
+        try {
+            return storage_type_name(name);
+        } catch (const std::invalid_argument &error) {
+            throw Error(error.what());
         }
-        if (result.empty())
-            result = "X";
-        if (result.front() >= '0' && result.front() <= '9')
-            result = "X_" + result;
-        return result;
     }
     Placement load_placement(const fs::path &path) {
         Placement p{.configuration = read_json(path), .backends = {}};

@@ -5,6 +5,7 @@
  */
 
 #include "data_access/adapters/Neo4J/response_processors/LocallyDeployedNeo4JResponseProcessor.hpp"
+#include "data_access/adapters/StorageTypeNames.hpp"
 
 #include "data_access/adapters/Neo4J/response_processors/Neo4JResponseProcessor.hpp"
 #include "infrastructure/DatabaseContext.hpp"
@@ -25,9 +26,10 @@ namespace polygraph {
 
     struct LocallyDeployedNeo4JResponseProcessor::Impl final : Neo4JResponseProcessor {
         DatabaseContext &db_context_;
+        StorageTypeNames storage_names_;
 
     public:
-        explicit Impl(DatabaseContext &db_context) : db_context_(db_context) {}
+        explicit Impl(DatabaseContext &db_context) : db_context_(db_context), storage_names_(*db_context.schema) {}
 
         [[nodiscard]] query_result_t process(const json &response, ResultParseType parse_type) const override {
             POLYGRAPH_PROFILE_FUNCTION();
@@ -279,7 +281,7 @@ namespace polygraph {
             }
 
             return Node{.global_id = logical_node_id(row, is_proxy),
-                        .type = db_context_.schema->node_type_id(type_name),
+                        .type = storage_names_.node_type(type_name),
                         .labels = labels,
                         .properties = get_properties(row)};
         }
@@ -308,7 +310,7 @@ namespace polygraph {
             const std::string edge_type_name = get_required_string_property(row, "type", "Neo4j edge");
 
             return Edge{.global_id = edge_id,
-                        .type = db_context_.schema->edge_type_id(edge_type_name),
+                        .type = storage_names_.edge_type(edge_type_name),
                         .src = logical_endpoint_id(row, "start"),
                         .dst = logical_endpoint_id(row, "end"),
                         .properties = get_properties(row)};
