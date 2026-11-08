@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import sys
+
+# The validation entry point must not create import caches in a fresh checkout.
+if len(sys.argv) > 1 and sys.argv[1] == "validate":
+    sys.dont_write_bytecode = True
+
 import argparse
 import base64
 import csv
@@ -11,7 +17,6 @@ import re
 import shutil
 import socket
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -2277,11 +2282,28 @@ def add_datagen_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--force", action="store_true")
 
 
+def validate_native_graph(args: argparse.Namespace) -> None:
+    """Delegate read-only preflight to the native engine; never build or provision."""
+    binary = Path(args.binary).expanduser().resolve() if args.binary else ROOT / 'build/cpu-tests/bin/polygraph_bulk_import'
+    if not binary.is_file():
+        raise FileNotFoundError(f'Native importer is unavailable: {binary}; provide --binary or build it separately')
+    command = [str(binary), 'validate', '--graph-manifest', str(Path(args.graph_manifest).expanduser().resolve())]
+    if args.execution:
+        command.append('--execution')
+    subprocess.run(command, check=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="One Python entry point for preparing, loading, building, and running PolyGraph domains."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    validate = commands.add_parser("validate", help="Read-only native graph-manifest preflight; no build or services.")
+    validate.add_argument("--graph-manifest", required=True)
+    validate.add_argument("--binary", help="Native importer executable; defaults to build/cpu-tests/bin/polygraph_bulk_import.")
+    validate.add_argument("--execution", action="store_true", help="Also check offline execution prerequisites.")
+    validate.set_defaults(handler=validate_native_graph)
 
     gui = commands.add_parser("gui", help="Open the generated desktop command interface.")
     gui.set_defaults(handler=launch_gui)

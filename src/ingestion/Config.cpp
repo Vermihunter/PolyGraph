@@ -166,3 +166,21 @@ namespace polygraph::ingestion {
         return *configured;
     }
 } // namespace polygraph::ingestion
+
+namespace polygraph::ingestion::detail {
+    unsigned arango_import_tuning(const Json &target, const std::string &name, unsigned fallback, unsigned maximum) {
+        if (!target.contains(name))
+            return fallback;
+        const auto &value = target.at(name);
+        if (!value.is_number_integer() || value < 1 || value > maximum)
+            throw Error("Arango " + name + " must be an integer in [1," + std::to_string(maximum) + "]");
+        return value.get<unsigned>();
+    }
+    void validate_arango_import_options(const Json &target) {
+        const auto batch = arango_import_tuning(target, "import_batch_mb", 1, 64);
+        const auto buffer = arango_import_tuning(target, "import_buffer_mb", 128, 1024);
+        (void) arango_import_tuning(target, "import_concurrency", 4, 32);
+        if (buffer < batch)
+            throw Error("Arango import_buffer_mb must be at least import_batch_mb");
+    }
+} // namespace polygraph::ingestion::detail

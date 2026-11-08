@@ -6,6 +6,7 @@
 #include "cli/BackendConfigParser.hpp"
 #include "cli/CommandLine.hpp"
 #include "cli/CurlGlobalGuard.hpp"
+#include "cli/DomainManifest.hpp"
 #include "cli/GraphRuntimeBuilder.hpp"
 #include "data_access/IGraphStore.hpp"
 #include "data_access/adapters/ArangoDB/ArangoGraphStore.hpp"
@@ -68,3 +69,15 @@
 #include <gtest/gtest.h>
 
 TEST(PublicHeadersTest, CpuFacingHeadersCompileTogether) { SUCCEED(); }
+
+TEST(DomainManifestCompatibilityTest, NativeIngestionExtensionPreservesRuntimePathsAndBfsDefaults) {
+    const auto directory = std::filesystem::path(POLYGRAPH_PROJECT_ROOT) / "docs/examples/ingestion/logical-graph";
+    const auto manifest = polygraph::cli::load_domain_manifest(directory / "domain.json");
+    EXPECT_EQ(manifest.id, "logical-contract-example");
+    EXPECT_EQ(manifest.logical_graph_schema_path, directory / "schema.json");
+    EXPECT_EQ(manifest.data_path, directory / "graph.jsonl");
+    EXPECT_EQ(manifest.backend_config_path, directory / "backends.json");
+    EXPECT_EQ(manifest.bfs.start_uuid, "281474976710657");
+    EXPECT_EQ(manifest.bfs.direction, "undirected");
+    EXPECT_EQ(manifest.bfs.max_depth, 2);
+}

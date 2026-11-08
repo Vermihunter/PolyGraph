@@ -17,6 +17,8 @@ namespace polygraph::ingestion {
         InputIdPolicy id_policy = InputIdPolicy::canonical;
         // Nonempty versions participate in input identity. Built-ins retain their legacy fingerprint.
         std::string version = "1";
+        // Optional read-only inspection of leading metadata/source table names. Never use scratch or emit records.
+        std::function<Json(const PrepareOptions &)> inspect = {};
     };
 
     // Populate at application setup, then pass as const for the duration of preparation.

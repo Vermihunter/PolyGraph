@@ -70,6 +70,8 @@ namespace polygraph::ingestion {
         unsigned max_record_mb = 8;
         // Optional caller-owned registry; must outlive prepare(). Null selects immutable built-ins.
         const InputAdapterRegistry *input_adapters = nullptr;
+        // Optional graph declaration/schema/config files bound to preparation identity.
+        std::vector<fs::path> configuration_files = {};
     };
     struct Placement {
         Json configuration;

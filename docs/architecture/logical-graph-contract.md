@@ -9,6 +9,8 @@ task referred to as “issue 01” in the issue sequence.
 **Status:** the existing record/streaming model remains the canonical pipeline.
 Issue #30 implements statically linked factory registration, discovery, input
 inventory and ID-policy selection; see [registration API](../guides/BULK_INGESTION.md#registering-a-statically-linked-input-adapter).
+Issue #31 adds [manifest-based read-only preflight](../guides/GRAPH_MANIFESTS.md)
+and native preparation using an additive `polygraph.domain` version 1 extension.
 Sections marked **extension contract** specify requirements for later adapter,
 manifest and normalization work (#30–#32); they are not new accepted JSONL fields,
 CLI options unless explicitly described as implemented. Issue #29 added the
@@ -204,8 +206,8 @@ delegates to the selected registry, which also provides the input inventory.
 Adapter metadata can be finalized while streaming (the existing JSONL adapter
 learns leading metadata during scans); do not assume it is complete before the
 passes. Input inventory is now available separately through registry callbacks;
-future preflight metadata must also be available without loading the graph and
-declared explicitly in the evolved API. Final IDs cannot be allocated
+read-only metadata inspection is an optional registry callback used by preflight.
+Final IDs cannot be allocated
 before a partition-to-owner map has selected raw vertex ownership.
 
 ## Compatibility and migration
@@ -216,9 +218,10 @@ before a partition-to-owner map has selected raw vertex ownership.
    existing artifacts. Graph format/version and ID strategy are separate concepts.
 2. Static registration is implemented through the existing adapter seam in #30.
    Source namespace/type metadata belongs to the remaining manifest and ID work;
-   add versioned graph configuration/preflight in #31. Map
-   legacy CLI flags and `domain.json` into that configuration explicitly; continue
-   accepting old SNB and canonical JSONL without mandatory new fields.
+   #31 implements additive graph configuration/preflight in `polygraph.domain`
+   version 1. Legacy runtime manifests and native CLI flags remain supported;
+   native manifest preparation opts in with an `ingestion` section and native
+   paths. Old SNB and canonical JSONL remain accepted without mandatory new record fields.
 3. Generalize source-key resolution in #32 while keeping the current SQLite index,
    streaming passes, LDBC allocator and preserved-ID JSONL path. Explicitly version
    any new identity key encoding. Existing single-source adapters use a documented

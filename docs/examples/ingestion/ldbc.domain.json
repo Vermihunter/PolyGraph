@@ -1,0 +1,17 @@
+{
+  "format": "polygraph.domain",
+  "version": 1,
+  "id": "ldbc-snb-fixture",
+  "name": "LDBC SNB ingestion fixture",
+  "paths": {
+    "schema": "ldbc.schema.json",
+    "data": "../../../tests/fixtures/ingestion/canonical.jsonl",
+    "sourceData": "../../../tests/fixtures/ingestion/raw",
+    "backendConfig": "logical-graph/backends.json",
+    "placementConfig": "../../../tests/fixtures/ingestion/placement.json",
+    "ingestionArtifacts": "../../../build/graph-manifests/ldbc-fixture",
+    "targetConfig": "targets.example.json"
+  },
+  "ingestion": {"adapter": "ldbc-snb", "identity": {"strategy": "ldbc-block31-v3"}},
+  "defaults": {"bfs": {"startUuid": "281474976710657", "maxDepth": 2, "direction": "undirected"}}
+}

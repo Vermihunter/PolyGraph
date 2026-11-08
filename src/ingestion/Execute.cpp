@@ -5,35 +5,51 @@
 #include <thread>
 #include "Native.hpp"
 
+namespace polygraph::ingestion::detail {
+    Json checked_targets(const Json &config, std::span<const Backend> backends) {
+        if (!config.is_object() || !config.contains("targets") || !config["targets"].is_object())
+            throw Error("Target configuration requires a targets object");
+        Json result = Json::object();
+        for (const auto backend: backends) {
+            const auto name = backend_name(backend);
+            if (!config["targets"].contains(name) || !config["targets"][name].is_object())
+                throw Error("Missing named target for " + name);
+            auto target = config["targets"][name];
+            const auto database = target.at("database").get<std::string>();
+            static const std::regex safe("[A-Za-z][A-Za-z0-9_.-]{2,62}");
+            if (!std::regex_match(database, safe) || database == "neo4j" || database == "system" ||
+                database == "_system" || database == "postgres" || database == "template0" || database == "template1" ||
+                database == "polygraph")
+                throw Error("Use an explicit isolated named target, not a default/system database: " + database);
+            if (name == "Neo4J" && !std::regex_match(database, std::regex("[a-z][a-z0-9.-]{2,62}")))
+                throw Error("Neo4j database names must use lowercase ASCII letters, digits, dots and dashes (no "
+                            "underscores)");
+            if (target.contains("password") || target.contains("connection_string"))
+                throw Error("Credentials/connection strings must not be embedded in target JSON; use password_env "
+                            "and libpq environment");
+            result[name] = std::move(target);
+        }
+        return result;
+    }
+} // namespace polygraph::ingestion::detail
+
 namespace polygraph::ingestion {
     namespace {
         std::vector<ImportContext> contexts(const fs::path &root, const Json &manifest, const Json &config,
                                             VerificationMode verification = VerificationMode::full) {
-            if (!config.is_object() || !config.contains("targets") || !config["targets"].is_object())
-                throw Error("Target configuration requires a targets object");
-            std::vector<ImportContext> result;
+            std::vector<Backend> backends;
             for (const auto &[name, artifacts]: manifest.at("backends").items()) {
-                if (!config["targets"].contains(name))
-                    throw Error("Missing named target for " + name);
-                auto target = config["targets"][name];
-                const auto database = target.at("database").get<std::string>();
-                static const std::regex safe("[A-Za-z][A-Za-z0-9_.-]{2,62}");
-                if (!std::regex_match(database, safe) || database == "neo4j" || database == "system" ||
-                    database == "_system" || database == "postgres" || database == "template0" ||
-                    database == "template1" || database == "polygraph")
-                    throw Error("Use an explicit isolated named target, not a default/system database: " + database);
-                if (name == "Neo4J" && !std::regex_match(database, std::regex("[a-z][a-z0-9.-]{2,62}")))
-                    throw Error("Neo4j database names must use lowercase ASCII letters, digits, dots and dashes (no "
-                                "underscores)");
-                if (target.contains("password") || target.contains("connection_string"))
-                    throw Error("Credentials/connection strings must not be embedded in target JSON; use password_env "
-                                "and libpq environment");
+                (void) artifacts;
+                backends.push_back(parse_backend(name));
+            }
+            const auto targets = detail::checked_targets(config, backends);
+            std::vector<ImportContext> result;
+            for (const auto &[name, artifacts]: manifest.at("backends").items())
                 result.push_back({.backend = parse_backend(name),
                                   .root = root,
                                   .artifacts = artifacts,
-                                  .target = std::move(target),
+                                  .target = targets.at(name),
                                   .verification = verification});
-            }
             return result;
         }
         ExecutorFactory effective_factory(const ExecutorFactory &factory) {

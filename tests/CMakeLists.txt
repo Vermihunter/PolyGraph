@@ -133,6 +133,7 @@ set_tests_properties(python.developer_quality PROPERTIES
 )
 
 if(TARGET polygraph_ingestion)
+    polygraph_add_unit_test(polygraph_graph_manifest_test graph_manifest_test.cpp polygraph::ingestion)
     polygraph_add_unit_test(polygraph_input_adapter_registry_test input_adapter_registry_test.cpp polygraph::ingestion)
     polygraph_add_unit_test(polygraph_ingestion_test ingestion_test.cpp polygraph::ingestion)
     polygraph_add_unit_test(polygraph_ingestion_batch_test ingestion_batch_test.cpp polygraph::ingestion)
@@ -143,6 +144,10 @@ if(TARGET polygraph_ingestion)
     target_include_directories(polygraph_ingestion_partition_test PRIVATE "${PROJECT_SOURCE_DIR}/src/ingestion")
 endif()
 if(TARGET polygraph_bulk_import)
+    add_test(NAME python.graph_manifest
+        COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
+                "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_graph_manifest -v)
+    set_tests_properties(python.graph_manifest PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 60)
     add_test(NAME python.ingestion_semantics
         COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
                 "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_semantics -v)

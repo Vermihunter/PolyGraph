@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "idRouting": ["Neo4J", "ArangoDB", "PostgreSQL"],
+  "backends": [
+    {"id": "Neo4J", "kind": "Neo4j", "enabled": true,
+     "connection": {"endpoint": "http://127.0.0.1:7474/db/neo4j/tx/commit", "database": "neo4j"}},
+    {"id": "ArangoDB", "kind": "ArangoDB", "enabled": true,
+     "connection": {"endpoint": "http://127.0.0.1:8529/_db/example/_api/cursor", "database": "example"}},
+    {"id": "PostgreSQL", "kind": "PostgreSQL", "enabled": true,
+     "connection": {"endpoint": "127.0.0.1:5432", "database": "example"}}
+  ]
+}

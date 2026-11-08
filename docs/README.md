@@ -27,6 +27,7 @@ PolyGraph is a C++23 research runtime that executes graph traversals over a **si
 
 [Graph extensibility audit (issue 28)](architecture/graph-extensibility-audit.md)
 [Logical graph and adapter contract (issue 29)](architecture/logical-graph-contract.md)
+[Graph manifests and preflight (issue 31)](guides/GRAPH_MANIFESTS.md)
 
 [Runtime architecture](architecture/ARCHITECTURE.md) · [Storage model](architecture/STORAGE.md) · [Insertion](architecture/INSERTION.md) · [Backend request scheduling](architecture/BACKEND_REQUEST_SCHEDULING.md) · [Caching](architecture/CACHING.md) · [Direction-optimized BFS](algorithms/DIRECTION_OPTIMIZED_BFS.md)
 

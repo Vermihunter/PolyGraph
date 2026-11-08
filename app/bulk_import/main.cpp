@@ -5,6 +5,7 @@
 #include <map>
 #include <set>
 #include <unistd.h>
+#include "ingestion/GraphManifest.hpp"
 #include "ingestion/Import.hpp"
 #include "ingestion/InputAdapterRegistry.hpp"
 
@@ -14,6 +15,16 @@ namespace {
 
 polygraph_bulk_import adapters
     List statically linked input adapter names, one per line.
+
+polygraph_bulk_import validate --graph-manifest <domain.json> [--execution]
+    Read-only configuration, source inventory, schema/identity and output-access checks.
+    --execution also checks target config, executor libraries, environment and commands.
+    Never writes files, starts services, connects to databases or invokes operator commands.
+    Record-level integrity and live target freshness remain prepare/execute checks.
+
+polygraph_bulk_import prepare --graph-manifest <domain.json>
+    Use additive native ingestion configuration in polygraph.domain version 1.
+    Paths resolve against the manifest directory; cannot be mixed with other options.
 
 polygraph_bulk_import prepare --adapter <name>
   --input <directory|file> --placement-config <placement.json> --output-dir <directory>
@@ -124,10 +135,13 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
         std::set<std::string> allowed;
         if (command == "adapters")
             allowed = {};
+        else if (command == "validate")
+            allowed = {"--graph-manifest", "--execution"};
         else if (command == "prepare")
-            allowed = {"--adapter",       "--input",         "--placement-config", "--output-dir",
-                       "--partitioner",   "--seed",          "--threads",          "--memory-limit-mb",
-                       "--chunk-size-mb", "--max-record-mb", "--partition-file",   "--partition-map"};
+            allowed = {"--graph-manifest",  "--adapter",       "--input",         "--placement-config",
+                       "--output-dir",      "--partitioner",   "--seed",          "--threads",
+                       "--memory-limit-mb", "--chunk-size-mb", "--max-record-mb", "--partition-file",
+                       "--partition-map"};
         else if (command == "load")
             allowed = {"--adapter",           "--input",
                        "--placement-config",  "--docker",
@@ -163,7 +177,7 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
             if (result.flags.contains(key) || result.values.contains(key))
                 throw Error("Duplicate option: " + key);
             if (key == "--strict" || key == "--confirm-create" || key == "--docker" || key == "--keep-running" ||
-                key == "--verify-bfs" || key == "--skip-verification")
+                key == "--verify-bfs" || key == "--skip-verification" || key == "--execution")
                 result.flags.insert(key);
             else {
                 if (i + 1 == argc || std::string_view(argv[i + 1]).starts_with("--"))
@@ -196,6 +210,9 @@ int main(int argc, char **argv) {
         if (command == "adapters") {
             for (const auto &name: default_input_adapters().names())
                 std::cout << name << '\n';
+        } else if (command == "validate") {
+            const auto graph = load_graph_manifest(args.require("--graph-manifest"));
+            std::cout << validate_graph_manifest(graph, args.flags.contains("--execution")).dump(2) << '\n';
         } else if (command == "load" || command == "verify-load") {
             if (command == "load") {
                 if (!args.flags.contains("--docker"))
@@ -222,22 +239,30 @@ int main(int argc, char **argv) {
                         std::string(std::strerror(errno)));
         } else if (command == "prepare") {
             PrepareOptions options;
-            options.adapter = args.require("--adapter");
-            options.input = args.require("--input");
-            options.placement_config = args.require("--placement-config");
-            options.output_dir = args.require("--output-dir");
-            options.partitioner = args.get("--partitioner", "none");
-            options.seed = args.number("--seed", 42);
-            options.partition_options.count = args.number("--partitions", 0);
-            options.partition_options.threads = args.number("--partition-threads", 1);
-            options.partition_options.imbalance = args.real("--partition-imbalance", 0.03);
-            options.partition_options.preset = args.get("--partition-preset", "default");
-            options.threads = args.number("--threads", 3);
-            options.memory_limit_mb = args.number("--memory-limit-mb", 256);
-            options.chunk_size_mb = args.number("--chunk-size-mb", 64);
-            options.max_record_mb = args.number("--max-record-mb", 8);
-            options.partition_file = args.get("--partition-file", "");
-            options.partition_map = args.get("--partition-map", "");
+            if (args.values.contains("--graph-manifest")) {
+                if (args.values.size() != 1 || !args.flags.empty())
+                    throw Error("graph.options: --graph-manifest cannot be combined with native option overrides");
+                const auto graph = load_graph_manifest(args.require("--graph-manifest"));
+                (void) validate_graph_manifest(graph);
+                options = graph.options;
+            } else {
+                options.adapter = args.require("--adapter");
+                options.input = args.require("--input");
+                options.placement_config = args.require("--placement-config");
+                options.output_dir = args.require("--output-dir");
+                options.partitioner = args.get("--partitioner", "none");
+                options.seed = args.number("--seed", 42);
+                options.partition_options.count = args.number("--partitions", 0);
+                options.partition_options.threads = args.number("--partition-threads", 1);
+                options.partition_options.imbalance = args.real("--partition-imbalance", 0.03);
+                options.partition_options.preset = args.get("--partition-preset", "default");
+                options.threads = args.number("--threads", 3);
+                options.memory_limit_mb = args.number("--memory-limit-mb", 256);
+                options.chunk_size_mb = args.number("--chunk-size-mb", 64);
+                options.max_record_mb = args.number("--max-record-mb", 8);
+                options.partition_file = args.get("--partition-file", "");
+                options.partition_map = args.get("--partition-map", "");
+            }
             const auto manifest =
                     prepare(options, [](const std::string &stage) { std::cerr << "prepare: " << stage << '\n'; });
             std::cout << Json{{"state", "prepared"},

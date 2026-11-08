@@ -8,6 +8,11 @@ PolyGraph configuration is split by responsibility so graph data, storage owners
 
 A cache plan does not need to be written into the domain: `--cache-plan FILE` is the preferred experiment-time override.
 
+For native preparation, version 1 domain manifests can add an `ingestion` section
+and native paths. See [Graph manifests and read-only preflight](../guides/GRAPH_MANIFESTS.md)
+for schema, defaults, migration and validation limits. Existing runtime manifests
+and command-line preparation remain supported.
+
 ## Backend configuration
 
 The backend config contains:

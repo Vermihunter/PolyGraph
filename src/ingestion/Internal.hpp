@@ -11,6 +11,11 @@ namespace polygraph::ingestion::detail {
     inline const InputAdapterRegistry &input_adapters(const PrepareOptions &options) {
         return options.input_adapters ? *options.input_adapters : default_input_adapters();
     }
+    void check_prepare_options(const PrepareOptions &options);
+    [[nodiscard]] Json checked_targets(const Json &config, std::span<const Backend> backends);
+    [[nodiscard]] unsigned arango_import_tuning(const Json &target, const std::string &name, unsigned fallback,
+                                                unsigned maximum);
+    void validate_arango_import_options(const Json &target);
     using Clock = std::chrono::steady_clock;
     inline double elapsed(Clock::time_point start) {
         return std::chrono::duration<double>(Clock::now() - start).count();
@@ -86,6 +91,7 @@ namespace polygraph::ingestion::detail {
                                         bool partition_metadata = false);
     [[nodiscard]] fs::path artifact_path(const fs::path &root, const Json &artifact);
     [[nodiscard]] Json input_identity(const PrepareOptions &options);
+    [[nodiscard]] std::vector<fs::path> input_paths(const PrepareOptions &options);
     [[nodiscard]] std::string csv_row(const std::vector<std::string> &fields);
     [[nodiscard]] bool read_csv(std::istream &stream, std::vector<std::string> &fields, char delimiter,
                                 std::size_t max_bytes);

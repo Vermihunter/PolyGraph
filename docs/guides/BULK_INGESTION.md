@@ -2,6 +2,11 @@
 
 `polygraph_bulk_import` is a standalone C++23 preparation and native import tool. It does not link the BFS coordinator, query execution, servers, or GPU runtime. Legacy `tools/polygraph.py load` is unchanged.
 
+`validate --graph-manifest domain.json` provides read-only preflight, and
+`prepare --graph-manifest domain.json` uses the same configuration with the
+existing native engine. See [Graph manifests](GRAPH_MANIFESTS.md) for examples,
+path resolution, execution-prerequisite checks and compatibility.
+
 ## One-command Docker load
 
 Use `polygraph_bulk_import load --adapter ldbc-snb --input data/ldbc-snb/sf0_1/raw --placement-config tools/ldbc_snb/placement.schema-3db.json --docker --keep-running` to provision fresh isolated databases, prepare/native-import/verify them, and retain the running services. It generates credentials, targets and offline runners automatically. See [One-command Docker ingestion](DOCKER_INGESTION.md) for output, ownership-checked cleanup, logs and BFS validation.
