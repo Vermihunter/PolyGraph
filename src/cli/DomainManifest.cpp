@@ -113,6 +113,9 @@ namespace polygraph::cli {
             result.cache_plan_path = resolve_domain_path(base, *cache_plan);
         }
 
+        if (const auto artifacts = optional_string(paths, "ingestionArtifacts"))
+            result.ingestion_artifacts_path = resolve_domain_path(base, *artifacts);
+
         const auto observability = optional_string(paths, "observabilityConfig");
         result.observability_config_path =
                 observability ? resolve_domain_path(base, *observability)
@@ -134,6 +137,11 @@ namespace polygraph::cli {
             throw std::runtime_error("domain.defaults.bfs must be an object");
         }
         result.bfs.start_uuid = optional_string(bfs, "startUuid");
+        if (bfs.contains("startSource")) {
+            result.bfs.start_source = domain::source_identity_from_json(bfs.at("startSource"));
+            if (result.bfs.start_uuid)
+                throw std::runtime_error("domain.defaults.bfs must select only one of startUuid or startSource");
+        }
         if (bfs.contains("maxDepth")) {
             if (!bfs.at("maxDepth").is_number_integer()) {
                 throw std::runtime_error("domain.defaults.bfs.maxDepth must be an integer");

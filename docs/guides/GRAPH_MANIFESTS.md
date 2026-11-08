@@ -211,3 +211,8 @@ Linked adapters using `InputIdPolicy::typed_external` select the versioned
 are supplied by the adapter; preflight validates configuration/inventory, while
 preparation resolves and checks record identities in SQLite. See
 [typed external IDs](BULK_INGESTION.md#typed-external-ids-in-a-linked-adapter).
+
+Runtime BFS can select `defaults.bfs.startSource` or `--start-source` through the
+prepared typed-source index under `paths.ingestionArtifacts`. Canonical
+`startUuid` remains supported. See [Runtime graph metadata](RUNTIME_GRAPH_METADATA.md)
+for exact ID types, selector precedence and verification boundaries.

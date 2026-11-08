@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include "domain/graph/SourceIdentity.hpp"
 
 namespace polygraph::cli {
 
@@ -16,6 +17,7 @@ namespace polygraph::cli {
         std::optional<std::string> start_uuid;
         std::optional<int> max_depth;
         std::optional<std::string> direction;
+        std::optional<domain::SourceIdentity> start_source = {};
     };
 
     struct DomainRuntimeDefaults {
@@ -35,6 +37,7 @@ namespace polygraph::cli {
         std::optional<std::filesystem::path> cache_plan_path;
         DomainRuntimeDefaults runtime;
         DomainBfsDefaults bfs;
+        std::optional<std::filesystem::path> ingestion_artifacts_path = {};
     };
 
     /**

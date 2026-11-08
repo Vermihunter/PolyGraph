@@ -16,6 +16,8 @@ manifest and normalization work (#30–#32); they are not new accepted JSONL fie
 CLI options unless explicitly described as implemented. Issue #29 added the
 specification and examples. Issue #32 adds typed source identities and SQLite-backed
 generic allocation through `InputIdPolicy::typed_external`; it does not change JSONL syntax.
+Issue #34 adds [runtime source-root lookup](../guides/RUNTIME_GRAPH_METADATA.md)
+using those same identities and the prepared SQLite index.
 
 ## Representation and ownership
 

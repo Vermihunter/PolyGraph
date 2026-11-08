@@ -1,6 +1,7 @@
 #ifndef POLYGRAPH_INGESTION_IMPORT_HPP
 #define POLYGRAPH_INGESTION_IMPORT_HPP
 
+#include "domain/graph/SourceIdentity.hpp"
 #include "ingestion/Partition.hpp"
 #include "utilities/json.hpp"
 
@@ -34,11 +35,7 @@ namespace polygraph::ingestion {
     [[nodiscard]] std::string sanitize_name(const std::string &name);
 
     // Exact source ID values: string, signed int64 or unsigned uint64 (no coercion).
-    struct SourceIdentity {
-        std::string name_space;
-        std::string type;
-        Json value;
-    };
+    using SourceIdentity = domain::SourceIdentity;
     // Stable, injective v1 encoding; kind defaults to vertex for endpoint/partition keys.
     [[nodiscard]] std::string source_identity_key(const SourceIdentity &identity, bool edge = false);
 

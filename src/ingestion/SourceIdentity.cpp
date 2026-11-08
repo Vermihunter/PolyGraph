@@ -13,22 +13,10 @@ namespace polygraph::ingestion {
         throw Error("Unsupported input ID policy");
     }
     std::string source_identity_key(const SourceIdentity &identity, bool edge) {
-        if (identity.name_space.empty() || identity.type.empty() ||
-            identity.name_space.find('\0') != std::string::npos || identity.type.find('\0') != std::string::npos)
-            throw Error("Source identity requires nonempty NUL-free namespace and logical type");
-        const auto &value = identity.value;
-        const auto kind = value.is_string()            ? "string"
-                          : value.is_number_unsigned() ? "uint64"
-                          : value.is_number_integer()  ? "int64"
-                                                       : "invalid";
-        if (std::string_view(kind) == "invalid")
-            throw Error("Source identity ID must be a string, int64 or uint64 for " + identity.type);
         try {
-            return Json::array({"polygraph.source.v1", identity.name_space, edge ? "edge" : "vertex", identity.type,
-                                kind, value})
-                    .dump();
-        } catch (const Json::exception &e) {
-            throw Error("Invalid source identity encoding: " + std::string(e.what()));
+            return domain::encode_source_identity(identity, edge);
+        } catch (const std::exception &e) {
+            throw Error(e.what());
         }
     }
 } // namespace polygraph::ingestion

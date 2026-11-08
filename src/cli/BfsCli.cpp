@@ -9,6 +9,8 @@
 
 #include "cli/BfsCli.hpp"
 #include "cli/DomainManifest.hpp"
+#include "cli/SourceNodeIdResolver.hpp"
+#include "insertion/BackendEncodedUuid.hpp"
 #include "utilities/uuid.hpp"
 
 #include "events/Events.hpp"
@@ -130,6 +132,13 @@ namespace polygraph::cli {
 
         program.add_value_option("start-uuid", {"--start-uuid"},
                                  "BFS source ID; defaults to domain.defaults.bfs.startUuid", std::string{});
+
+        program.add_value_option("start-source", {"--start-source"},
+                                 "Typed source JSON: namespace, type, idType (string/int64/uint64), id", std::string{});
+        program.add_value_option(
+                "source-index", {"--source-index"},
+                "Prepared manifest for source roots; defaults to domain.paths.ingestionArtifacts/manifest.json",
+                std::string{});
 
         program.add_value_option("max-depth", {"--max-depth"},
                                  "BFS max depth; defaults to domain.defaults.bfs.maxDepth; use -1 for unlimited",
@@ -266,15 +275,34 @@ namespace polygraph::cli {
 
     NodeRef parse_source(const CommandLine &args, const DatabaseContext &context) {
         std::string source = args.string_value("start-uuid");
-        if (source.empty()) {
-            const auto domain = configured_domain(args);
-            if (domain && domain->bfs.start_uuid) {
-                source = *domain->bfs.start_uuid;
-            }
+        const auto &typed = args.string_value("start-source");
+        if (!source.empty() && !typed.empty())
+            throw std::invalid_argument("Choose exactly one of --start-uuid or --start-source");
+        const auto manifest = configured_domain(args);
+        std::optional<domain::SourceIdentity> identity;
+        if (!typed.empty())
+            identity = domain::source_identity_from_json(json::parse(typed));
+        if (source.empty() && !identity && manifest) {
+            identity = manifest->bfs.start_source;
+            if (!identity && manifest->bfs.start_uuid)
+                source = *manifest->bfs.start_uuid;
         }
-        if (source.empty()) {
-            throw std::runtime_error("Provide --start-uuid or domain.defaults.bfs.startUuid");
+        if (identity) {
+            const auto type = context.schema->node_type_id(identity->type);
+            std::filesystem::path index = args.string_value("source-index");
+            if (index.empty() && manifest && manifest->ingestion_artifacts_path)
+                index = *manifest->ingestion_artifacts_path / "manifest.json";
+            if (index.empty())
+                throw std::runtime_error("Source roots require --source-index or domain.paths.ingestionArtifacts");
+            const auto resolved = SourceNodeIdResolver(index).resolve(*identity);
+            if (insertion::BackendEncodedId::decode(resolved.id, context.id_routing_backends) != resolved.owner)
+                throw std::runtime_error("Source index owner disagrees with runtime ID routing");
+            auto result = context.node_ref(resolved.id);
+            result.type = type;
+            return result;
         }
+        if (source.empty())
+            throw std::runtime_error("Provide --start-uuid, --start-source or domain.defaults.bfs root");
         return context.node_ref(global_id_from_string(source));
     }
 
