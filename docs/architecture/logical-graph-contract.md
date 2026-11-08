@@ -14,8 +14,8 @@ and native preparation using an additive `polygraph.domain` version 1 extension.
 Sections marked **extension contract** specify requirements for later adapter,
 manifest and normalization work (#30–#32); they are not new accepted JSONL fields,
 CLI options unless explicitly described as implemented. Issue #29 added the
-specification and examples; source namespaces and generic ID allocation remain
-future work.
+specification and examples. Issue #32 adds typed source identities and SQLite-backed
+generic allocation through `InputIdPolicy::typed_external`; it does not change JSONL syntax.
 
 ## Representation and ownership
 
@@ -107,10 +107,13 @@ Today `Record.key/from/to` are opaque strings into the SQLite resolver:
   reference. **A JSONL `uuid` is already a global ID**, not an arbitrary source
   ID. Changing `type` cannot disambiguate a reused global ID. Ordinary properties
   such as `external_id` or `ldbc_id` do not participate in JSONL identity.
-- Current records have no namespace/source-ID-type fields. Arbitrary typed source
-  identities require the additive work in #30–#32. Do not pass the tuple above to
-  today's JSONL loader or treat every ID-less record as a supported new adapter:
-  shared normalization currently falls back to `LdbcIds`.
+- Linked adapters selecting `typed_external` emit `Record.identity` and
+  `from_identity/to_identity` as `SourceIdentity {name_space, type, value}`. Kind is
+  implicit in the stream method; endpoints always reference vertices. The engine
+  validates and encodes these tuples with `source_identity_key()`, retaining them
+  in SQLite `nodes.key` and `source_edges.key`. Legacy opaque `key/from/to` fields
+  must be empty under this policy. Other policies reject structured fields rather
+  than silently ignoring them. These are C++ adapter fields, not new JSONL fields.
 
 ### Stable and generated IDs
 
@@ -130,6 +133,15 @@ external source ID. Source data may carry an edge ID, but it is optional at the
 logical adapter boundary. An edge without one remains a distinct occurrence:
 assign an implementation ID in deterministic stream order, not a hash of endpoints
 or properties that merges parallel edges.
+
+For typed external sources, generated payloads are monotonically allocated from
+zero across both streams, after placement. `typed-external-v1` records the encoding
+and allocator version in source/generation identity and the prepared manifest.
+Explicit `Record.id` values are preserved and checked in the shared global-ID
+index; mixing generated and explicit IDs can collide and then fails. No reserved
+range is inferred. The generated sequence is not stable across stream reordering.
+Node mappings persist in `nodes`; explicit edge source mappings persist in
+`source_edges`. ID-less edge occurrences have no external identity to persist.
 
 Today SNB has no explicit edge IDs and generates them per type/per owner sequence.
 Canonical JSONL requires `uuid` on **both** vertices and edges; omitting an edge
@@ -199,7 +211,7 @@ delegates to the selected registry, which also provides the input inventory.
 | Boundary | Responsibility |
 | :-- | :-- |
 | Adapter | Parse/map source values and references, enumerate input inventory and provenance, declare identity semantics. No database connections, proxy creation or SQL/Cypher/AQL emission. |
-| Identity policy + normalization | Canonical-ID validation or adapter-associated payload allocation **after owner selection**, typed source-key mapping, duplicate detection and endpoint closure in the existing SQLite index. #32 removes the hardwired LDBC fallback. |
+| Identity policy + normalization | Canonical-ID validation or adapter-associated payload allocation **after owner selection**, typed source-key mapping, duplicate detection and endpoint closure in the existing SQLite index. Typed-source allocation is independent of the explicit LDBC compatibility policy. |
 | Placement / partitioning | Choose raw owners, preserve canonical owners; generate partition metadata separately from source keys/IDs. Edges keep independent configured ownership. |
 | Backend writers and `IImportExecutor` | Serialize normalized graph rows, enforce backend value constraints, import and verify physical storage. All three backends consume the same logical records. |
 
@@ -217,7 +229,7 @@ before a partition-to-owner map has selected raw vertex ownership.
    does not change native manifest `schema_version`/`engine_version` or invalidate
    existing artifacts. Graph format/version and ID strategy are separate concepts.
 2. Static registration is implemented through the existing adapter seam in #30.
-   Source namespace/type metadata belongs to the remaining manifest and ID work;
+   Source namespace/type metadata belongs to the adapter and typed identity work;
    #31 implements additive graph configuration/preflight in `polygraph.domain`
    version 1. Legacy runtime manifests and native CLI flags remain supported;
    native manifest preparation opts in with an `ingestion` section and native
@@ -244,7 +256,7 @@ with the same integer external ID `7`, including Device and Site on Neo4j. Each
 has a distinct canonical ID. Two identical INSTALLED_AT endpoint/property pairs
 have distinct edge IDs; their multiplicity is preserved. The Sensor's uint64 ID
 uses a decimal string to avoid JSON consumer precision loss. `external_id` is
-provenance only; arbitrary typed source-ID ingestion remains future work.
+provenance only in this canonical JSONL example; linked typed-source adapters use the API described above.
 
 Run from the repository root with a fresh output directory:
 

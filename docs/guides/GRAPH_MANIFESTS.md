@@ -196,3 +196,9 @@ and Docker/execution workflows are unchanged. Native prepared `manifest.json`
 (checksummed output) and user `domain.json` (input configuration) remain distinct;
 pass the former to `verify`/`execute`, and the latter to `validate --graph-manifest`
 or `prepare --graph-manifest`.
+
+Linked adapters using `InputIdPolicy::typed_external` select the versioned
+`typed-external-v1` identity strategy. Source namespaces and exact typed values
+are supplied by the adapter; preflight validates configuration/inventory, while
+preparation resolves and checks record identities in SQLite. See
+[typed external IDs](BULK_INGESTION.md#typed-external-ids-in-a-linked-adapter).

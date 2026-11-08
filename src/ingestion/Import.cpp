@@ -179,9 +179,7 @@ namespace polygraph::ingestion {
                          {"source", input},
                          {"configuration", config},
                          {"configuration_sha256", sha256_text(config.dump())},
-                         {"id_strategy", adapter_definition.id_policy == InputIdPolicy::ldbc_block31
-                                                 ? "ldbc-block31-v3"
-                                                 : "preserve-canonical-v2"},
+                         {"id_strategy", input_id_strategy(adapter_definition.id_policy)},
                          {"counts", normalized.at("counts")},
                          {"metadata", normalized.at("metadata")},
                          {"node_prefixes", normalized.at("node_prefixes")},

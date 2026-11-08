@@ -72,6 +72,7 @@ namespace polygraph::ingestion::detail {
                 auto insert = db.statement("INSERT INTO partition_vertex_keys(key) VALUES(?)");
                 db.exec("BEGIN");
                 adapter->nodes([&](Record record) {
+                    resolve_record_keys(record, input_adapters(o).get(o.adapter).id_policy, false);
                     insert.bind(1, record.key);
                     insert.run();
                     if (++n >= std::numeric_limits<std::uint32_t>::max())
@@ -101,6 +102,7 @@ namespace polygraph::ingestion::detail {
                 };
                 db.exec("BEGIN");
                 adapter->relationships([&](Record record) {
+                    resolve_record_keys(record, input_adapters(o).get(o.adapter).id_policy, true);
                     const auto from = resolve(record.from), to = resolve(record.to);
                     if (from == to)
                         ++loops;

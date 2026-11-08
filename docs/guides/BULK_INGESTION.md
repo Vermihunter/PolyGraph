@@ -67,7 +67,7 @@ flowchart LR
   E --> L[Exact live ID and endpoint checks]
 ```
 
-Reusable interfaces live in `include/ingestion/Import.hpp`. `IGraphInputAdapter` streams nodes and then relationships to a record consumer. Statically linked adapters register through `InputAdapterRegistry`; they reuse the existing planner and writers. New adapters currently emit canonical IDs; arbitrary typed source-ID allocation remains separate work. `Placement` validates typed backend routes; the LDBC assigner implements the Python block31 conventions. The SQLite index separates identity, graph records, adjacency replicas and deduplicated proxy sets. Writers own their read connections and buffered files. `IImportExecutor` and an injectable `ExecutorFactory` separate native execution from lifecycle orchestration and allow service-free failure/concurrency tests.
+Reusable interfaces live in `include/ingestion/Import.hpp`. `IGraphInputAdapter` streams nodes and then relationships to a record consumer. Statically linked adapters register through `InputAdapterRegistry`; they reuse the existing planner and writers. New adapters select canonical IDs or typed external-ID allocation through the registry. `Placement` validates typed backend routes; the LDBC assigner implements the Python block31 conventions. The SQLite index separates identity, graph records, adjacency replicas and deduplicated proxy sets. Writers own their read connections and buffered files. `IImportExecutor` and an injectable `ExecutorFactory` separate native execution from lifecycle orchestration and allow service-free failure/concurrency tests.
 
 ### Registering a statically linked input adapter
 
@@ -136,7 +136,8 @@ and edge, resolvable `Record.key/from/to` references, and metadata with matching
 `idRouting` and the 16/48-bit layout. Missing IDs fail explicitly; they do not
 fall back to LDBC allocation. `InputIdPolicy::ldbc_block31` selects the existing
 LDBC numeric-key/catalog conventions for the built-in adapter; it is not a generic
-external-ID allocator. Neither policy changes placement, endpoint closure, proxy
+external-ID allocator. `InputIdPolicy::typed_external` selects generic source-ID
+resolution and allocation (see below). These policies preserve endpoint closure, proxy
 creation, property validation or backend serialization. See the
 [logical graph contract](../architecture/logical-graph-contract.md) for identity
 and validation rules. A linked generated adapter in
@@ -144,6 +145,63 @@ and validation rules. A linked generated adapter in
 exercises this registration path through all three native writers and strict verification.
 
 The library uses exceptions of type `ingestion::Error` for domain failures and RAII for connections, prepared statements, files, process descriptors and directory locks. CLI JSON/I/O diagnostics include the source context. POSIX `posix_spawnp` receives an argv vector; configuration strings are never interpolated into a shell command. Complete subprocess output goes to `logs/`, with bounded captured tails and exit status/duration. Inspect or tail those logs for importer progress.
+
+
+### Typed external IDs in a linked adapter
+
+Select `.id_policy = InputIdPolicy::typed_external` in the existing registry
+entry. Emit structured identities rather than inventing canonical UUIDs:
+
+```cpp
+using namespace polygraph::ingestion;
+consume(Record{
+    .type = "Device",
+    .identity = SourceIdentity{"inventory", "Device", Json(std::uint64_t{7})}
+});
+// From relationships(): an ID-less edge is a distinct stream occurrence.
+consume(Record{
+    .type = "INSTALLED_AT",
+    .from_identity = SourceIdentity{"inventory", "Device", Json(std::uint64_t{7})},
+    .to_identity = SourceIdentity{"inventory", "Site", Json(std::uint64_t{7})}
+});
+```
+
+The vertex and referenced Site must both be emitted by `nodes()`. Separate node
+and edge passes allow references to any vertex regardless of source file order.
+For explicit edge source IDs, also set `.identity` with the relationship's logical
+type. Namespace, entity kind, logical type and exact source value type participate
+in identity. Construct signed and unsigned JSON integers explicitly when parsing:
+`Json(std::int64_t{7})`, `Json(std::uint64_t{7})` and `Json("7")` are distinct.
+No trimming or coercion occurs. Empty string IDs are valid; null/boolean/floating
+point/composite IDs and empty namespaces/types are errors.
+
+Leave legacy `.key/.from/.to` empty. The public
+`source_identity_key(identity)` returns the vertex key used for external partition
+assignments; `source_identity_key(identity, true)` encodes an edge identity. The
+versioned JSON array encoding is lossless, including embedded delimiters or NUL
+characters in ID strings. Do not concatenate tuple fields yourself. Partition
+projection/replay uses this same encoding. Partition ownership is chosen before
+allocating a generated node ID.
+
+`typed-external-v1` uses stream-order payloads with a checked 48-bit bound shared
+by both streams. Owners come from existing placement; `.source`, if provided,
+must agree. Explicit `.id` values retain their canonical identity and ownership;
+they share the collision check with generated IDs. Mixing explicit and generated
+payloads can fail on collisions; the engine does not reserve or skip ranges.
+Duplicate source identities (even identical rows), duplicate canonical IDs and
+missing endpoints fail before manifest publication. There is no merge, skip or
+create-missing policy. Parallel ID-less edges receive different IDs.
+
+The SQLite index retains vertex source keys and IDs, and a `source_edges` table
+retains explicit edge identity mappings. No all-nodes map is loaded into RAM.
+Allocation is deterministic for the same adapter/version, immutable inventory,
+stream order and placement, but is not an external stable-ID promise across
+reordering. Change the adapter version when its namespace, normalization, mapping
+or emission-order semantics change. Graph manifests select
+`"identity": {"strategy": "typed-external-v1"}` for such linked adapters. The stock
+CLI still ships only LDBC and canonical JSONL; this adds no third file parser.
+See [`tests/source_identity_test.cpp`](../../tests/source_identity_test.cpp) for a
+complete linked adapter, all three writers and partition/memory regressions.
 
 ## Input and identity compatibility
 

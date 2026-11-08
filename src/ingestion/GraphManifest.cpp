@@ -53,9 +53,7 @@ namespace polygraph::ingestion {
                 fail(field, key + " must be an unsigned 32-bit integer");
             return value.get<unsigned>();
         }
-        std::string strategy(const InputAdapterDefinition &adapter) {
-            return adapter.id_policy == InputIdPolicy::canonical ? "preserve-canonical-v2" : "ldbc-block31-v3";
-        }
+        std::string strategy(const InputAdapterDefinition &adapter) { return input_id_strategy(adapter.id_policy); }
         void writable_output(const fs::path &output) {
             auto ancestor = output;
             std::error_code error;

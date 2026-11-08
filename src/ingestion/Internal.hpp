@@ -11,6 +11,7 @@ namespace polygraph::ingestion::detail {
     inline const InputAdapterRegistry &input_adapters(const PrepareOptions &options) {
         return options.input_adapters ? *options.input_adapters : default_input_adapters();
     }
+    void resolve_record_keys(Record &record, InputIdPolicy policy, bool edge);
     void check_prepare_options(const PrepareOptions &options);
     [[nodiscard]] Json checked_targets(const Json &config, std::span<const Backend> backends);
     [[nodiscard]] unsigned arango_import_tuning(const Json &target, const std::string &name, unsigned fallback,

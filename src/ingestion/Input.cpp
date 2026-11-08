@@ -338,8 +338,7 @@ namespace polygraph::ingestion::detail {
         Json identity = {{"adapter", o.adapter}, {"path", fs::canonical(o.input).string()}, {"files", entries}};
         if (!definition.version.empty()) {
             identity["adapter_version"] = definition.version;
-            identity["id_strategy"] =
-                    definition.id_policy == InputIdPolicy::ldbc_block31 ? "ldbc-block31-v3" : "preserve-canonical-v2";
+            identity["id_strategy"] = input_id_strategy(definition.id_policy);
         }
         if (!o.configuration_files.empty()) {
             auto paths = o.configuration_files;

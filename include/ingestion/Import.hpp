@@ -33,6 +33,15 @@ namespace polygraph::ingestion {
     [[nodiscard]] constexpr std::int64_t signed_id(Id id) noexcept { return std::bit_cast<std::int64_t>(id); }
     [[nodiscard]] std::string sanitize_name(const std::string &name);
 
+    // Exact source ID values: string, signed int64 or unsigned uint64 (no coercion).
+    struct SourceIdentity {
+        std::string name_space;
+        std::string type;
+        Json value;
+    };
+    // Stable, injective v1 encoding; kind defaults to vertex for endpoint/partition keys.
+    [[nodiscard]] std::string source_identity_key(const SourceIdentity &identity, bool edge = false);
+
     struct Record {
         std::string key;
         std::string type;
@@ -42,6 +51,10 @@ namespace polygraph::ingestion {
         std::string from;
         std::string to;
         std::optional<unsigned> partition;
+        // Additive typed-source API. Legacy key/from/to keep their existing meaning.
+        std::optional<SourceIdentity> identity = {};
+        std::optional<SourceIdentity> from_identity = {};
+        std::optional<SourceIdentity> to_identity = {};
     };
     using RecordConsumer = std::function<void(Record)>;
     // Each call streams one phase, never retaining the graph. Consumers may batch externally.

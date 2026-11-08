@@ -133,6 +133,7 @@ set_tests_properties(python.developer_quality PROPERTIES
 )
 
 if(TARGET polygraph_ingestion)
+    polygraph_add_unit_test(polygraph_source_identity_test source_identity_test.cpp polygraph::ingestion)
     polygraph_add_unit_test(polygraph_graph_manifest_test graph_manifest_test.cpp polygraph::ingestion)
     polygraph_add_unit_test(polygraph_input_adapter_registry_test input_adapter_registry_test.cpp polygraph::ingestion)
     polygraph_add_unit_test(polygraph_ingestion_test ingestion_test.cpp polygraph::ingestion)

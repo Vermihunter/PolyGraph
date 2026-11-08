@@ -7,8 +7,10 @@
 #include <string_view>
 
 namespace polygraph::ingestion {
-    // Selects existing normalization behavior; generic external-ID allocation is separate work.
-    enum class InputIdPolicy { canonical, ldbc_block31 };
+    // Explicit compatibility policies and generic typed-source allocation.
+    enum class InputIdPolicy { canonical, ldbc_block31, typed_external };
+
+    [[nodiscard]] std::string input_id_strategy(InputIdPolicy policy);
 
     struct InputAdapterDefinition {
         std::string name;

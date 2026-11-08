@@ -2,7 +2,7 @@ find_package(SQLite3 REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS SSL Crypto)
 find_package(Threads REQUIRED)
 add_library(polygraph_ingestion STATIC
-    Config.cpp GraphManifest.cpp Storage.cpp Input.cpp InputAdapterRegistry.cpp Normalize.cpp Writers.cpp Import.cpp Process.cpp
+    Config.cpp SourceIdentity.cpp GraphManifest.cpp Storage.cpp Input.cpp InputAdapterRegistry.cpp Normalize.cpp Writers.cpp Import.cpp Process.cpp
     Execute.cpp Postgres.cpp Http.cpp Arango.cpp Neo4j.cpp BatchImport.cpp Partition.cpp Kaminpar.cpp PartitionStage.cpp
     "${PROJECT_SOURCE_DIR}/src/insertion/BackendEncodedUuid.cpp"
 )
