@@ -13,6 +13,19 @@ namespace {
     using namespace polygraph::ingestion;
     constexpr auto help = R"(PolyGraph standalone native bulk ingestion (C++23)
 
+polygraph_bulk_import import --graph-manifest <domain.json>
+  [--dry-run | --execute --confirm-create [--concurrency 3]]
+    One generic entry point for every linked adapter. Default: offline preparation and
+    strict artifact verification. --dry-run: read-only configuration/inventory checks;
+    no record scan, artifacts, services or database connections.
+    --execute opts into existing native execution on isolated fresh named targets from
+    paths.targetConfig; requires --confirm-create. Offline prerequisites are checked
+    before preparation; all live target preflights run before any backend import.
+    Execution may invoke configured Neo4j offline/start commands. Never provisions
+    containers, deletes volumes, resets targets or retries failed imports.
+    Prints JSON graph/adapter, output locations, counts and prepared/verified state.
+    Existing load --docker remains the disposable resource lifecycle entry point.
+
 polygraph_bulk_import adapters
     List statically linked input adapter names, one per line.
 
@@ -135,6 +148,8 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
         std::set<std::string> allowed;
         if (command == "adapters")
             allowed = {};
+        else if (command == "import")
+            allowed = {"--graph-manifest", "--dry-run", "--execute", "--confirm-create", "--concurrency"};
         else if (command == "validate")
             allowed = {"--graph-manifest", "--execution"};
         else if (command == "prepare")
@@ -177,7 +192,8 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
             if (result.flags.contains(key) || result.values.contains(key))
                 throw Error("Duplicate option: " + key);
             if (key == "--strict" || key == "--confirm-create" || key == "--docker" || key == "--keep-running" ||
-                key == "--verify-bfs" || key == "--skip-verification" || key == "--execution")
+                key == "--verify-bfs" || key == "--skip-verification" || key == "--execution" || key == "--dry-run" ||
+                key == "--execute")
                 result.flags.insert(key);
             else {
                 if (i + 1 == argc || std::string_view(argv[i + 1]).starts_with("--"))
@@ -186,6 +202,70 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
             }
         }
         return result;
+    }
+    int import_graph(const Arguments &args) {
+        std::string adapter = "<unresolved>", phase = "arguments";
+        const bool execute_requested = args.flags.contains("--execute");
+        const auto diagnostic = [&](const std::exception &error) {
+            std::cerr << "Import adapter=" << adapter << " phase=" << phase << ": " << error.what() << '\n';
+        };
+        try {
+            const bool dry_run = args.flags.contains("--dry-run");
+            const bool confirm = args.flags.contains("--confirm-create");
+            if (dry_run && (execute_requested || confirm))
+                throw Error("--dry-run cannot be combined with execution flags");
+            if (execute_requested != confirm)
+                throw Error("Execution requires both --execute and --confirm-create");
+            if (args.values.contains("--concurrency") && !execute_requested)
+                throw Error("--concurrency requires --execute --confirm-create");
+            const auto concurrency = args.number("--concurrency", 3);
+            if (concurrency < 1 || concurrency > 64)
+                throw Error("Execution concurrency must be in [1,64]");
+            const auto path = args.require("--graph-manifest");
+            phase = "configuration";
+            const auto graph = load_graph_manifest(path);
+            adapter = graph.options.adapter;
+            phase = "validate";
+            const auto validation = validate_graph_manifest(graph, execute_requested);
+            if (dry_run) {
+                std::cout << validation.dump(2) << '\n';
+                return 0;
+            }
+            phase = "prepare";
+            const auto prepared = prepare(graph.options, [&](const std::string &stage) {
+                std::cerr << "Import adapter=" << adapter << " phase=prepare: " << stage << '\n';
+            });
+            const auto manifest = graph.options.output_dir / "manifest.json";
+            phase = "verify";
+            (void) verify(manifest, true);
+            if (execute_requested) {
+                phase = "execute";
+                execute(manifest, graph.target_config, true, concurrency);
+            }
+            Json backends = Json::object();
+            for (const auto &[name, backend]: prepared.at("backends").items())
+                backends[name] = backend.at("counts");
+            std::cout << Json{{"state", execute_requested ? "verified" : "prepared"},
+                              {"graph", graph.id},
+                              {"adapter", adapter},
+                              {"generation_id", prepared.at("generation_id")},
+                              {"output_dir", graph.options.output_dir.string()},
+                              {"manifest", manifest.string()},
+                              {"counts", prepared.at("counts")},
+                              {"backends", backends}}
+                                 .dump(2)
+                      << '\n';
+            return 0;
+        } catch (const Error &error) {
+            diagnostic(error);
+            return phase == "arguments" ? 2 : execute_requested ? 4 : 3;
+        } catch (const Json::exception &error) {
+            diagnostic(error);
+            return 2;
+        } catch (const std::exception &error) {
+            diagnostic(error);
+            return 5;
+        }
     }
 } // namespace
 int main(int argc, char **argv) {
@@ -203,10 +283,13 @@ int main(int argc, char **argv) {
     try {
         args = parse(argc, argv, command);
     } catch (const std::exception &e) {
-        std::cerr << "Arguments: " << e.what() << "\nUse --help for options.\n";
+        std::cerr << (command == "import" ? "Import adapter=<unresolved> phase=arguments: " : "Arguments: ") << e.what()
+                  << "\nUse --help for options.\n";
         return 2;
     }
     try {
+        if (command == "import")
+            return import_graph(args);
         if (command == "adapters") {
             for (const auto &name: default_input_adapters().names())
                 std::cout << name << '\n';

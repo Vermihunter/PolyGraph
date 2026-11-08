@@ -6,6 +6,15 @@ The manifest selects one graph, a statically linked adapter, identity strategy,
 source/configuration paths and native artifact directory. Existing BFS/runtime
 domain loaders continue reading their existing fields and ignore this extension.
 
+Use `polygraph_bulk_import import --graph-manifest domain.json` (or
+`python3 -B tools/polygraph.py import --graph-manifest domain.json`) as the generic
+native ingestion entry point. It prepares and strictly verifies artifacts offline.
+Add `--dry-run` for read-only configuration/inventory validation, or
+`--execute --confirm-create` for existing native execution on configured isolated
+fresh targets. See [Generic graph import](BULK_INGESTION.md#generic-graph-import)
+for reports, safety boundaries and equivalent LDBC/JSONL examples. Legacy
+`validate` and `prepare` commands below remain available.
+
 ## Validate and prepare
 
 Build the importer separately, then run from the repository root:

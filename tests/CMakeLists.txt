@@ -145,6 +145,10 @@ if(TARGET polygraph_ingestion)
     target_include_directories(polygraph_ingestion_partition_test PRIVATE "${PROJECT_SOURCE_DIR}/src/ingestion")
 endif()
 if(TARGET polygraph_bulk_import)
+    add_test(NAME python.import_workflow
+        COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
+                "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_import_workflow -v)
+    set_tests_properties(python.import_workflow PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 60)
     add_test(NAME python.graph_manifest
         COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
                 "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_graph_manifest -v)

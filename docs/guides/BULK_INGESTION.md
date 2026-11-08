@@ -7,6 +7,74 @@
 existing native engine. See [Graph manifests](GRAPH_MANIFESTS.md) for examples,
 path resolution, execution-prerequisite checks and compatibility.
 
+## Generic graph import
+
+Use the same command for each linked adapter; its `domain.json` selects adapter,
+input, schema, placement and output. The C++ engine performs normalization,
+partitioning, ID resolution, proxy generation, native artifact writing and
+execution. The Python entry point forwards to that engine without building or
+provisioning anything.
+
+```bash
+# Both prepare offline and strictly verify their native artifacts.
+build/cpu-tests/bin/polygraph_bulk_import import \
+  --graph-manifest docs/examples/ingestion/ldbc.domain.json
+build/cpu-tests/bin/polygraph_bulk_import import \
+  --graph-manifest docs/examples/ingestion/logical-graph/domain.json
+
+# Equivalent Python-facing entry point; --binary is optional at this build path.
+python3 -B tools/polygraph.py import \
+  --graph-manifest docs/examples/ingestion/logical-graph/domain.json \
+  --binary build/cpu-tests/bin/polygraph_bulk_import
+
+# Read-only configuration/inventory preflight; does not prepare artifacts.
+python3 -B tools/polygraph.py import --dry-run \
+  --graph-manifest docs/examples/ingestion/ldbc.domain.json
+
+# After configuring real, isolated fresh targets and Neo4j operator commands:
+python3 -B tools/polygraph.py import --execute --confirm-create \
+  --graph-manifest path/to/domain.json --concurrency 3
+```
+
+Default **prepare-only** writes to `paths.ingestionArtifacts` and runs strict
+artifact verification. It does not connect to databases, run target commands,
+start/stop services, invoke Docker, or touch database data. Immutable inputs and
+configurations support the existing checkpoint/artifact reuse rules.
+`--dry-run` does not write artifacts, caches or reports: it performs the same
+read-only checks as `validate`, including bounded leading metadata/table
+inspection. It does not validate all records, uniqueness, endpoint closure or
+live target freshness. Invalid record data can pass dry run and fail preparation.
+
+**Execution** requires both `--execute` and `--confirm-create`, and
+`paths.targetConfig` in the graph manifest. Offline executor, target, environment
+and operator-command checks run before preparation. Existing native execution
+then checks every live target before starting any backend import; strict
+verification and exact live verification remain enabled. For Neo4j, execution
+may invoke the configured offline-check, importer and start commands. The new
+command performs no container provisioning or cleanup, volume reset, automatic
+failed-import retry, or credential generation. `--concurrency` is execution-only
+and must be in [1,64]. Dry run cannot be combined with execution flags. The
+checked-in target example contains placeholders and must be configured before
+execution. See the target configuration and recovery sections below.
+
+Success prints one JSON report with `state` (`prepared` or `verified`), graph,
+adapter, generation ID, output directory, prepared manifest path, logical counts
+and per-backend authoritative-node/proxy/replicated-edge counts. Dry run prints a
+`valid` report and its explicit `not_checked` list. Progress and errors go to
+stderr, including adapter/phase and original source file/record context when
+available. Native executor failures identify backend and preflight/import/verify
+phase. Failed execution never emits a successful `verified` report; inspect the
+existing execution journal/logs before provisioning fresh targets. Native import
+exit codes are 2 for argument or JSON-type errors, 3 for manifest validation or
+preparation/verification failure, 4 for execution-mode workflow errors, and 5 for
+unexpected I/O/internal failure. Python forwards the native status and streams unchanged.
+
+Legacy `prepare`, `validate`, `execute`, Python dataset/domain commands and
+`load --docker` remain supported. For automatically managed disposable services,
+continue using the ownership-checked Docker workflow below; choosing `import`
+does not implicitly start it. `import` and the Docker helper both use the same
+native writers and executors.
+
 ## One-command Docker load
 
 Use `polygraph_bulk_import load --adapter ldbc-snb --input data/ldbc-snb/sf0_1/raw --placement-config tools/ldbc_snb/placement.schema-3db.json --docker --keep-running` to provision fresh isolated databases, prepare/native-import/verify them, and retain the running services. It generates credentials, targets and offline runners automatically. See [One-command Docker ingestion](DOCKER_INGESTION.md) for output, ownership-checked cleanup, logs and BFS validation.

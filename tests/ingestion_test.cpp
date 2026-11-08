@@ -742,3 +742,28 @@ TEST_F(IngestionTest, LdbcUpdateStreamExceptionNeverHidesUnknownSnapshotTables) 
         }
     }
 }
+
+TEST_F(IngestionTest, NativeFailuresIdentifyBackendAndExecutionPhase) {
+    for (const auto &phase: {"preflight", "import", "verify"}) {
+        auto o = fixture();
+        o.output_dir = dir / phase;
+        (void) prepare(o);
+        write(dir / "targets.json",
+              R"({"targets":{"Neo4J":{"database":"bulk-test-neo"},"ArangoDB":{"database":"bulk_test_arango"},"PostgreSQL":{"database":"bulk_test_pg"}}})");
+        ExecutionState state;
+        state.fail_preflight = std::string_view(phase) == "preflight";
+        state.fail_import = std::string_view(phase) == "import";
+        state.fail_verification = std::string_view(phase) == "verify";
+        ExecutorFactory factory = [&](ImportContext c) { return std::make_unique<FakeExecutor>(std::move(c), state); };
+        try {
+            execute(o.output_dir / "manifest.json", dir / "targets.json", true, 1, factory);
+            FAIL() << "Failure was swallowed in " << phase;
+        } catch (const Error &e) {
+            const std::string message = e.what();
+            EXPECT_NE(message.find("backend=ArangoDB"), std::string::npos) << message;
+            EXPECT_NE(message.find(std::string("phase=") + phase), std::string::npos) << message;
+        }
+        if (state.fail_preflight)
+            EXPECT_EQ(state.imports, 0);
+    }
+}

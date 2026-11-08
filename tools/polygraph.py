@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 
 # The validation entry point must not create import caches in a fresh checkout.
-if len(sys.argv) > 1 and sys.argv[1] == "validate":
+if len(sys.argv) > 1 and sys.argv[1] in {"validate", "import"}:
     sys.dont_write_bytecode = True
 
 import argparse
@@ -2282,15 +2282,30 @@ def add_datagen_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--force", action="store_true")
 
 
-def validate_native_graph(args: argparse.Namespace) -> None:
-    """Delegate read-only preflight to the native engine; never build or provision."""
+def native_graph_command(args: argparse.Namespace, command: str) -> list[str]:
+    """Resolve the native entry point without building or provisioning services."""
     binary = Path(args.binary).expanduser().resolve() if args.binary else ROOT / 'build/cpu-tests/bin/polygraph_bulk_import'
     if not binary.is_file():
         raise FileNotFoundError(f'Native importer is unavailable: {binary}; provide --binary or build it separately')
-    command = [str(binary), 'validate', '--graph-manifest', str(Path(args.graph_manifest).expanduser().resolve())]
+    return [str(binary), command, '--graph-manifest', str(Path(args.graph_manifest).expanduser().resolve())]
+
+
+def validate_native_graph(args: argparse.Namespace) -> None:
+    command = native_graph_command(args, 'validate')
     if args.execution:
         command.append('--execution')
     subprocess.run(command, check=True)
+
+
+def import_native_graph(args: argparse.Namespace) -> int:
+    """Forward mode selection to the authoritative native engine unchanged."""
+    command = native_graph_command(args, 'import')
+    for name in ('dry_run', 'execute', 'confirm_create'):
+        if getattr(args, name):
+            command.append('--' + name.replace('_', '-'))
+    if args.concurrency is not None:
+        command.extend(['--concurrency', args.concurrency])
+    return subprocess.run(command, check=False).returncode
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2298,6 +2313,15 @@ def build_parser() -> argparse.ArgumentParser:
         description="One Python entry point for preparing, loading, building, and running PolyGraph domains."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    native_import = commands.add_parser("import", help="Generic native graph import; prepares offline unless execution is explicit.")
+    native_import.add_argument("--graph-manifest", required=True)
+    native_import.add_argument("--binary", help="Native importer executable; defaults to build/cpu-tests/bin/polygraph_bulk_import.")
+    native_import.add_argument("--dry-run", action="store_true", help="Read-only configuration/inventory checks; no artifacts or services.")
+    native_import.add_argument("--execute", action="store_true", help="Execute native imports against isolated fresh configured targets.")
+    native_import.add_argument("--confirm-create", action="store_true", help="Required execution consent; targets must be fresh and isolated.")
+    native_import.add_argument("--concurrency", help="Execution concurrency in [1,64]; requires --execute --confirm-create.")
+    native_import.set_defaults(handler=import_native_graph)
 
     validate = commands.add_parser("validate", help="Read-only native graph-manifest preflight; no build or services.")
     validate.add_argument("--graph-manifest", required=True)
@@ -2908,8 +2932,8 @@ def main() -> int:
     args = parser.parse_args(argv)
     args.bfs_args = bfs_args
     try:
-        args.handler(args)
-        return 0
+        result = args.handler(args)
+        return result if args.command == "import" else 0
     except (FileNotFoundError, ValueError, RuntimeError, TimeoutError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
