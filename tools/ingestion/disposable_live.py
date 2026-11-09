@@ -53,13 +53,20 @@ def main():
     parser.add_argument('--output-dir', type=Path, required=True, help='Must not already exist; use an ignored build directory')
     parser.add_argument('--unique-output', action='store_true', help='Append a unique child directory (for repeated CTest runs)')
     parser.add_argument('--workflow', choices=['native', 'python'], default='native', help='Compare native execution with the existing Python loaders on fresh targets')
-    parser.add_argument('--adapter', choices=['ldbc-snb', 'polygraph-jsonl'], default='ldbc-snb')
+    parser.add_argument('--adapter', choices=['ldbc-snb', 'polygraph-jsonl', 'movie-graph'], default='ldbc-snb')
+    parser.add_argument('--graph-manifest', type=Path, help='Movie fixture graph config; defaults to examples/movie-graph/domain.json')
+    parser.add_argument('--oracle', type=Path, help='Movie typed-root/layer oracle; defaults to examples/movie-graph/expected.json')
     parser.add_argument('--neo-image', default='polygraph-neo4j:5.26-enterprise')
     parser.add_argument('--arango-image', default='polygraph-arangodb:3.12')
     parser.add_argument('--pg-image', default='postgres:17')
     args = parser.parse_args()
     if not args.run:
         parser.error('--run is required; no services are touched by default')
+    if args.adapter == 'movie-graph':
+        from tools.ingestion.live_graph import run_movie_fixture
+        return run_movie_fixture(args)
+    if args.graph_manifest or args.oracle:
+        parser.error('--graph-manifest/--oracle select only the native movie fixture')
     output = args.output_dir.resolve()
     if args.unique_output:
         output = output / ('run-' + secrets.token_hex(6))
@@ -193,4 +200,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

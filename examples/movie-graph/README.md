@@ -150,3 +150,5 @@ passed. Documentation/link/format checks passed; independent review reported no
 actionable findings. Live database and CUDA execution were not run.
 
 The movie reader also runs through the [shared adapter contract harness](../../docs/guides/ADAPTER_CONTRACT_TESTS.md) alongside both built-in adapters.
+
+For real import, stored-data verification, and directed/undirected BFS across all three disposable databases, see [the opt-in live smoke test](../../docs/guides/MOVIE_LIVE_SMOKE.md).

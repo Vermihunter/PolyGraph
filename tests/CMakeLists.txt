@@ -183,6 +183,19 @@ if(POLYGRAPH_INGESTION_LIVE_TESTS)
         set_tests_properties("integration.ingestion.${adapter}" PROPERTIES LABELS "integration;live;ingestion" TIMEOUT 300 RUN_SERIAL TRUE)
     endforeach()
 endif()
+if(POLYGRAPH_INGESTION_LIVE_TESTS AND TARGET polygraph_movie_import)
+    add_test(NAME integration.ingestion.movie-graph
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/ingestion/disposable_live.py"
+            --run --unique-output --adapter movie-graph
+            --binary "$<TARGET_FILE:polygraph_movie_import>" --bfs "$<TARGET_FILE:polygraph_bfs>"
+            --output-dir "${CMAKE_BINARY_DIR}/ingestion-live/movie")
+    set_tests_properties(integration.ingestion.movie-graph PROPERTIES
+        LABELS "integration;live;ingestion" TIMEOUT 600 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+endif()
+add_test(NAME python.ingestion_live_graph
+    COMMAND "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_live_graph -v)
+set_tests_properties(python.ingestion_live_graph PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 20)
 if(TARGET polygraph_bulk_import)
     add_test(NAME python.ingestion_docker_workflow
         COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
