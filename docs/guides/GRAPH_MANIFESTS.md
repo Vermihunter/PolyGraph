@@ -88,7 +88,7 @@ an existing domain:
 | `paths.sourceData` | Optional raw/native input file or directory. Set it for raw LDBC snapshots or when runtime data is a separate artifact. |
 | `paths.backendConfig` | Existing runtime backend config. Preflight checks a `backends` array and an enabled backend kind for each persistent placement backend; it does not construct runtime stores or validate every runtime capability. |
 | `paths.placementConfig` | Existing native placement JSON: supported backends, type-owner maps and defaults. Required. |
-| `paths.ingestionArtifacts` | Native preparation output directory. Required; no directory is created by validation. |
+| `paths.ingestionArtifacts` | Native preparation output directory. Optional; defaults to `<workspace>/ingestion`. Validation creates no directories. |
 | `paths.targetConfig` | Optional existing native target JSON. When supplied, it must be readable and pass existing named-target/credential-storage rules even for offline validation. Required for `--execution`. |
 | `paths.partitionFile`, `paths.partitionMap` | Optional existing external assignment/map files, with the same dependencies as native CLI flags. |
 | `ingestion.adapter` | Required stable registry name. `polygraph_bulk_import adapters` lists available names. |
@@ -195,8 +195,8 @@ status 1 (`argparse` usage errors remain 2).
 Existing runtime `domain.json` files remain valid for C++/Python runtime loaders.
 There is no reliable inference of a raw adapter, placement or artifact directory
 from an old domain's name or scale factor. To opt into native validation/preparation,
-keep its runtime fields and add `ingestion.adapter`, `paths.placementConfig` and
-`paths.ingestionArtifacts`; optionally add raw `sourceData`, target and identity
+keep its runtime fields and add `ingestion.adapter` and `paths.placementConfig`.
+Optionally override `paths.ingestionArtifacts`, or use its workspace default; add raw `sourceData`, target and identity
 fields. The validator gives a `graph.ingestion:` migration diagnostic when this
 native extension is absent. No migration command rewrites existing manifests.
 
@@ -216,3 +216,5 @@ Runtime BFS can select `defaults.bfs.startSource` or `--start-source` through th
 prepared typed-source index under `paths.ingestionArtifacts`. Canonical
 `startUuid` remains supported. See [Runtime graph metadata](RUNTIME_GRAPH_METADATA.md)
 for exact ID types, selector precedence and verification boundaries.
+
+Generated output defaults and collision checks are described in [graph workspaces](GRAPH_WORKSPACES.md).

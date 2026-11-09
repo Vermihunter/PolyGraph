@@ -131,6 +131,7 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
 
     datasets: list[DatasetSpec] = []
     seen_names: set[str] = set()
+    seen_paths: set[str] = set()
     for index, item in enumerate(datasets_raw):
         if not isinstance(item, dict):
             raise ValueError(f"datasets[{index}] must be an object")
@@ -140,6 +141,10 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
         if name in seen_names:
             raise ValueError(f"Duplicate dataset name: {name}")
         seen_names.add(name)
+        directory_name = _safe_name(name)
+        if directory_name in seen_paths:
+            raise ValueError(f"Dataset output path collision: {name}")
+        seen_paths.add(directory_name)
         if "domain" not in item:
             raise ValueError(f"datasets[{index}].domain is required")
 

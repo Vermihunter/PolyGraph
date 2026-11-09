@@ -799,3 +799,13 @@ TEST_F(IngestionTest, UnfamiliarSchemaPartitionsUseCanonicalKeys) {
     EXPECT_EQ(manifest["counts"]["edges"], 6);
     EXPECT_NO_THROW((void) verify(o.output_dir / "manifest.json", true));
 }
+
+TEST_F(IngestionTest, OwnedOutputCannotFollowSymlinksIntoSourceFiles) {
+    const auto o = fixture();
+    fs::create_directories(o.output_dir);
+    const auto source = o.input / "dynamic/person_0_0.csv";
+    const auto original = sha256_file(source);
+    fs::create_symlink(source, o.output_dir / "redirected.csv");
+    EXPECT_THROW((void) prepare(o), Error);
+    EXPECT_EQ(sha256_file(source), original);
+}

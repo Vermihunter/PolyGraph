@@ -52,6 +52,7 @@ from tools.graphio.loaders import (
     read_backend_connections,
     sync_cache_residency,
 )
+from tools.graphio.workspace import workspace_for, claim_domain_output, claim_domain_index, claim_generated_files, workspace_id, claim_output
 from tools.graphio.reader import open_graph_reader
 from tools.graphio.cache_planner import load_cache_config, plan_graph_caches
 from tools.graphio.gpu_storage_planner import load_gpu_distribution_config, plan_gpu_storage
@@ -484,7 +485,7 @@ def resolve_social_network_dir(input_path: str | Path) -> Path:
 
 
 def write_benchmark_config(domain_id: str, *, schema: Path, data: Path, backends: Path) -> Path:
-    output = ROOT / "tools" / "measurement" / "configs" / f"{domain_id}.json"
+    output = data.parent / "benchmark-configs" / f"{workspace_id(domain_id)}.json"
     payload = {
         "paths": {
             "schema": str(schema),
@@ -524,7 +525,22 @@ def write_benchmark_config(domain_id: str, *, schema: Path, data: Path, backends
         },
         "batch_size": 5000,
     }
+    claim_output(output.parent, data)
     return write_json(output, payload)
+
+
+# Files replaced by the legacy preparation commands (including import intermediates).
+UNIVERSITY_OUTPUTS = (
+    "graph.jsonl", "domain.json", "backends.json", "observability.json", "validation.json",
+    ".graph.jsonl.tmp", ".graph.jsonl.uuid-map.sqlite3", ".graph.jsonl.uuid-map.sqlite3-journal",
+    ".graph.jsonl.uuid-map.sqlite3-wal", ".graph.jsonl.uuid-map.sqlite3-shm",
+)
+LDBC_OUTPUTS = (
+    "graph.jsonl", "domain.json", "backends.json", "observability.json", "validation.json",
+    "ldbc-snb.graph-shape.json", "bfs_roots.csv", "start_uuids.txt", "dataset-manifest.json",
+    "placement-report.json", "placement-report.txt", "placement-graph.dot",
+    "placement-graph.svg", "placement-graph.png",
+)
 
 
 def prepare_university(args: argparse.Namespace) -> Path:
@@ -534,6 +550,8 @@ def prepare_university(args: argparse.Namespace) -> Path:
     if not schema.is_file():
         raise FileNotFoundError(f"University schema does not exist: {schema}")
 
+    claim_generated_files(output_root, Path(args.input).expanduser().resolve() if args.input else schema,
+        UNIVERSITY_OUTPUTS, protected=(schema,))
     graph = output_root / "graph.jsonl"
     routing_backends = tuple(args.storage_backends) if args.storage_backends else None
     if args.input:
@@ -618,10 +636,15 @@ def prepare_ldbc(args: argparse.Namespace) -> Path:
     output_root = (
         Path(args.output_dir).expanduser().resolve()
         if getattr(args, "output_dir", None)
-        else default_dataset_root(DATA_ROOT, key)
+        else (default_dataset_root(DATA_ROOT, key) / "graphs" / workspace_id(domain_id)
+              if args.domain_id else default_dataset_root(DATA_ROOT, key))
     )
     output_root.mkdir(parents=True, exist_ok=True)
 
+    claim_generated_files(output_root, social_network,
+        LDBC_OUTPUTS, protected=tuple(Path(value).expanduser().resolve() for value in
+            (args.placement_config, getattr(args, "cache_config", None),
+             getattr(args, "gpu_distribution_config", None)) if value))
     graph = output_root / "graph.jsonl"
     schema = output_root / "ldbc-snb.graph-shape.json"
     backends = output_root / "backends.json"
@@ -1262,7 +1285,7 @@ def reconfigure_cache(args: argparse.Namespace) -> None:
     output_dir = (
         Path(args.output_dir).expanduser().resolve()
         if args.output_dir
-        else domain.paths.manifest.parent / "cache"
+        else workspace_for(domain).path("cache")
     )
     step(f"Reconfiguring caches for {domain.domain_id} from existing graph files")
     print(f"[polygraph] graph:        {domain.paths.data}", flush=True)
@@ -1271,8 +1294,10 @@ def reconfigure_cache(args: argparse.Namespace) -> None:
     planning_db = (
         Path(args.planning_db).expanduser().resolve()
         if getattr(args, "planning_db", None)
-        else None
+        else workspace_for(domain).path("index") / "cache-plan.sqlite3"
     )
+    claim_domain_output(domain, output_dir, protected=(config_path,))
+    claim_domain_index(domain, planning_db)
     result = plan_graph_caches(
         domain.paths.data,
         config,
@@ -1354,14 +1379,16 @@ def build_gpu_storage(args: argparse.Namespace) -> None:
     output_dir = (
         Path(args.output_dir).expanduser().resolve()
         if args.output_dir
-        else domain.paths.manifest.parent / "gpu-storage"
+        else workspace_for(domain).path("gpu-storage")
     )
     planning_db = (
         Path(args.planning_db).expanduser().resolve()
         if args.planning_db
-        else domain.paths.data.parent / "cache-plan.sqlite3"
+        else workspace_for(domain).path("index") / "cache-plan.sqlite3"
     )
 
+    claim_domain_output(domain, output_dir, protected=(config_path,) if config_path else ())
+    claim_domain_index(domain, planning_db)
     step(f"Building authoritative GPU storage for {domain.domain_id}")
     print(f"[polygraph] graph:             {domain.paths.data}", flush=True)
     print(
@@ -1420,14 +1447,15 @@ def build_cache_plans(args: argparse.Namespace) -> None:
     cache_root = (
         Path(args.output_dir).expanduser().resolve()
         if args.output_dir
-        else domain.paths.manifest.parent / "caches"
+        else workspace_for(domain).path("caches")
     )
     planning_db = (
         Path(args.planning_db).expanduser().resolve()
         if args.planning_db
-        else domain.paths.data.parent / "cache-plan.sqlite3"
+        else workspace_for(domain).path("index") / "cache-plan.sqlite3"
     )
-    cache_root.mkdir(parents=True, exist_ok=True)
+    claim_domain_output(domain, cache_root, protected=tuple(Path(value) for value in args.config))
+    claim_domain_index(domain, planning_db)
 
     results: list[dict[str, Any]] = []
     used_names: set[str] = set()
@@ -1632,9 +1660,9 @@ def run_domain(args: argparse.Namespace) -> None:
     measurement_root = (
         Path(args.output_dir).expanduser().resolve()
         if getattr(args, "output_dir", None)
-        else ROOT / "measurements" / run_id
+        else workspace_for(domain).path("measurements") / run_id
     )
-    measurement_root.mkdir(parents=True, exist_ok=True)
+    claim_domain_output(domain, measurement_root)
     overwrite_logs = bool(getattr(args, "overwrite_logs", False))
 
     common_command: list[str | os.PathLike[str]] = [
@@ -2590,11 +2618,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gpu_storage_build.add_argument(
         "--output-dir",
-        help="GPU storage root; defaults to <domain>/gpu-storage.",
+        help="GPU storage root; defaults to <workspace>/gpu-storage.",
     )
     gpu_storage_build.add_argument(
         "--planning-db",
-        help="Reusable graph/index SQLite DB; defaults beside graph.jsonl as cache-plan.sqlite3.",
+        help="Reusable graph/index SQLite DB; defaults to the graph workspace index directory.",
     )
     gpu_storage_build.set_defaults(handler=build_gpu_storage)
 
@@ -2609,10 +2637,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", nargs="+", required=True,
         help="One or more cache configuration JSON files. Each becomes its own cache directory.",
     )
-    cache_build.add_argument("--output-dir", help="Cache root; defaults to <domain>/caches.")
+    cache_build.add_argument("--output-dir", help="Cache root; defaults to <workspace>/caches.")
     cache_build.add_argument(
         "--planning-db",
-        help="Reusable graph/index SQLite DB; defaults beside graph.jsonl as cache-plan.sqlite3.",
+        help="Reusable graph/index SQLite DB; defaults to the graph workspace index directory.",
     )
     cache_build.add_argument("--load-redis", action="store_true", help="Materialize Redis for each Redis-enabled plan.")
     cache_build.add_argument("--redis-no-reset", action="store_true", help="Do not FLUSHDB before Redis materialization.")
@@ -2680,7 +2708,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     roots = run_parser.add_mutually_exclusive_group()
-    run_parser.add_argument("--output-dir", help="Measurement directory; defaults to measurements/<run-id>.")
+    run_parser.add_argument("--output-dir", help="Measurement directory; defaults to <workspace>/measurements/<run-id>.")
     roots.add_argument("--start-source", help="Typed source JSON forwarded to the C++ resolver.")
     roots.add_argument("--start-uuid", help="Run from one uint64 global ID instead of the domain default.")
     roots.add_argument(

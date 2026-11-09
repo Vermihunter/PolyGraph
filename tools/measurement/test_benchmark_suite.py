@@ -20,6 +20,15 @@ from tools.measurement.graph_bench.graph_data import GraphData, write_schema_wit
 
 
 class BenchmarkSuiteConfigTests(unittest.TestCase):
+    def test_distinct_dataset_names_cannot_share_sanitized_output_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'suite.json'
+            path.write_text(json.dumps({'name': 'suite', 'datasets': [
+                {'name': 'graph/a', 'domain': 'a/domain.json'},
+                {'name': 'graph_a', 'domain': 'b/domain.json'}]}))
+            with self.assertRaisesRegex(ValueError, 'collision'):
+                load_suite_config(path)
+
     def test_simple_config_loads_two_distributions_and_all_scenarios(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "suite.json"

@@ -5,6 +5,7 @@ import struct
 from pathlib import Path
 
 from tools.graphio.cache_planner import plan_graph_caches
+from tools.graphio.workspace import default_planning_index
 from tools.graphio.gpu_storage_planner import GPU_OWNER_RECORD, plan_gpu_storage
 from tools.graphio.domain import write_backend_config_for_sources
 from tools.graphio.id_codec import (
@@ -104,7 +105,7 @@ def test_cache_planner_keeps_graph_immutable_and_builds_portable_artifacts(tmp_p
 
     assert (tmp_path / "cache/mmap/index.bin").stat().st_size == plan["artifacts"]["mmap"]["vertices"] * 24
     assert (tmp_path / "cache/redis/neighbors.bin").stat().st_size == plan["artifacts"]["redis"]["relations"] * 8
-    assert (tmp_path / "cache-plan.sqlite3").is_file()
+    assert (default_planning_index(graph)).is_file()
 
 
 def test_backend_config_keeps_gpu_storage_separate_from_cache_backends(tmp_path: Path) -> None:
@@ -191,7 +192,7 @@ def test_gpu_storage_distribution_and_cache_selection_are_disjoint(tmp_path: Pat
             ],
         },
         output_dir=tmp_path / "gpu-storage",
-        planning_db_path=tmp_path / "cache-plan.sqlite3",
+        planning_db_path=default_planning_index(graph),
         routing_layout=layout,
     )
     storage_plan = json.loads(Path(storage["plan"]).read_text())
@@ -220,7 +221,7 @@ def test_gpu_storage_distribution_and_cache_selection_are_disjoint(tmp_path: Pat
             },
         },
         output_dir=tmp_path / "cache",
-        planning_db_path=tmp_path / "cache-plan.sqlite3",
+        planning_db_path=default_planning_index(graph),
         routing_layout=layout,
     )
     cached_ids = set(_residency(Path(cache["plan"])))
@@ -310,7 +311,7 @@ def test_cache_planner_reuses_persistent_sqlite_without_reindex(tmp_path: Path, 
     }
 
     first = plan_graph_caches(graph, config, output_dir=tmp_path / "cache-a", routing_layout=layout)
-    planning_db = tmp_path / "cache-plan.sqlite3"
+    planning_db = default_planning_index(graph)
     assert planning_db.is_file()
     assert first["reusedPlanningDatabase"] is False
 

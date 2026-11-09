@@ -24,6 +24,7 @@ if str(ROOT) not in sys.path:
 
 from tools.cache.load_redis import load as load_redis_cache  # noqa: E402
 from tools.graphio.cache_planner import load_cache_config, plan_graph_caches  # noqa: E402
+from tools.graphio.workspace import workspace_for, claim_domain_output, claim_domain_index
 from tools.graphio.domain import load_domain_manifest  # noqa: E402
 
 
@@ -1243,26 +1244,33 @@ def main() -> int:
     output_dir = (
         Path(args.output_dir).expanduser().resolve()
         if args.output_dir
-        else ROOT / "measurements" / f"cache-comparison-{timestamp}"
+        else workspace_for(domain).path("measurements") / f"cache-comparison-{timestamp}"
     )
     cache_root = (
         Path(args.cache_root).expanduser().resolve()
         if args.cache_root
-        else domain.paths.manifest.parent / "caches"
+        else workspace_for(domain).path("caches")
     ) if args.cache_configs else None
     planning_db = (
         Path(args.planning_db).expanduser().resolve()
         if args.planning_db
-        else domain.paths.data.parent / "cache-plan.sqlite3"
+        else workspace_for(domain).path("index") / "cache-plan.sqlite3"
     ) if args.cache_configs else None
 
-    if output_dir.exists() and args.overwrite:
+    nonempty = output_dir.exists() and any(output_dir.iterdir())
+    protected_inputs = [Path(value) for value in
+        [*(args.cache_configs or []), *(args.cache_plans or []), args.start_uuids_file,
+         args.http_request_plan, args.http_server_config] if value]
+    # Validate ownership and protected inputs before --overwrite can remove anything.
+    claim_domain_output(domain, output_dir, protected=protected_inputs)
+    if nonempty and args.overwrite:
         shutil.rmtree(output_dir)
-    elif output_dir.exists() and any(output_dir.iterdir()):
+        claim_domain_output(domain, output_dir, protected=protected_inputs)
+    elif nonempty:
         raise ValueError(f"Output directory is not empty: {output_dir}; use --overwrite")
-    output_dir.mkdir(parents=True, exist_ok=True)
     if cache_root is not None:
-        cache_root.mkdir(parents=True, exist_ok=True)
+        claim_domain_output(domain, cache_root, protected=protected_inputs)
+        claim_domain_index(domain, planning_db)
     timeline = output_dir / "benchmark.timeline.jsonl"
 
     extra = list(args.benchmark_args)

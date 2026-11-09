@@ -78,12 +78,13 @@ root fails before creating measurement outputs. Root options before and after
 otherwise C++ uses `paths.ingestionArtifacts`. See
 [runtime source roots](RUNTIME_GRAPH_METADATA.md).
 
-The existing measurement default stays `measurements/<run-id>`. `--output-dir`
+The measurement default is `<workspace>/measurements/<run-id>`; see
+[graph workspaces](GRAPH_WORKSPACES.md) for the layout and migration. `--output-dir`
 selects the measurement directory directly. Numeric root directory names and CSV
 columns retain their previous semantics. Typed-root measurements add a
 `start_source` JSON column, leave `start_uuid` empty and use a hash of that JSON
 only as a filesystem label. That hash is never a graph ID. Existing overwrite
-checks remain enabled; this does not redesign workspace or lifecycle ownership.
+checks remain enabled, and output ownership is checked before writing.
 
 ## Compatibility commands and migration
 

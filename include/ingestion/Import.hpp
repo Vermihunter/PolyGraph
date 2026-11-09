@@ -64,6 +64,11 @@ namespace polygraph::ingestion {
     };
 
     class InputAdapterRegistry;
+    struct ArtifactWorkspace {
+        fs::path root;
+        fs::path manifest;
+        fs::path graph;
+    };
     struct PrepareOptions {
         std::string adapter;
         fs::path input;
@@ -82,6 +87,7 @@ namespace polygraph::ingestion {
         const InputAdapterRegistry *input_adapters = nullptr;
         // Optional graph declaration/schema/config files bound to preparation identity.
         std::vector<fs::path> configuration_files = {};
+        std::optional<ArtifactWorkspace> workspace = {};
     };
     struct Placement {
         Json configuration;

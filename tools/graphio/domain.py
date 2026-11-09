@@ -19,6 +19,7 @@ from .id_codec import (
     resolve_native_node_id,
     gpu_location_bit,
 )
+from .workspace import GraphWorkspace
 from .model import NodeRecord, RelationshipRecord
 from .reader import open_graph_reader
 from .writer import GraphJsonLinesWriter
@@ -264,7 +265,7 @@ def load_domain_manifest(path: str | Path) -> DomainConfig:
                 if paths.get("gpuDistributionConfig")
                 else None
             ),
-            ingestion_artifacts=(_resolve_relative(base, str(paths["ingestionArtifacts"])) if paths.get("ingestionArtifacts") else None),
+            ingestion_artifacts=(_resolve_relative(base, str(paths["ingestionArtifacts"])) if paths.get("ingestionArtifacts") else (GraphWorkspace.from_manifest(manifest, raw).path("ingestion") if "ingestion" in raw else None)),
             gpu_storage_plan=(
                 _resolve_relative(base, str(paths["gpuStoragePlan"]))
                 if paths.get("gpuStoragePlan")

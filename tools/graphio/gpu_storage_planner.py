@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .workspace import claim_output, claim_index, default_planning_index
+
 import json
 import sqlite3
 import struct
@@ -169,7 +171,7 @@ def plan_gpu_storage(
     """Materialize authoritative GPU placement independently of cache residency."""
     graph = Path(graph_path).expanduser().resolve()
     output = Path(output_dir).expanduser().resolve()
-    output.mkdir(parents=True, exist_ok=True)
+    claim_output(output, graph, protected=(Path(distribution_config),) if isinstance(distribution_config, (str, Path)) else ())
     config = (
         dict(distribution_config)
         if isinstance(distribution_config, dict)
@@ -182,8 +184,9 @@ def plan_gpu_storage(
     planning_db = (
         Path(planning_db_path).expanduser().resolve()
         if planning_db_path is not None
-        else graph.parent / "cache-plan.sqlite3"
+        else default_planning_index(graph)
     )
+    claim_index(planning_db, graph)
     reuse_index = planning_db.is_file()
     if reuse_index:
         print(f"[gpu-storage] reusing graph/index database {planning_db}", file=sys.stderr, flush=True)

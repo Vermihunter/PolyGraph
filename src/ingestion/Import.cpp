@@ -5,6 +5,7 @@
 #include <thread>
 #include <unistd.h>
 #include "Internal.hpp"
+#include "utilities/GraphWorkspace.hpp"
 
 namespace polygraph::ingestion {
     void detail::check_prepare_options(const PrepareOptions &o) {
@@ -64,6 +65,26 @@ namespace polygraph::ingestion {
     Json prepare(const PrepareOptions &o, const ProgressObserver &progress) {
         const auto &adapter_definition = detail::input_adapters(o).get(o.adapter);
         detail::check_prepare_options(o);
+        if (fs::is_directory(o.output_dir))
+            for (const auto &entry: fs::recursive_directory_iterator(o.output_dir))
+                if (fs::is_symlink(entry.symlink_status()))
+                    throw Error("Artifact directory contains symlinks: " + entry.path().string());
+        if (o.workspace) {
+            const auto &workspace = *o.workspace;
+            const auto marker = workspace_reservation_path(workspace.root);
+            const auto expected = workspace_owner(workspace.manifest, workspace.graph);
+            if (fs::exists(marker) && read_json(marker) != expected)
+                throw Error("Artifact workspace ownership collision: " + marker.string());
+            detail::DirectoryLock workspace_lock(workspace.root);
+            if (fs::exists(marker)) {
+                if (read_json(marker) != expected)
+                    throw Error("Artifact workspace ownership collision: " + marker.string());
+            } else {
+                if (fs::is_symlink(fs::symlink_status(marker.string() + ".tmp")))
+                    throw Error("Workspace reservation temporary path is a symlink");
+                write_json_atomic(marker, expected);
+            }
+        }
         const auto started = detail::Clock::now();
         detail::DirectoryLock lock(o.output_dir);
         const auto placement = load_placement(o.placement_config);

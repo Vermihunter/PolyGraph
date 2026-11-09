@@ -1,5 +1,6 @@
 #include "ingestion/GraphManifest.hpp"
 #include "Internal.hpp"
+#include "utilities/GraphWorkspace.hpp"
 
 #include <algorithm>
 #include <array>
@@ -236,7 +237,31 @@ namespace polygraph::ingestion {
         }
         o.input = paths.contains("sourceData") ? resolve("sourceData") : graph.runtime_data;
         o.placement_config = resolve("placementConfig");
-        o.output_dir = resolve("ingestionArtifacts");
+        if (root.contains("workspace") || !paths.contains("ingestionArtifacts")) {
+            try {
+                const auto workspace_root = graph_workspace_root(root, graph.path);
+                o.output_dir = workspace_root / "ingestion";
+                o.workspace = ArtifactWorkspace{workspace_root, graph.path, graph.runtime_data};
+            } catch (const std::exception &error) {
+                fail("workspace", error.what());
+            }
+        }
+        if (paths.contains("ingestionArtifacts")) {
+            o.output_dir = resolve("ingestionArtifacts");
+            // Legacy overrides outside the namespace remain unchanged. Overrides inside
+            // it still participate in the same ownership checks as default preparation.
+            try {
+                const auto workspace_root = graph_workspace_root(root, graph.path);
+                const auto relative = o.output_dir.lexically_relative(workspace_root);
+                if (!relative.empty() && *relative.begin() != "..")
+                    o.workspace = ArtifactWorkspace{workspace_root, graph.path, graph.runtime_data};
+                else
+                    o.workspace.reset();
+            } catch (const std::exception &) {
+                if (root.contains("workspace"))
+                    throw;
+            }
+        }
         o.partition_file = resolve("partitionFile", false);
         o.partition_map = resolve("partitionMap", false);
         o.configuration_files = {graph.path, graph.schema, graph.backend_config};
@@ -278,6 +303,12 @@ namespace polygraph::ingestion {
             detail::check_prepare_options(o);
         } catch (const Error &error) {
             fail("options", error.what());
+        }
+        if (o.workspace) {
+            const auto &workspace = *o.workspace;
+            const auto marker = workspace_reservation_path(workspace.root);
+            if (fs::exists(marker) && read_json(marker) != workspace_owner(workspace.manifest, workspace.graph))
+                fail("workspace", "artifact ownership collision: " + marker.string());
         }
         writable_output(o.output_dir);
         auto protected_paths = o.configuration_files;

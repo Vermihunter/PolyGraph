@@ -50,6 +50,36 @@ class GraphManifestCliTest(unittest.TestCase):
         return {str(p): (p.stat().st_mtime_ns, p.read_bytes() if p.is_file() else None)
                 for p in [self.root, *self.root.rglob('*')]}
 
+    def test_native_and_python_agree_on_default_workspace_without_mutation(self):
+        del self.document['paths']['ingestionArtifacts']
+        self.document['workspace'] = {'root': '../generated', 'id': 'stable'}
+        self.save()
+        before = self.snapshot()
+        result = self.run_cli('validate', '--graph-manifest', str(self.manifest))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected = self.root / 'generated/stable/ingestion'
+        self.assertEqual(json.loads(result.stdout)['output_dir'], str(expected))
+        self.assertEqual(load_domain_manifest(self.manifest).paths.ingestion_artifacts, expected)
+        self.assertEqual(before, self.snapshot())
+
+    def test_native_and_python_share_workspace_ownership(self):
+        from tools.graphio.workspace import workspace_for, claim_domain_output
+        del self.document['paths']['ingestionArtifacts']
+        self.save()
+        domain = load_domain_manifest(self.manifest)
+        workspace = workspace_for(domain)
+        claim_domain_output(domain, workspace.path('caches'))
+        prepared = self.run_cli('prepare', '--graph-manifest', str(self.manifest))
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        # A different selecting config cannot reuse the namespace, even with identical bytes.
+        other = self.domain / 'other.json'
+        other.write_text(json.dumps(self.document))
+        before = self.snapshot()
+        result = self.run_cli('validate', '--graph-manifest', str(other))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('collision', result.stderr)
+        self.assertEqual(before, self.snapshot())
+
     def test_validate_is_read_only_and_relative_paths_ignore_working_directory(self):
         before = self.snapshot()
         result = self.run_cli('validate', '--graph-manifest', str(self.manifest))

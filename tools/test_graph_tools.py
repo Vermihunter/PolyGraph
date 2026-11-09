@@ -37,6 +37,111 @@ class GraphToolsTest(unittest.TestCase):
     def save(self):
         self.manifest.write_text(json.dumps(self.document))
 
+    def test_two_graph_cache_workspaces_and_explicit_collision_preserve_artifacts(self):
+        from tools.graphio.workspace import workspace_for
+        config = self.root / 'cache-config.json'
+        config.write_text(json.dumps({'version': 1, 'gpus': [], 'mmap': {'enabled': True,
+            'policy': {'kind': 'all'}}, 'redis': {'enabled': False}}))
+        other = self.domain / 'other.domain.json'
+        document = dict(self.document, id='other-inventory')
+        other.write_text(json.dumps(document))
+        parser = polygraph.build_parser()
+        def build(manifest, *extra):
+            args = parser.parse_args(['cache', 'build', '--graph-manifest', str(manifest),
+                '--config', str(config), *extra])
+            polygraph.build_cache_plans(args)
+        build(self.manifest)
+        build(other)
+        first = workspace_for(load_domain_manifest(self.manifest))
+        second = workspace_for(load_domain_manifest(other))
+        self.assertNotEqual(first.root, second.root)
+        before = {str(p.relative_to(second.root)): p.read_bytes() for p in second.root.rglob('*') if p.is_file()}
+        build(self.manifest)
+        self.assertEqual(before, {str(p.relative_to(second.root)): p.read_bytes()
+            for p in second.root.rglob('*') if p.is_file()})
+        with self.assertRaisesRegex(ValueError, 'collision'):
+            build(other, '--output-dir', str(first.path('caches')))
+        with self.assertRaisesRegex(ValueError, 'collision'):
+            build(other, '--planning-db', str(first.path('index') / 'cache-plan.sqlite3'))
+        self.assertEqual(before, {str(p.relative_to(second.root)): p.read_bytes()
+            for p in second.root.rglob('*') if p.is_file()})
+
+    def test_benchmark_overwrite_rejects_foreign_graph_before_deletion(self):
+        from tools.graphio.workspace import claim_domain_output
+        from tools.measurement import benchmark_cache_configs
+        output = self.root / 'benchmark'
+        claim_domain_output(load_domain_manifest(self.manifest), output)
+        (output / 'keep').write_text('another graph')
+        other = self.domain / 'other.domain.json'
+        other.write_text(json.dumps(dict(self.document, id='other-inventory')))
+        with patch.object(sys, 'argv', ['benchmark_cache_configs', '--domain', str(other),
+            '--cache-configs', str(self.domain / 'placement.json'), '--output-dir', str(output), '--overwrite']):
+            with self.assertRaisesRegex(ValueError, 'collision'):
+                benchmark_cache_configs.main()
+        self.assertEqual((output / 'keep').read_text(), 'another graph')
+
+    def test_legacy_preparation_rejects_all_output_symlinks_before_conversion(self):
+        from tools.ldbc_snb import convert
+        source = self.root / 'protected-source'; source.write_text('immutable')
+        parser = polygraph.build_parser()
+        for name in polygraph.LDBC_OUTPUTS:
+            with self.subTest(name=name):
+                output = self.root / ('case-' + name)
+                output.mkdir()
+                (output / name).symlink_to(source)
+                args = parser.parse_args(['prepare', 'ldbc', '--input',
+                    str(ROOT / 'tests/fixtures/ingestion/raw'), '--output-dir', str(output)])
+                with patch.object(convert, 'convert_dataset') as conversion:
+                    with self.assertRaisesRegex(ValueError, 'symlink|source'):
+                        polygraph.prepare_ldbc(args)
+                    conversion.assert_not_called()
+                self.assertEqual(source.read_text(), 'immutable')
+        output = self.root / 'university'
+        output.mkdir()
+        (output / '.graph.jsonl.tmp').symlink_to(source)
+        args = parser.parse_args(['prepare', 'university', '--schema', str(self.domain / 'schema.json'),
+                                 '--input', str(self.domain / 'graph.jsonl')])
+        with patch.object(polygraph, 'DATA_ROOT', self.root):
+            with self.assertRaisesRegex(ValueError, 'symlink|source'):
+                polygraph.prepare_university(args)
+        self.assertEqual(source.read_text(), 'immutable')
+
+    def test_legacy_cache_clean_is_scoped_and_protects_input_configs(self):
+        from tools.cache import build_benchmark_plans as workflow
+        from tools.graphio.workspace import workspace_for, claim_domain_output, claim_domain_index
+        domain = load_domain_manifest(self.manifest)
+        workspace = workspace_for(domain)
+        cache = workspace.path('caches')
+        index = workspace.path('index') / 'cache-plan.sqlite3'
+        claim_domain_output(domain, cache)
+        claim_domain_index(domain, index)
+        (cache / 'artifact.bin').write_text('generated')
+        index.write_bytes(b'generated test index')
+        outside = self.root / 'other-graph-and-volume'
+        outside.mkdir(); (outside / 'keep').write_text('untouched')
+        config = self.root / 'cache-config.json'; config.write_text('{}')
+        with patch.object(workflow, 'domain_manifest', return_value=self.manifest), \
+             patch.object(workflow, 'discover_cache_configs', return_value=[config]), \
+             patch.object(workflow, 'polygraph') as command, \
+             patch.object(sys, 'argv', ['build_benchmark_plans', '--clean']):
+            self.assertEqual(workflow.main(), 0)
+            command.assert_called_once()
+        self.assertFalse(cache.exists())
+        self.assertFalse(index.exists())
+        self.assertEqual((outside / 'keep').read_text(), 'untouched')
+        self.assertEqual(config.read_text(), '{}')
+        claim_domain_output(domain, cache)
+        nested_config = cache / 'input-config.json'; nested_config.write_text('{}')
+        with patch.object(workflow, 'domain_manifest', return_value=self.manifest), \
+             patch.object(workflow, 'discover_cache_configs', return_value=[nested_config]), \
+             patch.object(workflow, 'remove_path') as remove, \
+             patch.object(sys, 'argv', ['build_benchmark_plans', '--clean']):
+            with self.assertRaisesRegex(ValueError, 'source/configuration'):
+                workflow.main()
+            remove.assert_not_called()
+        self.assertEqual(nested_config.read_text(), '{}')
+        self.assertEqual((outside / 'keep').read_text(), 'untouched')
+
     def test_one_resolver_accepts_external_directory_id_and_file(self):
         from tools.graphio.domain import resolve_graph_manifest
         for reference in (self.domain, self.manifest, 'external-inventory'):
@@ -155,7 +260,7 @@ class GraphToolsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('--graph-manifest', result.stdout)
 
-    def test_numeric_run_keeps_existing_measurement_columns_and_default_paths(self):
+    def test_numeric_run_keeps_columns_and_uses_graph_workspace(self):
         capture = self.root / 'numeric-arguments.json'
         binary = self.root / 'numeric-bfs'
         binary.write_text('#!' + sys.executable + '\nimport sys,json,pathlib\n'
@@ -164,12 +269,13 @@ class GraphToolsTest(unittest.TestCase):
         binary.chmod(0o755)
         args = polygraph.build_parser().parse_args(['run', str(self.manifest), '--binary', str(binary), '--run-id', 'numeric'])
         args.bfs_args = []
+        (self.root / 'project').mkdir(exist_ok=True)
         with patch.object(polygraph, 'ROOT', self.root / 'project'):
             polygraph.run_domain(args)
         actual = json.loads(capture.read_text())
         self.assertNotIn('--start-source', actual)
         self.assertEqual(actual[actual.index('--start-uuid')+1], '281474976710657')
-        output = self.root / 'project/measurements/numeric'
+        output = self.domain / 'artifacts/external-inventory/measurements/numeric'
         with (output / 'measurements.csv').open() as stream:
             rows = csv.DictReader(stream)
             self.assertNotIn('start_source', rows.fieldnames)

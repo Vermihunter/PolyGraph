@@ -222,4 +222,62 @@ namespace {
         }
         ::unsetenv("POLYGRAPH_MANIFEST_TEST_PASSWORD");
     }
+
+    TEST_F(GraphManifestTest, DefaultWorkspacesIsolateTwoGraphsAndReruns) {
+        document["paths"].erase("ingestionArtifacts");
+        document["workspace"] = {{"root", "../generated"}};
+        save();
+        const auto first = load_graph_manifest(path);
+        EXPECT_EQ(first.options.output_dir, root / "generated/manifest-test/ingestion");
+        const auto before = snapshot();
+        EXPECT_NO_THROW((void) validate_graph_manifest(first));
+        EXPECT_EQ(snapshot(), before);
+        const auto prepared = prepare(first.options);
+        document["id"] = "other-graph";
+        const auto other_path = root / "config/other.json";
+        write_json_atomic(other_path, document);
+        const auto second = load_graph_manifest(other_path);
+        EXPECT_NE(first.options.output_dir, second.options.output_dir);
+        const auto other = prepare(second.options);
+        const auto other_manifest = read_json(second.options.output_dir / "manifest.json");
+        EXPECT_EQ(prepare(first.options)["generation_id"], prepared["generation_id"]);
+        EXPECT_EQ(read_json(second.options.output_dir / "manifest.json"), other_manifest);
+        EXPECT_NO_THROW((void) verify(second.options.output_dir / "manifest.json", true));
+    }
+
+    TEST_F(GraphManifestTest, WorkspaceRejectsTraversalAndHonorsExplicitArtifacts) {
+        document["workspace"] = {{"root", "../generated"}, {"id", "stable"}};
+        save();
+        EXPECT_EQ(load_graph_manifest(path).options.output_dir, root / "output/prepared");
+        document["paths"].erase("ingestionArtifacts");
+        document["workspace"]["id"] = "../escape";
+        save();
+        expect_error("graph.workspace:");
+    }
+
+
+    TEST_F(GraphManifestTest, DuplicateWorkspaceIdFailsWithoutMutatingOtherArtifacts) {
+        document["paths"].erase("ingestionArtifacts");
+        save();
+        const auto first = load_graph_manifest(path);
+        (void) prepare(first.options);
+        const auto other_path = root / "config/other.json";
+        write_json_atomic(other_path, document);
+        const auto second = load_graph_manifest(other_path);
+        const auto before = snapshot();
+        EXPECT_THROW((void) validate_graph_manifest(second), Error);
+        EXPECT_THROW((void) prepare(second.options), Error);
+        EXPECT_EQ(snapshot(), before);
+    }
+
+
+    TEST_F(GraphManifestTest, ExplicitArtifactsInsideDefaultNamespaceReserveThatWorkspace) {
+        document["paths"]["ingestionArtifacts"] = "artifacts/manifest-test/ingestion";
+        save();
+        const auto graph = load_graph_manifest(path);
+        ASSERT_TRUE(graph.options.workspace.has_value());
+        EXPECT_EQ(graph.options.workspace->root, root / "config/artifacts/manifest-test");
+        EXPECT_NO_THROW((void) prepare(graph.options));
+    }
+
 } // namespace

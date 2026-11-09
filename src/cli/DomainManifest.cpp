@@ -5,6 +5,7 @@
 
 #include "cli/DomainManifest.hpp"
 
+#include "utilities/GraphWorkspace.hpp"
 #include "utilities/json.hpp"
 
 #include <fstream>
@@ -115,6 +116,8 @@ namespace polygraph::cli {
 
         if (const auto artifacts = optional_string(paths, "ingestionArtifacts"))
             result.ingestion_artifacts_path = resolve_domain_path(base, *artifacts);
+        else if (root.contains("ingestion"))
+            result.ingestion_artifacts_path = graph_workspace_root(root, manifest_path) / "ingestion";
 
         const auto observability = optional_string(paths, "observabilityConfig");
         result.observability_config_path =

@@ -221,3 +221,8 @@ add_test(NAME python.schema_agnostic_cache
     COMMAND "${Python3_EXECUTABLE}" -m unittest tests.test_schema_agnostic_cache)
 set_tests_properties(python.schema_agnostic_cache PROPERTIES
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;cache" TIMEOUT 30)
+
+add_test(NAME python.graph_workspace
+    COMMAND "${Python3_EXECUTABLE}" -m unittest tools.graphio.test_workspace)
+set_tests_properties(python.graph_workspace PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;workspace" TIMEOUT 30)
