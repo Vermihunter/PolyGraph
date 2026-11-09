@@ -241,3 +241,15 @@ if(TARGET polygraph_movie_import)
     set_tests_properties(python.movie_graph_example PROPERTIES
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion;example" TIMEOUT 90)
 endif()
+
+if(TARGET polygraph_bulk_import)
+    set(adapter_contract_environment "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>")
+    if(TARGET polygraph_movie_import)
+        list(APPEND adapter_contract_environment "POLYGRAPH_MOVIE_IMPORT=$<TARGET_FILE:polygraph_movie_import>")
+    endif()
+    add_test(NAME python.adapter_contracts
+        COMMAND "${CMAKE_COMMAND}" -E env ${adapter_contract_environment}
+                "${Python3_EXECUTABLE}" -m unittest tests.test_adapter_contract -v)
+    set_tests_properties(python.adapter_contracts PROPERTIES
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion;contract" TIMEOUT 90)
+endif()

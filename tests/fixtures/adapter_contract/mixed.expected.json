@@ -1,0 +1,156 @@
+{
+  "nodes": [
+    {
+      "ref": "node-0",
+      "identity": {
+        "uuid": 281474976710657
+      },
+      "type": "Device",
+      "owner": "Neo4J",
+      "properties": {
+        "external_id": 7,
+        "enabled": true,
+        "temperature": 21.5,
+        "note": null,
+        "tags": [
+          "indoor",
+          "primary"
+        ]
+      }
+    },
+    {
+      "ref": "node-1",
+      "identity": {
+        "uuid": 281474976710658
+      },
+      "type": "Site",
+      "owner": "Neo4J",
+      "properties": {
+        "external_id": 7,
+        "name": "Lab"
+      }
+    },
+    {
+      "ref": "node-2",
+      "identity": {
+        "uuid": 562949953421313
+      },
+      "type": "Gateway",
+      "owner": "ArangoDB",
+      "properties": {
+        "external_id": 7,
+        "name": "G1"
+      }
+    },
+    {
+      "ref": "node-3",
+      "identity": {
+        "uuid": 9223372036854775809
+      },
+      "type": "Sensor",
+      "owner": "PostgreSQL",
+      "properties": {
+        "external_id": 7,
+        "name": "S1"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "ref": "edge-0",
+      "identity": {
+        "uuid": 281474976710659
+      },
+      "type": "INSTALLED_AT",
+      "owner": "Neo4J",
+      "from": "node-0",
+      "to": "node-1",
+      "properties": {
+        "since": "2026-11-07"
+      }
+    },
+    {
+      "ref": "edge-1",
+      "identity": {
+        "uuid": 281474976710660
+      },
+      "type": "INSTALLED_AT",
+      "owner": "Neo4J",
+      "from": "node-0",
+      "to": "node-1",
+      "properties": {
+        "since": "2026-11-07"
+      }
+    },
+    {
+      "ref": "edge-2",
+      "identity": {
+        "uuid": 9223372036854775810
+      },
+      "type": "REPORTS_TO",
+      "owner": "PostgreSQL",
+      "from": "node-3",
+      "to": "node-2",
+      "properties": {}
+    },
+    {
+      "ref": "edge-3",
+      "identity": {
+        "uuid": 562949953421314
+      },
+      "type": "CONNECTS",
+      "owner": "ArangoDB",
+      "from": "node-2",
+      "to": "node-0",
+      "properties": {}
+    }
+  ],
+  "traversals": [
+    {
+      "root": "node-3",
+      "direction": "directed",
+      "layers": [
+        [
+          "node-3"
+        ],
+        [
+          "node-2"
+        ],
+        [
+          "node-0"
+        ],
+        [
+          "node-1"
+        ]
+      ]
+    },
+    {
+      "root": "node-1",
+      "direction": "directed",
+      "layers": [
+        [
+          "node-1"
+        ],
+        []
+      ]
+    },
+    {
+      "root": "node-1",
+      "direction": "undirected",
+      "layers": [
+        [
+          "node-1"
+        ],
+        [
+          "node-0"
+        ],
+        [
+          "node-2"
+        ],
+        [
+          "node-3"
+        ]
+      ]
+    }
+  ]
+}

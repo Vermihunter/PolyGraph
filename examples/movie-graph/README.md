@@ -148,3 +148,5 @@ cases skipped; the full Python suite passed 400 tests and 3,331 subtests. The
 example's focused CSV/CLI/import/oracle tests and the documented onboarding command
 passed. Documentation/link/format checks passed; independent review reported no
 actionable findings. Live database and CUDA execution were not run.
+
+The movie reader also runs through the [shared adapter contract harness](../../docs/guides/ADAPTER_CONTRACT_TESTS.md) alongside both built-in adapters.

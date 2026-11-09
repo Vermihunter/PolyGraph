@@ -419,3 +419,5 @@ Measured development results and exact validation commands are recorded in [Nati
 Python manifest selectors also accept graph directories or IDs under `--data-root`.
 Explicit manifest-mode load aliases forward to this same native import workflow;
 see [Graph-aware Python tools](GRAPH_TOOLS.md) for migration and path rules.
+
+New linked readers can run the [shared offline adapter contracts](ADAPTER_CONTRACT_TESTS.md) against declarative fixtures before live onboarding.
