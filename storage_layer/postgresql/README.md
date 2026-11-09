@@ -30,3 +30,7 @@ level; this avoids repeated index-build overhead in the default index-free mode.
 
 For manual experiments the equivalent SQL is in
 `optional/traversal_indexes.sql`.
+
+## Existing relational schemas
+
+Issue #13 adds a [relational mapping contract and metadata validator](../../docs/architecture/postgresql-relational-mapping.md). Relational traversal and ingestion follow in later issues; this directory still initializes the generic storage representation.

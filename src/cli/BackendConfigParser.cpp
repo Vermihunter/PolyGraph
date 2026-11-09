@@ -5,6 +5,8 @@
  */
 
 #include "cli/BackendConfigParser.hpp"
+#include <filesystem>
+#include "data_access/adapters/PostgreSQL/RelationalMapping.hpp"
 
 #include "insertion/BackendEncodedUuid.hpp"
 #include "utilities/BackendIds.hpp"
@@ -246,6 +248,21 @@ namespace polygraph::config {
     BackendConnectionConfig parse_connection_config(const json &backend_json, const BackendId id,
                                                     const BackendKind kind) {
         const json conn = backend_json.value("connection", json::object());
+        if (conn.contains("relationalMapping"))
+            throw std::invalid_argument("relationalMapping belongs on the backend object, not connection");
+        std::optional<std::string> mapping;
+        if (backend_json.contains("relationalMapping")) {
+            if (kind != BackendKind::PostgreSQL)
+                throw std::invalid_argument("relationalMapping is supported only for PostgreSQL");
+            const auto &value = backend_json.at("relationalMapping");
+            if (!value.is_string() || value.get<std::string>().empty() ||
+                value.get<std::string>().find('\0') != std::string::npos ||
+                !std::filesystem::path(value.get<std::string>()).is_absolute())
+                throw std::invalid_argument("relationalMapping must be an absolute path; load relative references "
+                                            "through the backend configuration file loader");
+            mapping = value.get<std::string>();
+        }
+
 
         BackendConnectionConfig config{
                 .id = id,
@@ -258,6 +275,7 @@ namespace polygraph::config {
                 .transport = conn.value("transport", backend_json.value("transport", std::string{"http"})),
                 .bolt_endpoint = conn.value("bolt_endpoint", backend_json.value("bolt_endpoint", std::string{})),
                 .replica_endpoints = {},
+                .relational_mapping = std::move(mapping),
         };
 
         if (conn.contains("credentials") && !conn["credentials"].is_null()) {
@@ -361,7 +379,14 @@ namespace polygraph::config {
 
     json load_backend_config_file_or_default(const std::optional<std::string> &path) {
         if (path.has_value() && !path->empty()) {
-            return load_json_file(*path);
+            auto root = load_json_file(*path);
+            if (root.contains("backends") && root["backends"].is_array()) {
+                for (auto &backend: root["backends"]) {
+                    if (auto mapping = postgres::relational_mapping_path(backend, *path))
+                        backend["relationalMapping"] = mapping->string();
+                }
+            }
+            return root;
         }
 
         return default_backend_config_json();

@@ -42,6 +42,8 @@ polygraph_add_unit_test(polygraph_bfs_executor_test bfs_executor_test.cpp polygr
 polygraph_add_unit_test(polygraph_backend_encoded_uuid_test backend_encoded_uuid_test.cpp polygraph::core)
 polygraph_add_unit_test(polygraph_backend_load_tracker_test backend_load_tracker_test.cpp polygraph::core)
 if(TARGET polygraph_backends)
+    polygraph_add_unit_test(polygraph_postgres_relational_config_test postgres_relational_config_test.cpp polygraph::backends)
+    polygraph_add_unit_test(polygraph_postgres_relational_mapping_test postgres_relational_mapping_test.cpp polygraph::backends)
     polygraph_add_unit_test(
         polygraph_redis_graph_store_test
         redis_graph_store_test.cpp
@@ -265,4 +267,12 @@ if(TARGET polygraph_bulk_import)
                 "${Python3_EXECUTABLE}" -m unittest tests.test_adapter_contract -v)
     set_tests_properties(python.adapter_contracts PROPERTIES
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion;contract" TIMEOUT 90)
+endif()
+
+if(TARGET polygraph_backends)
+    add_executable(polygraph_postgres_relational_metadata_test postgres_relational_metadata_test.cpp)
+    target_link_libraries(polygraph_postgres_relational_metadata_test PRIVATE polygraph::backends GTest::gtest)
+    polygraph_enable_project_checks(polygraph_postgres_relational_metadata_test)
+    add_test(NAME integration.postgres-relational-metadata COMMAND polygraph_postgres_relational_metadata_test)
+    set_tests_properties(integration.postgres-relational-metadata PROPERTIES LABELS "integration;live;postgresql" TIMEOUT 60 SKIP_RETURN_CODE 77)
 endif()

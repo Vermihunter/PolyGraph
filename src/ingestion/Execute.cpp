@@ -221,6 +221,9 @@ namespace polygraph::ingestion {
 } // namespace polygraph::ingestion
 namespace polygraph::ingestion::detail {
     std::unique_ptr<IImportExecutor> native_executor(ImportContext context) {
+        if (context.target.contains("relationalMapping"))
+            throw Error("PostgreSQL relationalMapping targets require relational ingestion (#18); refusing "
+                        "generic-table execution");
         switch (context.backend) {
             case Backend::neo4j:
                 return neo4j_executor(std::move(context));
