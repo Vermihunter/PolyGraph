@@ -111,8 +111,10 @@ and the correct ingestion index path.
 `runtime-metadata.jsonl` supplies routing metadata, not an in-memory graph copy.
 Backend connection settings are illustrative and contain no credentials. Before
 running distributed BFS, import into configured fresh targets through the
-[existing execution workflow](../../docs/guides/DOCKER_INGESTION.md). This issue's
-tests are offline and do not claim live database or CUDA execution.
+[existing execution workflow](../../docs/guides/DOCKER_INGESTION.md). The original
+adapter tests are offline; the opt-in live smoke workflow below
+now verifies real imports and CPU BFS across all three databases. CUDA is not
+covered by that workflow.
 
 ## Extension boundary
 

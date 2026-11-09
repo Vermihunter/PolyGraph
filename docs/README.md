@@ -10,6 +10,7 @@ PolyGraph is a C++23 research runtime that executes graph traversals over a **si
 
 | I want to… | Read |
 |:--|:--|
+| Onboard a graph or implement a source reader | [Graph quickstart](graphs/quickstart.md) → [Adding a dataset](graphs/adding-a-dataset.md) |
 | Build the project and run my first BFS | [Getting started](guides/GETTING_STARTED.md) → [Build presets](guides/BUILDING.md) |
 | Understand the request and data paths | [Architecture](architecture/ARCHITECTURE.md) → [Backend scheduling](architecture/BACKEND_REQUEST_SCHEDULING.md) |
 | Understand ownership and caching | [Storage](architecture/STORAGE.md) → [Caching and residency](architecture/CACHING.md) |

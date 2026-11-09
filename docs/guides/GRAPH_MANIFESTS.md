@@ -50,7 +50,8 @@ Direct script invocation disables bytecode generation before local imports;
 
 `prepare --graph-manifest` cannot be combined with legacy preparation flags;
 put options in the manifest or use the old flags alone. `load` and `execute`
-retain their existing interfaces; integrating manifest-based execution is #33.
+retain their existing interfaces. Generic `import --graph-manifest` also supports
+explicit native execution with `--execute --confirm-create`.
 
 ## Manifest fields
 
