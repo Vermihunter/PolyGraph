@@ -13,6 +13,8 @@ namespace polygraph::postgres {
         bool generated{};
         bool has_default{};
         std::string identity;
+        // Native primary-key collation controls equality of external references.
+        std::optional<SqlTable> collation = {};
     };
     struct RelationalTableMetadata {
         SqlTable table;

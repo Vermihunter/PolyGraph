@@ -291,3 +291,53 @@ Issue #13 was committed and pushed as `8e160c6` on `origin/feature/extensibility
 before this work. Issue #15 changes remain uncommitted for review. No issue was
 closed; typed reads, relational adjacency, writes and live synchronization remain
 outside this task.
+
+## Issue #16 execution record — 2026-11-09
+
+Implemented the dedicated-table portion of Task 4 following the user's explicit
+#16 ordering; #14 and #17 are still separate. The public
+`RelationalRelationshipTableReader` uses #13 mappings and #15 identity catalogs to
+stream forward, incoming-only and both-direction rows. It preserves native edge
+PKs (when present), exact typed attributes, stored orientation, authoritative
+endpoint owners and physical parallel rows. It does not fabricate canonical edge
+IDs or change BFS interfaces. See the [relationship-table contract](../../architecture/postgresql-relational-relationships.md).
+
+The reader validates live frontier membership independently of edge matches,
+checks live endpoint rows, then resolves actual PK values through the catalog.
+It uses explicit native PK collations for reference and frontier joins, preventing
+junction-column collations from merging distinct identities or losing valid
+references. Both-mode self-loop suppression happens after canonical endpoint
+resolution so NULL incoming references cannot be hidden by a SQL predicate.
+
+Shared RAII read-snapshot and native-value helpers live beside the adapter.
+Attachment uses the same snapshot helper; prior concurrency/encoding regression
+coverage remains green. Snapshot locks require table-level SELECT, not merely
+column grants; corrected the earlier identity documentation accordingly. Read
+settings are transaction-local (UTF8, ISO dates, UTC and round-trip floating
+precision) and callbacks/errors roll back without altering caller transactions.
+Frontier/fetch limits are 4096/1024. Keyless relationships are supported; rows are
+streamed in unspecified order, and callback prefixes must be discarded on error.
+
+Independent review found two Important issues, both reproduced RED and fixed:
+PK-vs-junction collation precedence and a deleted isolated frontier returning an
+empty success. Live tests now cover both opposing collation arrangements, exact
+multiple-origin association, deleted isolated sources, callback failures, NULL/
+stale endpoints, quoted names, hostile search_path, table-select permissions,
+large bounded streams, attribute precision/NULLs, self-loops and parallel rows.
+No deferred review findings remain. Deferred BFS, direct-FK, node-property and
+write behavior remains explicitly outside this task; no whole-database integrity
+scan or automatic catalog refresh is claimed.
+
+Verification:
+
+- `cmake --build --preset cpu-tests -j 2`: passed; no new compiler warnings.
+- Full CPU CTest with local socket access and the owned PostgreSQL DSN: 617
+  passed, 3 optional skips, zero failures (620 entries). Live suites cover 15
+  metadata, 14 attachment and 16 dedicated-relationship cases (45 total).
+- The final relationship executable separately confirms 16/16 passing cases.
+- Changed-C++ `clang-format-21 --dry-run --Werror`, docs link checker and
+  `git diff --check`: passed.
+
+Issue #15 was committed and pushed first as `ffdc920` on
+`origin/feature/extensibility`. Issue #16 changes remain uncommitted for review;
+no issue closure or work on #17 was performed.

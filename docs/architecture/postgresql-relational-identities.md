@@ -10,8 +10,9 @@ Relational property reads, adjacency and ingestion remain #14/#16–#21.
 Build `polygraph_attach_postgres` with the existing runtime/CPU presets. The
 command reuses the runtime's logical schema reader and standard libpq connection
 environment. It opens an explicit repeatable-read, read-only transaction; its
-role needs schema USAGE and SELECT on mapped columns, not application write or
-DDL privileges. It sets UTF-8 client encoding transaction-locally and restores the
+role needs schema USAGE and table-level SELECT on mapped tables, not application
+write or DDL privileges. Column-only grants suffice for metadata validation but
+not PostgreSQL's explicit snapshot locks. It sets UTF-8 client encoding transaction-locally and restores the
 caller's encoding on commit/rollback. Before taking its snapshot it acquires
 `ACCESS SHARE` locks on all mapped tables, preserving ordinary concurrent DML
 while blocking TRUNCATE and incompatible DDL until the scan finishes.

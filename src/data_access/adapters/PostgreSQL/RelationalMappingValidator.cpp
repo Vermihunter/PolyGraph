@@ -89,19 +89,27 @@ namespace polygraph::postgres {
             RelationalTableMetadata result{
                     .table = t, .oid = static_cast<Oid>(std::stoul(PQgetvalue(r.get(), 0, 0))), .columns = {}};
             auto cols = query(connection, R"(SELECT attname, attnum, atttypid, atttypmod, NOT attnotnull,
-                    attgenerated OPERATOR(pg_catalog.<>) '', atthasdef, attidentity
-                FROM pg_catalog.pg_attribute WHERE attrelid OPERATOR(pg_catalog.=) $1::pg_catalog.oid AND attnum OPERATOR(pg_catalog.>) 0 AND NOT attisdropped)",
+                    attgenerated OPERATOR(pg_catalog.<>) '', atthasdef, attidentity, n.nspname, c.collname
+                FROM pg_catalog.pg_attribute
+                LEFT JOIN pg_catalog.pg_collation c ON c.oid OPERATOR(pg_catalog.=) attcollation
+                LEFT JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.collnamespace
+                WHERE attrelid OPERATOR(pg_catalog.=) $1::pg_catalog.oid AND attnum OPERATOR(pg_catalog.>) 0 AND NOT attisdropped)",
                               {std::to_string(result.oid)}, context);
             for (int row = 0; row < PQntuples(cols.get()); ++row) {
-                result.columns.emplace(PQgetvalue(cols.get(), row, 0),
-                                       RelationalColumnMetadata{
-                                               .number = std::stoi(PQgetvalue(cols.get(), row, 1)),
-                                               .type_oid = static_cast<Oid>(std::stoul(PQgetvalue(cols.get(), row, 2))),
-                                               .type_modifier = std::stoi(PQgetvalue(cols.get(), row, 3)),
-                                               .nullable = boolean(cols, row, 4),
-                                               .generated = boolean(cols, row, 5),
-                                               .has_default = boolean(cols, row, 6),
-                                               .identity = PQgetvalue(cols.get(), row, 7)});
+                result.columns.emplace(
+                        PQgetvalue(cols.get(), row, 0),
+                        RelationalColumnMetadata{
+                                .number = std::stoi(PQgetvalue(cols.get(), row, 1)),
+                                .type_oid = static_cast<Oid>(std::stoul(PQgetvalue(cols.get(), row, 2))),
+                                .type_modifier = std::stoi(PQgetvalue(cols.get(), row, 3)),
+                                .nullable = boolean(cols, row, 4),
+                                .generated = boolean(cols, row, 5),
+                                .has_default = boolean(cols, row, 6),
+                                .identity = PQgetvalue(cols.get(), row, 7),
+                                .collation = PQgetisnull(cols.get(), row, 8)
+                                                     ? std::nullopt
+                                                     : std::optional<SqlTable>{{PQgetvalue(cols.get(), row, 8),
+                                                                                PQgetvalue(cols.get(), row, 9)}}});
             }
             return result;
         }

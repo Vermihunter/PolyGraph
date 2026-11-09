@@ -14,6 +14,7 @@ set(POLYGRAPH_BACKEND_SOURCES
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalMapping.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalIdentityResolver.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalAttachment.cpp"
+    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalRelationshipTableReader.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalMappingValidator.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/cache/MMapGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/cache/RedisGraphStore.cpp"

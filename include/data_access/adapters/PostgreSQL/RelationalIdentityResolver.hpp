@@ -24,6 +24,7 @@ namespace polygraph::postgres {
         [[nodiscard]] std::vector<ResolvedRelationalNode> resolve(std::span<const domain::SourceIdentity>) const;
         [[nodiscard]] std::vector<ResolvedRelationalNode> reverse(std::span<const NodeRef>) const;
         [[nodiscard]] const std::string &generation() const noexcept { return generation_; }
+        [[nodiscard]] const RelationalMapping &mapping() const noexcept { return mapping_; }
 
     private:
         std::filesystem::path index_;

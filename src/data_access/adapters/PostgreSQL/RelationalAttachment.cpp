@@ -1,5 +1,6 @@
 #include "data_access/adapters/PostgreSQL/RelationalAttachment.hpp"
 #include "RelationalCatalogInternal.hpp"
+#include "RelationalReadSnapshot.hpp"
 #include "data_access/adapters/PostgreSQL/RelationalMappingValidator.hpp"
 
 #include <algorithm>
@@ -84,7 +85,6 @@ namespace polygraph::postgres {
         std::filesystem::create_directories(root.parent_path());
         if (!std::filesystem::create_directory(root))
             detail::fail("output generation already exists; refusing overwrite");
-        bool in_transaction = false;
         try {
             const auto index = root / "catalog.sqlite3";
             std::uint64_t next{};
@@ -173,27 +173,7 @@ namespace polygraph::postgres {
                 detail::exec(db.get(), "UPDATE identities SET seen=0; CREATE TABLE scan(key TEXT PRIMARY KEY,type TEXT "
                                        "NOT NULL) WITHOUT ROWID;");
                 const auto scan = detail::statement(db.get(), "INSERT INTO scan VALUES(?,?)");
-                sql(connection, "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-                in_transaction = true;
-                // The source-key protocol is UTF-8 regardless of the caller's session encoding.
-                // SET LOCAL restores its prior value on commit and rollback.
-                sql(connection, "SET LOCAL client_encoding='UTF8'");
-                // TRUNCATE is not MVCC-safe. Lock every mapped table before the first
-                // snapshot-taking catalog SELECT, not only when its cursor is opened.
-                std::vector<std::string> tables;
-                for (const auto &n: mapping.nodes())
-                    tables.push_back(quote_identifier(n.table.schema) + "." + quote_identifier(n.table.name));
-                for (const auto &r: mapping.relationships())
-                    if (r.kind == RelationshipKind::table)
-                        tables.push_back(quote_identifier(r.table.schema) + "." + quote_identifier(r.table.name));
-                std::ranges::sort(tables);
-                std::string lock = "LOCK TABLE ";
-                for (std::size_t i = 0; i < tables.size(); ++i) {
-                    if (i != 0)
-                        lock += ",";
-                    lock += tables[i];
-                }
-                sql(connection, lock + " IN ACCESS SHARE MODE");
+                detail::RelationalReadSnapshot snapshot(connection, mapping);
                 (void) RelationalMappingValidator{}.validate(connection, mapping);
                 for (const auto &n: mapping.nodes()) {
                     sql(connection, "DECLARE polygraph_identity_scan NO SCROLL CURSOR FOR SELECT " +
@@ -229,8 +209,7 @@ namespace polygraph::postgres {
                     }
                     sql(connection, "CLOSE polygraph_identity_scan");
                 }
-                sql(connection, "COMMIT");
-                in_transaction = false;
+                snapshot.commit();
                 const auto rows = detail::statement(db.get(), "SELECT key,type FROM scan ORDER BY key COLLATE BINARY");
                 const auto lookup = detail::statement(db.get(), "SELECT active FROM identities WHERE key=?");
                 const auto seen = detail::statement(db.get(), "UPDATE identities SET seen=1 WHERE key=?");
@@ -292,9 +271,6 @@ namespace polygraph::postgres {
             sync_path(root.parent_path());
             return root / "manifest.json";
         } catch (...) {
-            if (in_transaction) {
-                Result rollback(PQexec(connection, "ROLLBACK"), PQclear);
-            }
             std::error_code ignored;
             std::filesystem::remove_all(root, ignored);
             throw;
