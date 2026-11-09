@@ -36,6 +36,10 @@ polygraph_setup_spdlog()
 add_subdirectory(src)
 add_subdirectory(app)
 
+if(POLYGRAPH_BUILD_EXAMPLES AND TARGET polygraph_ingestion_cli)
+    add_subdirectory(examples)
+endif()
+
 if(POLYGRAPH_BUILD_TESTS)
     include(CTest)
     if(BUILD_TESTING AND EXISTS "${PROJECT_SOURCE_DIR}/tests/CMakeLists.txt")

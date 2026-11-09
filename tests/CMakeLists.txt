@@ -226,3 +226,18 @@ add_test(NAME python.graph_workspace
     COMMAND "${Python3_EXECUTABLE}" -m unittest tools.graphio.test_workspace)
 set_tests_properties(python.graph_workspace PROPERTIES
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;workspace" TIMEOUT 30)
+
+if(TARGET polygraph_bulk_import)
+    polygraph_add_unit_test(polygraph_bulk_import_cli_test bulk_import_cli_test.cpp polygraph::ingestion_cli)
+endif()
+if(TARGET polygraph_movie_input)
+    polygraph_add_unit_test(polygraph_movie_adapter_test movie_adapter_test.cpp polygraph_movie_input)
+endif()
+
+if(TARGET polygraph_movie_import)
+    add_test(NAME python.movie_graph_example
+        COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_MOVIE_IMPORT=$<TARGET_FILE:polygraph_movie_import>"
+                "${Python3_EXECUTABLE}" -m unittest tests.test_movie_example -v)
+    set_tests_properties(python.movie_graph_example PROPERTIES
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion;example" TIMEOUT 90)
+endif()

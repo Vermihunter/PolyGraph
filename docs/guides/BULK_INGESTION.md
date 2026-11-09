@@ -171,6 +171,9 @@ new import engine. The stock CLI's linked built-ins are assembled in
 `src/ingestion/Input.cpp::default_input_adapters`; an application can assemble its
 own registry without changing normalization, CLI selection or backend writers.
 Its selected registry must be used by each invocation of its import executable.
+Link `polygraph::ingestion_cli` and call `run_bulk_import_cli(argc, argv, registry)`
+from the application composition root to reuse the complete CLI workflow. See the
+[linked movie CSV example](../../examples/movie-graph/README.md) for a working adapter, manifest and repeatable import command.
 The Docker helper forwards adapter names to that executable rather than maintaining
 a separate list. Registry names use lowercase ASCII letters, digits, `-`, `_`,
 or `.`; duplicate names and missing factory/inventory callbacks are errors.

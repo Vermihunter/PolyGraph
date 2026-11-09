@@ -1,0 +1,34 @@
+{
+  "format": "polygraph.domain",
+  "version": 1,
+  "id": "movie-graph",
+  "name": "Miniature movie credits",
+  "workspace": {
+    "root": "../../build/example-workspaces"
+  },
+  "paths": {
+    "schema": "schema.json",
+    "data": "runtime-metadata.jsonl",
+    "sourceData": "csv",
+    "backendConfig": "backends.json",
+    "placementConfig": "placement.json"
+  },
+  "defaults": {
+    "bfs": {
+      "startSource": {
+        "namespace": "movie-graph",
+        "type": "Person",
+        "idType": "int64",
+        "id": 1
+      },
+      "maxDepth": 3,
+      "direction": "undirected"
+    }
+  },
+  "ingestion": {
+    "adapter": "movie-graph",
+    "identity": {
+      "strategy": "typed-external-v1"
+    }
+  }
+}

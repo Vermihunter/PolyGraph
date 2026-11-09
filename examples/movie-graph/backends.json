@@ -1,0 +1,21 @@
+{
+  "idRouting": [
+    "Neo4J",
+    "ArangoDB",
+    "PostgreSQL"
+  ],
+  "backends": [
+    {
+      "id": "Neo4J",
+      "kind": "Neo4j"
+    },
+    {
+      "id": "ArangoDB",
+      "kind": "ArangoDB"
+    },
+    {
+      "id": "PostgreSQL",
+      "kind": "PostgreSQL"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "counts": {
+    "nodes": 9,
+    "edges": 9
+  },
+  "namespace": "movie-graph",
+  "roots": [
+    {
+      "type": "Person",
+      "id": 1,
+      "direction": "undirected",
+      "layers": [
+        [
+          "Person:1"
+        ],
+        [
+          "Film:1"
+        ],
+        [
+          "Person:2",
+          "Person:4",
+          "Studio:1"
+        ],
+        [
+          "Film:2"
+        ]
+      ]
+    },
+    {
+      "type": "Film",
+      "id": 2,
+      "direction": "undirected",
+      "layers": [
+        [
+          "Film:2"
+        ],
+        [
+          "Person:2",
+          "Person:3",
+          "Studio:1"
+        ],
+        [
+          "Film:1",
+          "Film:3"
+        ],
+        [
+          "Person:1",
+          "Person:4",
+          "Studio:2"
+        ]
+      ]
+    },
+    {
+      "type": "Person",
+      "id": 1,
+      "direction": "directed",
+      "layers": [
+        [
+          "Person:1"
+        ],
+        [
+          "Film:1"
+        ],
+        [
+          "Studio:1"
+        ],
+        []
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "storageBackends": [
+    "Neo4J",
+    "ArangoDB",
+    "PostgreSQL"
+  ],
+  "nodeSources": {
+    "Person": "Neo4J",
+    "Film": "ArangoDB",
+    "Studio": "PostgreSQL"
+  },
+  "relationshipSources": {
+    "ACTED_IN": "Neo4J",
+    "DIRECTED": "ArangoDB",
+    "PRODUCED_BY": "PostgreSQL"
+  }
+}
