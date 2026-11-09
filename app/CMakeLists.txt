@@ -13,3 +13,7 @@ endif()
 if(POLYGRAPH_BUILD_BULK_IMPORT)
     add_subdirectory(bulk_import)
 endif()
+
+if(TARGET polygraph_runtime)
+    add_subdirectory(attach_postgres)
+endif()

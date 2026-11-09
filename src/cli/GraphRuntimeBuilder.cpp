@@ -895,6 +895,10 @@ namespace polygraph::cli {
 
     } // namespace
 
+    domain::graph_t GraphRuntimeBuilder::load_schema(const std::string &path) {
+        return load_logical_graph_schema(path).schema;
+    }
+
     std::shared_ptr<DatabaseContext> GraphRuntimeBuilder::build(const GraphRuntimeConfig &config) {
         auto ctx = DatabaseContext::create_empty();
 

@@ -96,11 +96,11 @@ Introduce live fixtures with #13; grow them throughout the work. #22 consolidate
 
 **Interfaces:** `RelationalIdentityResolver` consumes validated mapping + published identity generation. Provide bounded bidirectional lookup between `(namespace, logical type, typed external key)` and `(GlobalId, owner)`; attachment produces an immutable manifest/index compatible with runtime source-root lookup. Define generation publication and rollback behavior in the contract.
 
-- [ ] Add failing tests for identical values in distinct types/namespaces, signed numeric versus string identity, UUID normalization, shuffled scan order, repeated attachment, missing identities and append preserving old IDs.
-- [ ] Implement a streaming attachment/bootstrap command for existing mapped rows without importing or changing them. Persist mappings using the shared allocator/index; include physical SQL codec separately from logical source identity kind.
-- [ ] Implement bounded reverse lookup and owner/partition checks for relational joins. Document whether temporary key/ID relations or optional metadata tables are used; never require a full in-memory identity map.
-- [ ] Test generation mismatch, missing index, key deletion/reuse policy, stale mapping, rollback and restart. Compare source-root resolution between attachment and normal ingestion.
-- [ ] Run focused identity tests and existing source identity/runtime tests; commit.
+- [x] Add failing tests for identical values in distinct types/namespaces, signed numeric versus string identity, UUID normalization, shuffled scan order, repeated attachment, missing identities and append preserving old IDs.
+- [x] Implement a streaming attachment/bootstrap command for existing mapped rows without importing or changing them. Persist mappings using the shared allocator/index; include physical SQL codec separately from logical source identity kind.
+- [x] Implement bounded reverse lookup and owner/partition checks for relational joins. Document whether temporary key/ID relations or optional metadata tables are used; never require a full in-memory identity map.
+- [x] Test generation mismatch, missing index, key deletion/reuse policy, stale mapping, rollback and restart. Compare source-root resolution between attachment and normal ingestion.
+- [x] Run focused identity tests and existing source identity/runtime tests; commit.
 
 ## Task 3 — #14: Typed node reads
 
@@ -240,3 +240,54 @@ Verification:
   format configuration; version 21 was used.
 
 No commits, issue closure, or later implementation tasks were performed.
+
+## Issue #15 execution record — 2026-11-09
+
+Task 2 is implemented by the backend-linked `RelationalIdentityResolver` and
+`attach_relational_nodes` APIs plus `polygraph_attach_postgres`. The implementation
+lives beside the PostgreSQL mapping code instead of in the ingestion library:
+runtime consumers do not link ingestion. The CLI reuses the exported existing
+`GraphRuntimeBuilder::load_schema` reader rather than duplicating schema parsing.
+See [identity catalog contract](../../architecture/postgresql-relational-identities.md).
+
+Catalog generations use the existing typed source identity encoding and canonical
+backend bitmask encoder. Bootstrap allocates by sorted encoded key; refresh keeps
+historical IDs/owners and reserves retired IDs. A retired key reappearing requires
+explicit migration. Prepared typed ingestion indexes can seed exact matching IDs
+and owners; all prepared entity payloads, including edges, are reserved. Normal
+bootstrap assigns PostgreSQL ownership and does not invent partition/proxy data.
+
+Each attachment owns a read-only repeatable-read PostgreSQL snapshot, locks all
+mapped tables in ACCESS SHARE mode before establishing that snapshot, streams PK
+columns through bounded cursors, and allocates in disk-backed SQLite. Client
+encoding is UTF-8 transaction-locally and is restored afterwards. New generation
+publication fsyncs the index and publishes the manifest last; existing generations
+cannot be overwritten. SHA-256 and mapped-contract fingerprints detect stale or
+corrupted artifacts. Runtime source roots read the active nodes view directly.
+
+Review found and reproduced two important issues before fixes: caller client
+encoding could change text identities, and concurrent TRUNCATE/repopulate could
+omit stable keys from a later-scanned table. Their live regressions failed first
+and passed after transaction-local UTF-8 and all-table locking. A separate failing
+regression showed relational history could be bypassed through the ingestion seed
+option; that option now requires using previous-generation refresh for relational
+catalogs. Coverage now varies batch size, physically reorders SQL rows, forces
+snapshot rollback, tests same-size corruption and escaping index paths, and scans
+more than 4096 rows. No deferred review findings remain.
+
+Verification:
+
+- `cmake --build --preset cpu-tests -j 2`: passed.
+- Full `ctest --test-dir build/cpu-tests --output-on-failure -j 2` with local socket
+  access and `POLYGRAPH_RELATIONAL_TEST_DSN`: 616 passed, 3 optional skips, zero
+  failures (619 entries). PostgreSQL mapping suite covers 15 cases; attachment
+  suite covers 14 cases, including actual CLI and prepared-ingestion adoption.
+- Three scalar identity/fingerprint unit cases pass. Existing source identity,
+  source-root, ingestion, BFS and Redis regressions pass in the full suite.
+- CLI help, changed-C++ clang-format-21 checks, documentation link checker and
+  `git diff --check`: passed. No new compiler warnings in the final build.
+
+Issue #13 was committed and pushed as `8e160c6` on `origin/feature/extensibility`
+before this work. Issue #15 changes remain uncommitted for review. No issue was
+closed; typed reads, relational adjacency, writes and live synchronization remain
+outside this task.

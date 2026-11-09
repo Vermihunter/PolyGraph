@@ -1,8 +1,8 @@
 # PostgreSQL relational schema mappings (#13)
 
 Issue #13 introduces the mapping contract and a read-only PostgreSQL metadata
-validator. It does not implement relational node reads, identity allocation,
-relationship ingestion, or BFS. Those follow in #14–#21. Existing generic
+validator. It does not implement relational node reads, relationship ingestion, or BFS. Those follow in #14–#21.
+Issue #15 adds [identity catalogs and attachment](postgresql-relational-identities.md). Existing generic
 `polygraph_nodes` / `polygraph_edges` workflows remain the default.
 
 See the matching [mapping example](../examples/relational-postgresql/mapping.json),
@@ -129,7 +129,8 @@ callers must supply an absolute reference. `relationalMapping` inside `connectio
 or on another backend kind is an error. Omitting the field preserves generic mode.
 The factory parses the referenced mapping against the logical schema, then rejects
 relational traversal explicitly until #21; it never falls back to generic SQL.
-Use the validator API to check metadata in #13; there is no validation CLI yet.
+Use the validator API to check metadata in #13. The #15 attachment command also
+validates mappings while building an identity catalog.
 
 The native importer explicitly rejects targets carrying `relationalMapping`
 until #18. It must not feed generic CSV artifacts into mapped application tables.

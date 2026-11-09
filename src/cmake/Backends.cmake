@@ -1,3 +1,6 @@
+find_package(SQLite3 REQUIRED)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+
 set(POLYGRAPH_BACKEND_SOURCES
     "${PROJECT_SOURCE_DIR}/src/cli/BackendConfigParser.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/ArangoDB/ArangoGraphStore.cpp"
@@ -9,6 +12,8 @@ set(POLYGRAPH_BACKEND_SOURCES
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/Neo4J/Neo4jGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/PostgreSqlGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalMapping.cpp"
+    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalIdentityResolver.cpp"
+    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalAttachment.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalMappingValidator.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/cache/MMapGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/cache/RedisGraphStore.cpp"
@@ -26,6 +31,8 @@ target_link_libraries(
         polygraph::serialization
         polygraph::curl
         PostgreSQL::PostgreSQL
+        SQLite::SQLite3
+        OpenSSL::Crypto
 )
 
 if(POLYGRAPH_ENABLE_GPU)
