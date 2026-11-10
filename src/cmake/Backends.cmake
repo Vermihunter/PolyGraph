@@ -12,6 +12,7 @@ set(POLYGRAPH_BACKEND_SOURCES
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/Neo4J/Neo4JQueryVisitor.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/Neo4J/Neo4jGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/PostgreSqlGraphStore.cpp"
+    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/PostgresRelationalGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/cache/MMapGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/cache/RedisGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/infrastructure/ConfiguredGraphStoreFactory.cpp"

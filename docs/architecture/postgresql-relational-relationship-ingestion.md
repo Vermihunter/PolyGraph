@@ -4,7 +4,8 @@ The [relational import pipeline](postgresql-relational-ingestion.md) writes edge
 into configured `kind: "table"` relationship tables after their nodes exist.
 The same mapping drives the [relationship-table reader](postgresql-relational-relationships.md).
 [Foreign-key assignment writes (#20)](postgresql-relational-fk-ingestion.md) use
-the same transaction; runtime BFS integration remains #21.
+the same transaction; the [runtime adapter (#21)](postgresql-relational-bfs.md)
+combines both representations for BFS.
 
 ## Mapping and source identities
 

@@ -133,11 +133,11 @@ Introduce live fixtures with #13; grow them throughout the work. #22 consolidate
 
 **Interfaces:** `PostgresRelationalGraphStore final : IGraphStore` implements `get_neighbors_batch`, `get_minimal_neighbors_batch`, and `stream_neighbor_candidates` with existing signatures. Consume Tasks 1–4; do not alter BFS executor contracts.
 
-- [ ] Add failing end-to-end runtime tests selecting the relational adapter and resolving a source root from an attached database.
-- [ ] Reuse the generic store's frontier COPY/transaction/streaming approach; extract shared libpq utilities only where necessary. Preserve filters, predecessor output, batch limits, candidate dedup options, cancellation/error draining and connection reuse after failure.
-- [ ] Resolve placement and proxy adjacency through PolyGraph metadata, including edges whose canonical target owner is Neo4j/ArangoDB. Proxies remain metadata, not dummy rows in constrained application tables.
-- [ ] Test rich/minimal/streamed path parity, empty frontier, both directions, cycles, depth limits, type filters, predecessor validity and cross-backend handoff. Compare exact expected distances with the generic path on the same logical fixture.
-- [ ] Run relational BFS, existing BFS and generic PostgreSQL live regressions; commit. This completes the first read-only vertical slice.
+- [x] Add failing end-to-end runtime tests selecting the relational adapter and resolving a source root from an attached database.
+- [x] Reuse the existing set-oriented frontier/read-only transaction/streaming machinery. The established relational readers use bounded native-key JSON frontier joins rather than duplicating generic COPY frontier logic. Preserve filters, predecessor output, batch limits, candidate dedup options, cancellation/error draining and connection reuse after failure.
+- [x] Resolve placement and proxy adjacency through PolyGraph metadata, including edges whose canonical target owner is Neo4j/ArangoDB. Proxies remain metadata, not dummy rows in constrained application tables.
+- [x] Test rich/minimal/streamed path parity, empty frontier, both directions, cycles, depth limits, type filters, predecessor validity and cross-backend handoff. Compare exact expected distances with the generic path on the same logical fixture.
+- [x] Run relational BFS, existing BFS and generic PostgreSQL live regressions; commit. This completes the first read-only vertical slice.
 
 ## Task 6 — #18: Typed relational node ingestion
 
@@ -608,3 +608,59 @@ Continues the user's established implementation/commit/push/close workflow with
 `Closes #20`. The feature branch is not GitHub's default branch, so closure is
 performed explicitly after pushing. No #21 runtime BFS or #22 final acceptance
 implementation is included.
+
+## Issue #21 execution record — 2026-11-10
+
+Implemented Task 5 on top of `771bfa2`. The factory selects
+`PostgresRelationalGraphStore` using an explicit mapping and `relationalIdentity`
+catalog; both references resolve against the backend file. Generic selection is
+unchanged when no mapping is supplied. Full runtime construction and attached
+typed source roots use the existing builder/resolver and BFS interfaces. See the
+[runtime/BFS contract](../../architecture/postgresql-relational-bfs.md).
+
+Extended the shared relationship engine to combine junction/FK branches within
+one read-only repeatable-read snapshot per bounded frontier chunk. Existing public
+reader defaults stay unchanged. Runtime projections omit unused native attributes
+and external edge keys. Canonical identities, concrete node types and remote
+owners drive existing placement routing; no application proxy vertices or edge
+IDs are fabricated. Optional rich edge references remain absent, matching the
+generic PostgreSQL store's existing interface behavior.
+
+Larger requests split at 4096 unique sources, preserving duplicate source rows and
+unknown source-type resolution. Streaming callbacks are bounded to the requested
+limit or 1024. Optional candidate deduplication uses local disk-backed SQLite,
+with per-source keys for minimal/rich and global targets for streamed candidates.
+SELECT-only PostgreSQL roles work without PostgreSQL TEMP or write privileges.
+
+Active operations exclusively lease libpq connections. A mutex protects one idle
+slot only; no callback holds that mutex. Concurrent/reentrant requests have
+independent active connections and callback errors roll back before reuse. No
+native BFS/pull capability is claimed. Catalog immutability and per-chunk snapshot
+limits are documented; whole-BFS snapshot consistency is not claimed.
+
+Fresh code review returned no Critical/Important findings. Initial test build was
+RED for the missing graph-store API. The expanded fixture corrected a routing
+configuration mismatch (a PG-only runtime initially named disabled Neo/Arango
+backends), then all runtime checks passed. No deferred review findings remain.
+
+Verification:
+
+- Full CPU build passed without new compiler warnings.
+- Final full CPU CTest: 624 passed, 3 optional skips, zero failures (627 entries).
+  All 143 live PostgreSQL cases ran: the previous 129 plus 14 runtime/BFS cases.
+- Runtime coverage includes table/FK adjacency, full builder/attached source root,
+  generic PostgreSQL distance parity in all directions, predecessor and streamed
+  paths, type/depth filters, a PG→Neo→Arango→PG owner handoff, 4202-source chunking,
+  duplicate/unresolved sources, candidate dedup, SELECT-only access, callback
+  failure/reentrancy, concurrent requests and stale-frontier/error recovery.
+- All 14 runtime/BFS cases passed under ThreadSanitizer with no race reports.
+  The initial launch failed before tests with an unexpected memory mapping;
+  `setarch x86_64 -R` for this test process allowed the complete run to pass.
+- Standalone native ingestion still builds after the internal reader change.
+- Changed-C++ clang-format-21, documentation links and `git diff --check` passed.
+
+The cross-owner regression uses real PostgreSQL and deterministic in-process
+Neo4j/ArangoDB stores to exercise routing through the actual BFS executor. Full
+live three-service acceptance remains #22. The user explicitly requested commit
+with `Closes #21`, push and closure; the issue is closed explicitly after pushing
+the non-default feature branch. No #22 implementation or parent #12 closure.

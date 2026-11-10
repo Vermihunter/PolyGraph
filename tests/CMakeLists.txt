@@ -279,6 +279,12 @@ if(TARGET polygraph_backends)
 endif()
 
 if(TARGET polygraph_runtime AND TARGET polygraph_ingestion)
+    add_executable(polygraph_postgres_relational_bfs_test postgres_relational_bfs_test.cpp)
+    target_link_libraries(polygraph_postgres_relational_bfs_test PRIVATE polygraph::runtime polygraph::ingestion GTest::gtest)
+    polygraph_enable_project_checks(polygraph_postgres_relational_bfs_test)
+    add_test(NAME integration.postgres-relational-bfs COMMAND polygraph_postgres_relational_bfs_test)
+    set_tests_properties(integration.postgres-relational-bfs PROPERTIES LABELS "integration;live;postgresql" TIMEOUT 120 SKIP_RETURN_CODE 77)
+
     add_executable(polygraph_postgres_relational_attachment_test postgres_relational_attachment_test.cpp)
     target_link_libraries(polygraph_postgres_relational_attachment_test PRIVATE polygraph::runtime polygraph::ingestion GTest::gtest)
     polygraph_enable_project_checks(polygraph_postgres_relational_attachment_test)

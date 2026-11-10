@@ -11,6 +11,7 @@
 #include "data_access/adapters/Neo4J/Neo4JQueryVisitor.hpp"
 #include "data_access/adapters/Neo4J/Neo4jGraphStore.hpp"
 #include "data_access/adapters/PostgreSQL/PostgreSqlGraphStore.hpp"
+#include "data_access/adapters/PostgreSQL/PostgresRelationalGraphStore.hpp"
 #include "data_access/adapters/PostgreSQL/RelationalMapping.hpp"
 #include "data_access/adapters/cache/MMapGraphStore.hpp"
 #include "data_access/adapters/cache/RedisGraphStore.hpp"
@@ -295,10 +296,9 @@ namespace polygraph {
             throw std::runtime_error("PostgreSQL backend requires connection.endpoint");
         }
         if (connection.relational_mapping) {
-            // Validate the mapping contract even though traversal arrives in #21.
-            (void) postgres::load_relational_mapping(*connection.relational_mapping, schema);
-            throw std::runtime_error(
-                    "PostgreSQL relational mapping is valid, but relational traversal requires issue #21");
+            return std::make_shared<PostgresRelationalGraphStore>(
+                    descriptor_value, connection, schema,
+                    backend_json.value("server_side_candidate_deduplication", false));
         }
         return std::make_shared<PostgreSqlGraphStore>(descriptor_value, connection, schema,
                                                       backend_json.value("server_side_candidate_deduplication", false));

@@ -109,4 +109,4 @@ CREATEDB/CREATEROLE privileges. Cases cover both owner directions, NULL/defaults
 duplicate/conflicting assignments, nonnullable order/cycles, nullable cycles and
 self-loops, remote targets/owners, native references, bounded updates, mixed
 table/FK imports, rollback and publication recovery. Runtime BFS integration
-remains #21.
+is provided by the [relational adapter (#21)](postgresql-relational-bfs.md).

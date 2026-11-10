@@ -127,8 +127,9 @@ The backend file loader resolves the reference against the containing file,
 independently of the working directory. Programmatic `parse_connection_config`
 callers must supply an absolute reference. `relationalMapping` inside `connection`
 or on another backend kind is an error. Omitting the field preserves generic mode.
-The factory parses the referenced mapping against the logical schema, then rejects
-relational traversal explicitly until #21; it never falls back to generic SQL.
+The factory parses the mapping against the logical schema and selects the
+[relational runtime (#21)](postgresql-relational-bfs.md) when an explicit
+`relationalIdentity` catalog is supplied; it never falls back to generic SQL.
 Use the validator API to check metadata in #13. The #15 attachment command also
 validates mappings while building an identity catalog.
 

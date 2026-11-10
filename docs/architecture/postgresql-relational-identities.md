@@ -125,8 +125,9 @@ A constructor can additionally require an exact expected generation string.
 Checksums, path confinement and the mapping fingerprint are verified at open;
 files must remain immutable afterwards. Existing `cli::SourceNodeIdResolver`
 can read the catalog's active `nodes` view, so `--start-source`/`--source-index`
-reuse the prepared source-root contract. Backend adjacency is not implemented by
-this issue; configuring relational traversal still fails explicitly until #21.
+reuse the prepared source-root contract. The
+[relational runtime (#21)](postgresql-relational-bfs.md) now consumes these catalogs
+through the existing rich/minimal/streamed traversal interface.
 
 The C++ attachment API requires an idle caller-owned `PGconn*` and returns the
 published manifest path. It refuses a caller-owned transaction rather than

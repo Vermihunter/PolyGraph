@@ -6,7 +6,8 @@ Each mapped logical type has its own table and native scalar PK. No generic
 `polygraph_nodes` table, application schema migration or synthetic proxy row is
 created. [Dedicated relationship-table writes (#19)](postgresql-relational-relationship-ingestion.md)
 use the same pipeline, as do [foreign-key writes (#20)](postgresql-relational-fk-ingestion.md).
-Relational BFS wiring remains #21.
+The [relational runtime/BFS adapter (#21)](postgresql-relational-bfs.md) reads the
+resulting mapped tables and catalog.
 
 ## Input and preparation
 

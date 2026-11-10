@@ -6,5 +6,6 @@
 namespace polygraph::postgres::detail {
     void stream_relationships(PGconn *, std::span<const NodeRef>, const RelationalRelationshipLookup &,
                               const RelationalRelationshipConsumer &, const RelationalMapping &,
-                              const RelationalIdentityResolver &, RelationshipKind);
+                              const RelationalIdentityResolver &, std::optional<RelationshipKind>,
+                              bool include_details = true, bool mapped_filters_only = true);
 } // namespace polygraph::postgres::detail

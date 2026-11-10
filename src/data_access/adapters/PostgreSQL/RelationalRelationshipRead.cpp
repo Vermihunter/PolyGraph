@@ -16,17 +16,18 @@ namespace polygraph::postgres {
         using detail::physical_table;
         using detail::pk_expression;
         std::string table_query(const RelationshipMapping &r, const NodeMapping &from, const NodeMapping &to,
-                                bool reverse, const ValidatedRelationalMapping &metadata) {
+                                bool reverse, const ValidatedRelationalMapping &metadata, bool include_details) {
             const auto column = [](const char *alias, const std::string &name) {
                 return std::string(alias) + "." + quote_identifier(name);
             };
             const auto &source = reverse ? to : from;
-            std::string result = frontier_sql(source.key_codec) + "SELECT frontier.ordinal," +
-                                 column("e", r.from_column) + "," + column("e", r.to_column) + "," +
-                                 column("f", from.primary_key) + "," + column("t", to.primary_key) + "," +
-                                 (r.primary_key ? column("e", *r.primary_key) : "NULL::pg_catalog.text");
-            for (const auto &property: r.properties)
-                result += "," + column("e", property.column);
+            std::string result =
+                    frontier_sql(source.key_codec) + "SELECT frontier.ordinal," + column("e", r.from_column) + "," +
+                    column("e", r.to_column) + "," + column("f", from.primary_key) + "," + column("t", to.primary_key) +
+                    "," + (include_details && r.primary_key ? column("e", *r.primary_key) : "NULL::pg_catalog.text");
+            if (include_details)
+                for (const auto &property: r.properties)
+                    result += "," + column("e", property.column);
             result += " FROM " + physical_table(r.table) + " e LEFT JOIN " + physical_table(from.table) + " f ON " +
                       pk_expression(from, "f", metadata) + " OPERATOR(pg_catalog.=) " + column("e", r.from_column) +
                       " LEFT JOIN " + physical_table(to.table) + " t ON " + pk_expression(to, "t", metadata) +
@@ -61,7 +62,9 @@ namespace polygraph::postgres {
     void detail::stream_relationships(PGconn *connection, std::span<const NodeRef> frontier,
                                       const RelationalRelationshipLookup &lookup,
                                       const RelationalRelationshipConsumer &consume, const RelationalMapping &mapping_,
-                                      const RelationalIdentityResolver &identities_, RelationshipKind selected_kind) {
+                                      const RelationalIdentityResolver &identities_,
+                                      std::optional<RelationshipKind> selected_kind, bool include_details,
+                                      bool mapped_filters_only) {
         if (!connection || PQstatus(connection) != CONNECTION_OK || PQtransactionStatus(connection) != PQTRANS_IDLE)
             throw std::invalid_argument("Relationship lookup requires an idle PostgreSQL connection");
         if (!consume || lookup.batch_size == 0 || lookup.batch_size > 1024 ||
@@ -74,11 +77,13 @@ namespace polygraph::postgres {
             throw std::invalid_argument("Invalid relationship lookup direction");
         for (const auto type: lookup.relationship_types) {
             const auto it = std::ranges::find(mapping_.relationships(), type, &RelationshipMapping::type);
-            if (it == mapping_.relationships().end() || it->kind != selected_kind)
+            if (mapped_filters_only &&
+                (it == mapping_.relationships().end() || (selected_kind && it->kind != *selected_kind)))
                 throw std::invalid_argument("Unknown or unsupported relationship type for this reader");
         }
-        for (const auto type: lookup.target_types)
-            (void) mapping_.node(type);
+        if (mapped_filters_only)
+            for (const auto type: lookup.target_types)
+                (void) mapping_.node(type);
         if (frontier.empty())
             return;
         const auto origins = identities_.reverse(frontier);
@@ -113,7 +118,7 @@ namespace polygraph::postgres {
             }
         }
         for (const auto &r: mapping_.relationships()) {
-            if (r.kind != selected_kind || !allows(lookup.relationship_types, r.type))
+            if ((selected_kind && r.kind != *selected_kind) || !allows(lookup.relationship_types, r.type))
                 continue;
             const auto &from = mapping_.node(r.from_type), &to = mapping_.node(r.to_type);
             for (const bool reverse: {false, true}) {
@@ -125,8 +130,9 @@ namespace polygraph::postgres {
                 const auto keys = frontier_keys(origins, reverse ? r.to_type : r.from_type);
                 if (keys.empty())
                     continue;
-                auto text = r.kind == RelationshipKind::table ? table_query(r, from, to, reverse, metadata)
-                                                              : foreign_key_query(r, from, to, reverse, metadata);
+                auto text = r.kind == RelationshipKind::table
+                                    ? table_query(r, from, to, reverse, metadata, include_details)
+                                    : foreign_key_query(r, from, to, reverse, metadata);
                 (void) detail::pg_query(connection, "DECLARE polygraph_relationship_rows NO SCROLL CURSOR FOR " + text,
                                         false, {keys.dump()});
                 for (;;) {
@@ -153,7 +159,7 @@ namespace polygraph::postgres {
                         if (ordinal < 0 || static_cast<std::size_t>(ordinal) >= origins.size())
                             throw std::invalid_argument("Invalid relationship origin ordinal");
                         auto properties = json::object();
-                        for (std::size_t p = 0; p < r.properties.size(); ++p)
+                        for (std::size_t p = 0; include_details && p < r.properties.size(); ++p)
                             properties[r.properties[p].property] = detail::sql_property(
                                     rows.get(), row, static_cast<int>(p) + 6, r.properties[p].type);
                         batch.push_back({.origin = origins[ordinal].node,
@@ -161,9 +167,10 @@ namespace polygraph::postgres {
                                          .from = {},
                                          .to = {},
                                          .reverse = reverse,
-                                         .external_key = r.primary_key ? std::optional<json>(detail::sql_key(
-                                                                                 rows.get(), row, 5, *r.key_codec))
-                                                                       : std::nullopt,
+                                         .external_key = include_details && r.primary_key
+                                                                 ? std::optional<json>(detail::sql_key(rows.get(), row,
+                                                                                                       5, *r.key_codec))
+                                                                 : std::nullopt,
                                          .properties = std::move(properties)});
                     }
                     const auto resolved = identities_.resolve(endpoints);
