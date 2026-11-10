@@ -5,7 +5,6 @@
 #include <fstream>
 #include <memory>
 #include <sqlite3.h>
-#include "cli/BackendConfigParser.hpp"
 #include "data_access/adapters/PostgreSQL/RelationalIdentityResolver.hpp"
 #include "insertion/BackendEncodedUuid.hpp"
 #include "utilities/BackendIds.hpp"
@@ -15,6 +14,15 @@ namespace polygraph::postgres::detail {
     inline constexpr std::array<BackendId, 3> routing{NEO4J, ARANGO, POSTGRESQL};
     [[noreturn]] inline void fail(const std::string &message) {
         throw std::invalid_argument("Relational identity: " + message);
+    }
+    inline BackendId catalog_owner(const std::string &name) {
+        if (name == "Neo4J" || name == "Neo4j" || name == "NEO4J")
+            return NEO4J;
+        if (name == "ArangoDB" || name == "Arango" || name == "ARANGO")
+            return ARANGO;
+        if (name == "PostgreSQL" || name == "Postgres" || name == "POSTGRESQL")
+            return POSTGRESQL;
+        fail("Unsupported catalog owner '" + name + "'");
     }
     using Db = std::unique_ptr<sqlite3, decltype(&sqlite3_close)>;
     using Statement = std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)>;

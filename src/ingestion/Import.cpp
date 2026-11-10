@@ -9,6 +9,8 @@
 
 namespace polygraph::ingestion {
     void detail::check_prepare_options(const PrepareOptions &o) {
+        if (o.relational_schema.empty() != o.relational_mapping.empty())
+            throw Error("Relational preparation requires schema and mapping paths");
         if (o.partitioner != "none" && o.partitioner != "kaminpar")
             throw Error("--partitioner must be none or kaminpar");
         if (o.partitioner == "kaminpar") {
@@ -39,6 +41,9 @@ namespace polygraph::ingestion {
         Json configuration(const PrepareOptions &o, const Placement &p) {
             Json j = {{"engine_version", 1}, {"placement", p.configuration},     {"partitioner", o.partitioner},
                       {"seed", o.seed},      {"chunk_size_mb", o.chunk_size_mb}, {"max_record_mb", o.max_record_mb}};
+            const auto relational = detail::relational_configuration(o);
+            if (!relational.empty())
+                j["relational_postgresql"] = relational;
             if (!o.partition_file.empty())
                 j["partition_file_sha256"] = sha256_file(o.partition_file);
             if (!o.partition_map.empty())
@@ -65,6 +70,9 @@ namespace polygraph::ingestion {
     Json prepare(const PrepareOptions &o, const ProgressObserver &progress) {
         const auto &adapter_definition = detail::input_adapters(o).get(o.adapter);
         detail::check_prepare_options(o);
+        if ((!o.relational_mapping.empty() || !o.relational_configuration.empty()) &&
+            adapter_definition.id_policy != InputIdPolicy::typed_external)
+            throw Error("Relational node ingestion requires typed-external-v1 source identities");
         if (fs::is_directory(o.output_dir))
             for (const auto &entry: fs::recursive_directory_iterator(o.output_dir))
                 if (fs::is_symlink(entry.symlink_status()))
@@ -303,7 +311,9 @@ namespace polygraph::ingestion::detail {
         PrepareOptions o;
         o.memory_limit_mb = 16;
         o.threads = 1;
+        o.relational_configuration = manifest.at("configuration").value("relational_postgresql", Json::object());
         o.chunk_size_mb = manifest.at("limits").at("chunk_size_mb").get<unsigned>();
+        o.max_record_mb = manifest.at("limits").at("max_record_mb").get<unsigned>();
         const auto tmp = fs::temp_directory_path() / ("polygraph-verify-" + std::to_string(getpid()) + "-" +
                                                       sha256_text(root.string()).substr(0, 16));
         DirectoryLock lock(tmp);
@@ -317,6 +327,9 @@ namespace polygraph::ingestion::detail {
         for (const auto &[name, expected]: manifest.at("backends").items()) {
             const auto actual = generate_backend(parse_backend(name), o, scratch, tmp, tmp,
                                                  manifest.at("configuration").contains("partition_metadata_version"));
+            if (actual.at("importer") != expected.at("importer") ||
+                actual.value("relational", Json::object()) != expected.value("relational", Json::object()))
+                throw Error("Native artifact representation/configuration mismatch: " + name);
             if (actual.at("counts") != expected.at("counts") ||
                 actual.at("artifacts").size() != expected.at("artifacts").size())
                 throw Error("Native artifact counts disagree with endpoint index: " + name);

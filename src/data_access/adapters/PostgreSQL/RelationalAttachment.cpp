@@ -46,7 +46,7 @@ namespace polygraph::postgres {
         }
         void reserve_id(GlobalId id, const std::string &owner, std::uint64_t &next) {
             if (insertion::BackendEncodedId::canonical_id(id) != id ||
-                insertion::BackendEncodedId::decode(id, detail::routing) != config::backend_id_from_string(owner))
+                insertion::BackendEncodedId::decode(id, detail::routing) != detail::catalog_owner(owner))
                 detail::fail("source catalog owner/ID mismatch");
             next = std::max(next, (id & insertion::BackendEncodedId::payload_mask()) + 1);
         }

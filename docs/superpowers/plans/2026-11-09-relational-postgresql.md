@@ -145,12 +145,12 @@ Introduce live fixtures with #13; grow them throughout the work. #22 consolidate
 
 **Interfaces:** Add `postgres_relational_executor(ImportContext) -> std::unique_ptr<IImportExecutor>`. Relational artifacts identify destination mapping, explicit columns, native codecs, counts and identity generation; generic CSV artifacts remain unchanged.
 
-- [ ] Write failing prepare/import/verify tests for typed rows and exact external PK preservation.
-- [ ] Implement mapping-aware artifacts and batched COPY using explicit destination columns. Distinguish omitted defaults/generated columns from NULL; reject unrepresentable values before COPY.
-- [ ] Replace database-wide emptiness checks only in relational mode with checks for mapped write destinations/conflicting keys. Validate required columns/defaults/identity-column policy; do not run generic `schema_sql`.
-- [ ] Keep application writes and any PostgreSQL side metadata transactional. Publish the external catalog only after successful database commit; record interrupted publication so runtime rejects incomplete generations and recovery can complete publication safely.
-- [ ] Test unrelated populated tables, missing required values, overflow, exact typed values, rollback and failed catalog publication. Reuse existing placement preparation and test owner/proxy counts separately from physical application row counts.
-- [ ] Run relational import/verify and generic native import tests; commit.
+- [x] Write failing prepare/import/verify tests for typed rows and exact external PK preservation.
+- [x] Implement mapping-aware artifacts and batched COPY using explicit destination columns. Distinguish omitted defaults/generated columns from NULL; reject unrepresentable values before COPY.
+- [x] Replace database-wide emptiness checks only in relational mode with checks for mapped write destinations/conflicting keys. Validate required columns/defaults/identity-column policy; do not run generic `schema_sql`.
+- [x] Keep application writes and any PostgreSQL side metadata transactional. Publish the external catalog only after successful database commit; record interrupted publication so runtime rejects incomplete generations and recovery can complete publication safely.
+- [x] Test unrelated populated tables, missing required values, overflow, exact typed values, rollback and failed catalog publication. Reuse existing placement preparation and test owner/proxy counts separately from physical application row counts.
+- [x] Run relational import/verify and generic native import tests; commit.
 
 ## Task 7 — #19 and #20: Relationship ingestion
 
@@ -435,3 +435,61 @@ Verification:
 
 Both #17 and #14 changes remain uncommitted for review. No push, issue closure,
 or #18 ingestion implementation was performed this turn.
+
+## Issue #18 execution record — 2026-11-10
+
+Implemented Task 6 after #14/#17 were committed and pushed as `1af732c`.
+Mapping-bound typed JSONL artifacts feed explicit-column native COPY into separate
+pre-created node tables. Native casts, required/default/generated column policy,
+column INSERT and table lock privileges are checked before execution. Unrelated
+populated tables are accepted; mapped node tables must be empty. Every node table
+shares one transaction and native constraints/triggers remain enabled. Explicit
+PKs are required; automatic/default/identity PKs are rejected. See the
+[relational ingestion contract](../../architecture/postgresql-relational-ingestion.md).
+
+The existing typed normalization index remains authoritative for canonical IDs,
+owners and partitions. PostgreSQL artifacts select only PostgreSQL-owned nodes;
+partition/proxy metadata is not invented as application attributes. PostgreSQL
+relationship replicas and application proxy rows explicitly remain #19/#20.
+Added the built-in `source-jsonl` adapter because neither shipped legacy adapter
+exposes typed external identities through the normal CLI. Both CLI flags and
+domain-manifest `relational-mapping` preparation use the existing pipeline.
+
+Postcommit attachment seeds exact prepared IDs into a staged immutable catalog.
+Publication verifies source-supplied native columns, table membership/counts and
+catalog IDs under SHARE locks, then atomically renames without overwrite and
+fsyncs the parent directory. Durable journal intent precedes application commit.
+Explicit `recover-relational` verifies committed data before completing publication;
+it never reimports rows. It rebuilds unfinished staging and recognizes a completed
+rename. Omitted native default values are not frozen into the source comparison.
+
+Extracted the common logical-schema JSON parser into the model and shared
+PostgreSQL mapping/catalog/read code into `polygraph::relational`. Both backend
+runtime and standalone ingestion consume this library; runtime does not link
+ingestion. Existing generic writers/executors and their SQL schema remain intact.
+
+Independent review found interrupted staging recovery, publication lock lifetime,
+record-limit consistency and missing preflight lock permissions. Regression tests
+reproduced the staging/limit/privilege failures before fixes; publication now holds
+locks through verification, rename and durable publication marking. Additional
+coverage preserves the typed adapter's partition field and updates adapter
+discovery contracts. No Critical or Important review findings remain.
+
+Verification:
+
+- Full CPU build passed without new compiler warnings.
+- Final full CPU CTest with socket access and the owned PostgreSQL DSN: 622
+  passed, 3 optional skips, zero failures (625 entries). All 94 live PostgreSQL
+  cases ran: the previous 77 plus 17 relational ingestion cases.
+- Ingestion coverage includes int64 extrema/overflow, UUID and text PKs, Unicode,
+  quoting/newlines/CSV sentinels, NULL versus omitted defaults, generated columns,
+  bounded batches, mapped versus unrelated population, multi-table rollback,
+  incomplete publication/recovery, changed committed data, mandatory verification,
+  mapping drift, restricted-role preflight, mixed ownership/partition metadata,
+  >8 MiB rows and real CLI prepare/import/recover/domain-manifest commands.
+- Native standalone importer (`POLYGRAPH_BUILD_BACKENDS=OFF`) and native-executors-
+  disabled standalone importer both built successfully; adapter discovery works.
+- Changed-C++ clang-format-21, documentation links and `git diff --check` passed.
+
+The user requested implementation, commit and push. No issue closure, merge,
+deployment or work on #19–#22 is part of this task.

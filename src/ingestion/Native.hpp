@@ -3,6 +3,8 @@
 #include "Internal.hpp"
 namespace polygraph::ingestion::detail {
     [[nodiscard]] std::unique_ptr<IImportExecutor> native_executor(ImportContext context);
+    [[nodiscard]] std::unique_ptr<IImportExecutor> postgres_relational_executor(ImportContext context);
+    [[nodiscard]] Json resolved_relational_targets(Json config, const fs::path &path);
     [[nodiscard]] std::unique_ptr<IImportExecutor> postgres_executor(ImportContext context);
     [[nodiscard]] std::unique_ptr<IImportExecutor> arango_executor(ImportContext context);
     [[nodiscard]] std::unique_ptr<IImportExecutor> neo4j_executor(ImportContext context);

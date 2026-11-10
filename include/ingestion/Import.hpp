@@ -88,6 +88,10 @@ namespace polygraph::ingestion {
         // Optional graph declaration/schema/config files bound to preparation identity.
         std::vector<fs::path> configuration_files = {};
         std::optional<ArtifactWorkspace> workspace = {};
+        fs::path relational_schema = {};
+        fs::path relational_mapping = {};
+        // Frozen config used by strict regeneration; callers normally supply paths.
+        Json relational_configuration = Json::object();
     };
     struct Placement {
         Json configuration;

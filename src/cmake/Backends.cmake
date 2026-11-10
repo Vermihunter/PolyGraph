@@ -1,3 +1,4 @@
+include("${CMAKE_CURRENT_LIST_DIR}/PostgresRelational.cmake")
 find_package(SQLite3 REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 
@@ -11,14 +12,6 @@ set(POLYGRAPH_BACKEND_SOURCES
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/Neo4J/Neo4JQueryVisitor.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/Neo4J/Neo4jGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/PostgreSqlGraphStore.cpp"
-    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/PostgresRelationalNodeReader.cpp"
-    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalMapping.cpp"
-    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalIdentityResolver.cpp"
-    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalAttachment.cpp"
-    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalRelationshipTableReader.cpp"
-    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalForeignKeyReader.cpp"
-    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalRelationshipRead.cpp"
-    "${PROJECT_SOURCE_DIR}/src/data_access/adapters/PostgreSQL/RelationalMappingValidator.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/cache/MMapGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_access/adapters/cache/RedisGraphStore.cpp"
     "${PROJECT_SOURCE_DIR}/src/infrastructure/ConfiguredGraphStoreFactory.cpp"
@@ -31,6 +24,7 @@ add_library(polygraph::backends ALIAS polygraph_backends)
 target_link_libraries(
     polygraph_backends
     PUBLIC
+        polygraph::relational
         polygraph::core
         polygraph::serialization
         polygraph::curl

@@ -3,11 +3,11 @@ find_package(OpenSSL REQUIRED COMPONENTS SSL Crypto)
 find_package(Threads REQUIRED)
 add_library(polygraph_ingestion STATIC
     Config.cpp SourceIdentity.cpp GraphManifest.cpp Storage.cpp Input.cpp InputAdapterRegistry.cpp Normalize.cpp Writers.cpp Import.cpp Process.cpp
-    Execute.cpp Postgres.cpp Http.cpp Arango.cpp Neo4j.cpp BatchImport.cpp Partition.cpp Kaminpar.cpp PartitionStage.cpp
+    Execute.cpp Postgres.cpp PostgresRelational.cpp RelationalWriters.cpp Http.cpp Arango.cpp Neo4j.cpp BatchImport.cpp Partition.cpp Kaminpar.cpp PartitionStage.cpp
     "${PROJECT_SOURCE_DIR}/src/insertion/BackendEncodedUuid.cpp"
 )
 add_library(polygraph::ingestion ALIAS polygraph_ingestion)
-target_link_libraries(polygraph_ingestion PUBLIC SQLite::SQLite3 OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+target_link_libraries(polygraph_ingestion PUBLIC polygraph::model SQLite::SQLite3 OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
 polygraph_configure_target(polygraph_ingestion)
 include("${PROJECT_SOURCE_DIR}/cmake/KaMinPar.cmake")
 polygraph_enable_kaminpar(polygraph_ingestion)
@@ -20,6 +20,8 @@ if(POLYGRAPH_INGESTION_NATIVE_EXECUTORS)
     find_package(PostgreSQL QUIET)
     find_package(CURL QUIET)
     if(PostgreSQL_FOUND)
+        include("${PROJECT_SOURCE_DIR}/src/cmake/PostgresRelational.cmake")
+        target_link_libraries(polygraph_ingestion PRIVATE polygraph::relational)
         target_link_libraries(polygraph_ingestion PRIVATE PostgreSQL::PostgreSQL)
         target_compile_definitions(polygraph_ingestion PRIVATE POLYGRAPH_INGESTION_HAS_LIBPQ=1)
     endif()

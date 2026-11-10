@@ -54,12 +54,13 @@ namespace {
 
     TEST(InputAdapterRegistryTest, DiscoversBuiltinsAndReportsUnknownNameBeforeFactoryOrInventory) {
         const auto &registry = default_input_adapters();
-        EXPECT_EQ(registry.names(), (std::vector<std::string>{"ldbc-snb", "polygraph-jsonl"}));
+        EXPECT_EQ(registry.names(), (std::vector<std::string>{"ldbc-snb", "polygraph-jsonl", "source-jsonl"}));
         try {
             (void) registry.create(PrepareOptions{.adapter = "missing"}, "missing-scratch");
             FAIL() << "Unknown adapter was accepted";
         } catch (const Error &e) {
-            EXPECT_EQ(std::string(e.what()), "Unknown adapter: missing (available: ldbc-snb, polygraph-jsonl)");
+            EXPECT_EQ(std::string(e.what()),
+                      "Unknown adapter: missing (available: ldbc-snb, polygraph-jsonl, source-jsonl)");
         }
     }
 
@@ -146,6 +147,60 @@ namespace {
                     .input_adapters = &registry};
         }
     };
+
+    TEST_F(InputAdapterPipelineTest, SourceJsonlRetainsExactTypedIdentitiesAndEndpointClosure) {
+        const auto identity = [](Json id, const std::string &kind) {
+            return Json{{"namespace", "app"}, {"type", "Device"}, {"idType", kind}, {"id", id}};
+        };
+        const auto signed_key = identity(7, "int64"), string_key = identity("7", "string");
+        std::ofstream source(directory / "source.rows");
+        source << Json{{"kind", "node"}, {"type", "Device"}, {"identity", signed_key}, {"partition", 9}}.dump() << '\n';
+        source << Json{{"kind", "node"}, {"type", "Device"}, {"identity", string_key}}.dump() << '\n';
+        source << Json{{"kind", "relationship"},
+                       {"type", "LINK"},
+                       {"identity", {{"namespace", "app"}, {"type", "LINK"}, {"idType", "string"}, {"id", "edge"}}},
+                       {"from", signed_key},
+                       {"to", string_key}}
+                          .dump()
+               << '\n';
+        source.close();
+        write_json_atomic(directory / "placement.json", {{"storageBackends", {"PostgreSQL"}},
+                                                         {"defaultNodeSource", "PostgreSQL"},
+                                                         {"defaultRelationshipSource", "PostgreSQL"}});
+        auto o = options(default_input_adapters());
+        o.adapter = "source-jsonl";
+        auto adapter = default_input_adapters().create(o, directory);
+        unsigned seen = 0;
+        adapter->nodes([&](Record r) {
+            if (seen++ == 0)
+                EXPECT_EQ(r.partition, std::optional<unsigned>{9});
+        });
+        const auto manifest = prepare(o);
+        EXPECT_EQ(manifest["id_strategy"], "typed-external-v1");
+        EXPECT_EQ(manifest["counts"]["nodes"], 2);
+        EXPECT_EQ(manifest["counts"]["edges"], 1);
+        EXPECT_NO_THROW((void) verify(o.output_dir / "manifest.json", true));
+    }
+
+    TEST_F(InputAdapterPipelineTest, SourceJsonlRejectsAmbiguousCanonicalAndInvalidSourceIdsWithLineContext) {
+        for (const auto &record:
+             {Json{{"type", "Device"}}, Json{{"kind", "node"}, {"type", "Device"}, {"uuid", 7}},
+              Json{{"kind", "node"},
+                   {"type", "Device"},
+                   {"identity",
+                    {{"namespace", "app"}, {"type", "Device"}, {"idType", "int64"}, {"id", UINT64_MAX}}}}}) {
+            std::ofstream(directory / "source.rows") << record.dump() << '\n';
+            auto o = options(default_input_adapters());
+            o.adapter = "source-jsonl";
+            auto adapter = default_input_adapters().create(o, directory);
+            try {
+                adapter->nodes([](Record) {});
+                FAIL() << "Invalid source JSONL accepted";
+            } catch (const Error &e) {
+                EXPECT_NE(std::string(e.what()).find("source.rows:1:"), std::string::npos);
+            }
+        }
+    }
 
     TEST_F(InputAdapterPipelineTest, RegisteredAdapterUsesAllExistingWritersAndStrictRecovery) {
         auto registry = default_input_adapters();

@@ -14,6 +14,6 @@ TEST(BulkImportCliTest, ApplicationSuppliedRegistryReachesSharedWorkflow) {
     const auto status = run_bulk_import_cli(2, argv, registry);
     const auto result = testing::internal::GetCapturedStdout();
     EXPECT_EQ(status, 0);
-    EXPECT_EQ(result, "example-proof\nldbc-snb\npolygraph-jsonl\n");
-    EXPECT_EQ(default_input_adapters().names().size(), 2);
+    EXPECT_EQ(result, "example-proof\nldbc-snb\npolygraph-jsonl\nsource-jsonl\n");
+    EXPECT_EQ(default_input_adapters().names().size(), 3);
 }

@@ -35,7 +35,7 @@ namespace polygraph::postgres {
             return result;
         }
         BackendId checked_owner(GlobalId id, const std::string &name) {
-            const auto owner = config::backend_id_from_string(name);
+            const auto owner = detail::catalog_owner(name);
             if (insertion::BackendEncodedId::canonical_id(id) != id ||
                 insertion::BackendEncodedId::decode(id, detail::routing) != owner)
                 detail::fail("catalog owner/ID mismatch");

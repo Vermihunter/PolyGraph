@@ -276,8 +276,15 @@ namespace polygraph::ingestion {
         const auto options = ingestion.value("options", Json::object());
         keys(options,
              {"partitioner", "seed", "threads", "memory-limit-mb", "chunk-size-mb", "max-record-mb", "partitions",
-              "partition-threads", "partition-imbalance", "partition-preset"},
+              "partition-threads", "partition-imbalance", "partition-preset", "relational-mapping"},
              "options");
+        if (options.contains("relational-mapping")) {
+            o.relational_schema = graph.schema;
+            o.relational_mapping =
+                    fs::absolute(graph.path).parent_path() / text(options, "relational-mapping", "options");
+            o.relational_mapping = o.relational_mapping.lexically_normal();
+            o.configuration_files.push_back(o.relational_mapping);
+        }
         o.seed = number(options, "seed", o.seed);
         o.threads = number(options, "threads", o.threads);
         o.memory_limit_mb = number(options, "memory-limit-mb", o.memory_limit_mb);

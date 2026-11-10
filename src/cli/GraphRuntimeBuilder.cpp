@@ -1,3 +1,4 @@
+#include "domain/graph/LogicalGraphSchemaJson.hpp"
 /**
  * @file src/cli/GraphRuntimeBuilder.cpp
  * @brief Implementation for graph runtime builder in the command-line and runtime configuration
@@ -8,8 +9,8 @@
 // Created by akos on 7. 7. 2026.
 //
 
-#include "cli/GraphRuntimeBuilder.hpp"
 #include "analysis/AlgorithmAnalyzer.hpp"
+#include "cli/GraphRuntimeBuilder.hpp"
 #include "cli/NativeNodeIdResolver.hpp"
 #include "insertion/BackendEncodedUuid.hpp"
 #include "logging/Log.hpp"
@@ -57,14 +58,6 @@ namespace polygraph::cli {
             std::unordered_map<BackendId, std::unordered_set<TypeId>> nodes_by_backend;
             std::unordered_map<BackendId, std::unordered_set<TypeId>> edges_by_backend;
         };
-
-        [[nodiscard]] const json &required_array(const json &object, std::string_view key) {
-            const auto it = object.find(std::string(key));
-            if (it == object.end() || !it->is_array()) {
-                throw std::runtime_error("Expected JSON array field: " + std::string(key));
-            }
-            return *it;
-        }
 
         [[nodiscard]] json read_json_file(const std::string &path) {
             std::ifstream input(path);
@@ -482,32 +475,6 @@ namespace polygraph::cli {
             throw std::runtime_error("Global ID must be an integer or decimal string");
         }
 
-        [[nodiscard]] domain::PropertyType property_type_from_string(const std::string &value) {
-            static const std::unordered_map<std::string, domain::PropertyType> by_name{
-                    {"string", domain::PropertyType::string},   {"integer", domain::PropertyType::integer},
-                    {"boolean", domain::PropertyType::boolean}, {"float", domain::PropertyType::_float},
-                    {"date", domain::PropertyType::date},       {"datetime", domain::PropertyType::datetime},
-            };
-
-            const auto it = by_name.find(value);
-            if (it == by_name.end()) {
-                throw std::runtime_error("Unknown property type: " + value);
-            }
-            return it->second;
-        }
-
-        [[nodiscard]] std::vector<domain::Property> parse_properties(const json &properties_json) {
-            std::vector<domain::Property> properties;
-
-            for (const auto &property_json: properties_json) {
-                properties.push_back(domain::Property{
-                        .name = property_json.at("name").get<std::string>(),
-                        .type = property_type_from_string(property_json.at("type").get<std::string>())});
-            }
-
-            return properties;
-        }
-
         void ensure_cuda_or_throw(const unsigned int device_id) {
 #ifdef POLYGRAPH_ENABLE_GPU
             int device_count = 0;
@@ -813,27 +780,8 @@ namespace polygraph::cli {
         }
 
         [[nodiscard]] LoadedSchema load_logical_graph_schema(const std::string &filename) {
-            const json config = read_json_file(filename);
-
             LoadedSchema result;
-            result.schema = std::make_unique<domain::LogicalGraphSchema>();
-
-            // Keep your existing synthetic type.
-            result.schema->add_node_type("Proxy", {});
-
-            for (const auto &node_json: required_array(config, "nodeTypes")) {
-                const auto name = node_json.at("name").get<std::string>();
-                result.schema->add_node_type(name, parse_properties(node_json.value("properties", json::array())));
-            }
-
-            for (const auto &relation_json: required_array(config, "relations")) {
-                const auto name = relation_json.at("name").get<std::string>();
-                const TypeId from_id = result.schema->node_type_id(relation_json.at("from").get<std::string>());
-                const TypeId to_id = result.schema->node_type_id(relation_json.at("to").get<std::string>());
-                result.schema->add_edge_type(name, from_id, to_id, relation_json.value("directed", true),
-                                             parse_properties(relation_json.value("properties", json::array())));
-            }
-
+            result.schema = domain::logical_schema_from_json(read_json_file(filename));
             return result;
         }
 

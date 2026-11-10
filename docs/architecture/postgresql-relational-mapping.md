@@ -132,10 +132,9 @@ relational traversal explicitly until #21; it never falls back to generic SQL.
 Use the validator API to check metadata in #13. The #15 attachment command also
 validates mappings while building an identity catalog.
 
-The native importer explicitly rejects targets carrying `relationalMapping`
-until #18. It must not feed generic CSV artifacts into mapped application tables.
-Ingestion mapping references and artifact binding will be introduced with that
-pipeline rather than implying a working relational import now.
+The [node ingestion pipeline (#18)](postgresql-relational-ingestion.md) accepts
+`relationalMapping` with mapping-bound typed artifacts and a new identity-output
+directory. Generic CSV artifacts cannot be fed into mapped application tables.
 
 ## Tests
 

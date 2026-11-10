@@ -1,5 +1,9 @@
 # Native bulk ingestion
 
+For pre-created typed PostgreSQL application tables, use
+[relational node ingestion](../architecture/postgresql-relational-ingestion.md)
+with `source-jsonl`, an explicit schema/mapping and a new identity catalog output.
+
 `polygraph_bulk_import` is a standalone C++23 preparation and native import tool. It does not link the BFS coordinator, query execution, servers, or GPU runtime. Legacy positional `tools/polygraph.py load DOMAIN` is unchanged.
 
 `validate --graph-manifest domain.json` provides read-only preflight, and

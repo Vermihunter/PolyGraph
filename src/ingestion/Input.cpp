@@ -108,8 +108,9 @@ namespace polygraph::ingestion::detail {
         }
         class JsonlAdapter final : public IGraphInputAdapter {
         public:
-            explicit JsonlAdapter(const PrepareOptions &options) :
-                path_(options.input), max_(static_cast<std::size_t>(options.max_record_mb) * 1024 * 1024) {}
+            explicit JsonlAdapter(const PrepareOptions &options, bool typed = false) :
+                path_(options.input), max_(static_cast<std::size_t>(options.max_record_mb) * 1024 * 1024),
+                typed_(typed) {}
             void nodes(const RecordConsumer &consume) override { scan(false, consume); }
             void relationships(const RecordConsumer &consume) override { scan(true, consume); }
             Json metadata() const override { return metadata_; }
@@ -121,6 +122,7 @@ namespace polygraph::ingestion::detail {
         private:
             fs::path path_;
             std::size_t max_;
+            bool typed_;
             Json metadata_ = Json::object();
             void scan(bool edges, const RecordConsumer &consume, bool metadata_only = false) {
                 std::ifstream in(path_, std::ios::binary);
@@ -147,6 +149,8 @@ namespace polygraph::ingestion::detail {
                         std::string kind = value.value("kind", std::string{});
                         std::ranges::transform(kind, kind.begin(),
                                                [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                        if (kind.empty() && typed_)
+                            throw Error("source-jsonl requires explicit record kind");
                         if (kind.empty())
                             kind = (value.contains("from") && value.contains("to"))     ? "relationship"
                                    : (value.contains("uuid") && value.contains("type")) ? "node"
@@ -168,6 +172,24 @@ namespace polygraph::ingestion::detail {
                         records = true;
                         if (edges != (kind != "node"))
                             continue;
+                        if (typed_) {
+                            if (value.contains("uuid"))
+                                throw Error("source-jsonl uses external identity, not canonical uuid");
+                            Record r;
+                            r.type = value.at("type").get<std::string>();
+                            r.properties = value.value("properties", Json::object());
+                            r.identity = domain::source_identity_from_json(value.at("identity"));
+                            if (value.contains("partition"))
+                                r.partition = value.at("partition").get<unsigned>();
+                            if (value.contains("source"))
+                                r.source = parse_backend(value.at("source").get<std::string>());
+                            if (edges) {
+                                r.from_identity = domain::source_identity_from_json(value.at("from"));
+                                r.to_identity = domain::source_identity_from_json(value.at("to"));
+                            }
+                            consume(std::move(r));
+                            continue;
+                        }
                         const auto id = parse_id(value.at("uuid"));
                         Record r{.key = std::to_string(canonical_id(id)),
                                  .type = value.at("type").get<std::string>(),
@@ -369,6 +391,13 @@ namespace polygraph::ingestion {
                                  detail::JsonlAdapter adapter(o);
                                  return adapter.inspect_metadata();
                              }});
+            result.add_definition(
+                    {.name = "source-jsonl",
+                     .factory = [](const PrepareOptions &o,
+                                   const fs::path &) { return std::make_unique<detail::JsonlAdapter>(o, true); },
+                     .input_files = [](const PrepareOptions &o) { return std::vector<fs::path>{o.input}; },
+                     .id_policy = InputIdPolicy::typed_external,
+                     .version = "1"});
             result.add_definition({.name = "ldbc-snb",
                                    .factory =
                                            [](const PrepareOptions &o, const fs::path &scratch) {
