@@ -108,10 +108,11 @@ Introduce live fixtures with #13; grow them throughout the work. #22 consolidate
 
 **Interfaces:** `PostgresRelationalNodeReader` consumes validated mapping + identity resolver and provides `read_nodes(std::span<const NodeRef>) -> std::vector<record_t>` using the existing record alias from `include/data_model/Record.hpp`. Verify the actual record construction API before coding; no new backend-neutral record hierarchy.
 
-- [ ] Add failing batched property-read tests against person/post/comment tables in two SQL schemas.
-- [ ] Implement identity-to-PK lookup and configured typed column projection. Explicitly preserve NULL, exact integer boundaries and date/timestamp semantics; report unsupported conversions with logical type and physical column.
-- [ ] Test missing rows, unknown IDs, hostile identifiers, UUID/string keys, non-public schemas and an application schema with no PolyGraph columns.
-- [ ] Verify no application DDL or writes occur; run focused reader tests and commit.
+- [x] Add failing batched property-read tests against person/post/comment tables in two SQL schemas.
+- [x] Implement identity-to-PK lookup and configured typed column projection. Explicitly preserve NULL, exact integer boundaries and date/timestamp semantics; report unsupported conversions with logical type and physical column.
+- [x] Test missing rows, unknown IDs, hostile identifiers, UUID/string keys, non-public schemas and an application schema with no PolyGraph columns.
+- [x] Verify no application DDL or writes occur; run focused reader tests and commit.
+
 
 ## Task 4 — #16 and #17: Relational adjacency query generation
 
@@ -119,11 +120,12 @@ Introduce live fixtures with #13; grow them throughout the work. #22 consolidate
 
 **Interfaces:** Query builder consumes `ValidatedRelationalMapping` and `ExpandSpec`; returns SQL and bound data needed to produce canonical source/target IDs and logical endpoint types. Frontier/identity relation names are adapter-owned. Both relationship forms expose the same canonical adjacency shape.
 
-- [ ] Write failing direction/type-filter tests for junction tables, FK owner-to-reference and reverse joins. Include FK columns on either logical endpoint so SQL ownership does not silently determine graph direction.
-- [ ] Implement only relevant per-mapping join branches combined with `UNION ALL`. Join typed external endpoints through identity relations; no numeric coercion or per-source SQL queries.
-- [ ] For junctions, preserve optional attributes and declared relationship identity; do not collapse parallel edges in rich reads. Candidate deduplication remains controlled by existing BFS options.
-- [ ] For FKs, omit NULL references; reject unknown non-NULL endpoints explicitly. Test nulls, self-loops, parallel rows, duplicate endpoints, empty filters and multiple endpoint types.
+- [x] Write failing direction/type-filter tests for junction tables, FK owner-to-reference and reverse joins. Include FK columns on either logical endpoint so SQL ownership does not silently determine graph direction.
+- [x] Implement only relevant per-mapping join branches with bounded native-typed cursor projections. Use the shared row contract across both forms; retain per-mapping SQL projections to preserve heterogeneous native attribute types (see #16/#17 execution records). Join typed external endpoints through identity relations; no numeric coercion or per-source SQL queries.
+- [x] For junctions, preserve optional attributes and declared relationship identity; do not collapse parallel edges in rich reads. Candidate deduplication remains controlled by existing BFS options.
+- [x] For FKs, omit NULL references; reject unknown non-NULL endpoints explicitly. Test nulls, self-loops, parallel rows, duplicate endpoints, empty filters and multiple endpoint types.
 - [ ] Run the live adjacency tests for forward/reverse/both directions and commit the independently testable readers, with separate issue-specific commits where practical.
+
 
 ## Task 5 — #21: Runtime and distributed BFS integration
 
@@ -341,3 +343,95 @@ Verification:
 Issue #15 was committed and pushed first as `ffdc920` on
 `origin/feature/extensibility`. Issue #16 changes remain uncommitted for review;
 no issue closure or work on #17 was performed.
+
+## Issue #17 execution record — 2026-11-09
+
+Implemented the direct-FK portion of Task 4 with the public
+`RelationalForeignKeyReader`. `owner: from|to` locates the FK independently of
+logical graph direction. Outgoing, incoming and both-direction lookup use native
+PK collations, actual stored endpoint keys and the existing immutable catalog.
+NULL FKs produce no relationship, including reverse/both lookups and self-FKs.
+Non-NULL matched references with missing live/catalog endpoints fail explicitly.
+See the [FK read contract](../../architecture/postgresql-relational-foreign-keys.md).
+
+Moved shared row/lookup/consumer types into `RelationalRelationshipRead.hpp` and
+extracted the existing reader pipeline into one internal streaming engine. The
+old table header re-exports the types; its API stays table-only and source
+compatible. Both wrappers share filters, snapshots, bounded native-key frontier
+joins, live frontier checks, batch resolution, callback-prefix failure semantics
+and rollback. FK rows expose no invented external edge keys, attributes or
+canonical IDs. No application schema, FK values or data are modified.
+
+An independent reviewer found no Critical/Important issues and verified both
+relevant live suites. Added its nonblocking suggestion: a successful streamed
+prefix followed by a late missing-catalog endpoint verifies rollback and
+connection reuse. Native PostgreSQL rejected initial mismatched nondeterministic
+collation fixtures; corrected them to valid native FK collation pairs rather
+than weakening constraints. No outstanding review findings remain.
+
+Verification:
+
+- Full CPU build passed without new compiler warnings.
+- Final CPU CTest with local socket access and owned PostgreSQL DSN: 618 passed,
+  3 optional skips, zero failures (621 entries). Live suites include 15 metadata,
+  14 attachment, 16 table-relationship and 18 FK cases (63 total).
+- FK coverage includes both ownership orientations, forward/reverse/both lookup,
+  nullable columns and self-loops, independent FKs on one row, large reverse
+  fan-out, filters, mixed mapping scopes, FK-only schemas, quoted Unicode FK
+  names, hostile search_path, stale/bypassed references, actual declared
+  constraints, catalog failures, callback failures, caller transaction handling,
+  SELECT-only access and native text collation behavior.
+- `clang-format-21 --dry-run --Werror` on changed C++, documentation link checker
+  and `git diff --check`: passed.
+
+Changes remain uncommitted for review. No commits/push, issue closure, node
+property-read implementation (#14), ingestion (#18–#20), or BFS wiring (#21)
+were performed during #17.
+
+## Issue #14 prerequisite execution record — 2026-11-10
+
+The next ingestion task (#18) depends on #13–#15, but typed node reads (#14) were
+still absent after the explicit #16/#17 ordering. Completed this missing
+prerequisite before beginning mutation/publication work. No #18 writes were
+started. The previously verified #17 changes remain pending and intact.
+
+Added `PostgresRelationalNodeReader::read_nodes(PGconn*, span<const NodeRef>)`
+returning the existing `vector<record_t>` model. Each record contains one Node
+Value with canonical ID/type, logical label and configured native properties.
+Mixed-schema/type requests preserve order and independently owned duplicate
+records. Requests are capped at 4096 vertices and SQL fetches at 1024; only the
+requested results are materialized, without claiming a hard RSS bound. See the
+[typed-node contract](../../architecture/postgresql-relational-nodes.md).
+
+Reused catalog reverse resolution, exact source-key checks, native PK collations,
+read-only locked snapshots and scalar codecs. Extracted shared frontier SQL and
+mapping checks for node and relationship readers; default relationship frontier
+deduplication remains unchanged. NULL, exact signed integers, booleans, finite
+floating values and date/time strings use the existing Value types. Missing/live
+identity mismatches, unsupported type drift and nonfinite/oversized values fail
+without returning a partial result vector. Application columns/keys/schema remain
+unchanged. Conversion errors include logical type/property and qualified native
+column context.
+
+Independent review found no blocking correctness or compatibility issue and
+confirmed the initial 13 live cases. Its diagnostic gap was reproduced in failing
+NaN/oversized error-context assertions and corrected; final suite has 14 cases.
+No outstanding review findings remain. Ingestion, catalog publication, runtime
+query visitors and BFS remain separate tasks.
+
+Verification:
+
+- Full CPU build passed with no new compiler warnings.
+- Final CPU CTest with local socket access and owned PostgreSQL DSN: 619 passed,
+  3 optional skips, zero failures (622 entries). All 77 live PostgreSQL cases ran:
+  15 metadata, 14 attachment, 16 table relationships, 18 FK relationships and 14
+  node reads.
+- Node coverage includes native scalar/NULL limits, mixed SQL schemas, request
+  order/independent duplicates, 2201-record cursor batching, Unicode/quoted names,
+  hostile search_path, SELECT-only privileges, PK collation/stale identity,
+  unsupported schema drift, caller transaction protection, local session setting
+  restoration, failure cleanup and actionable conversion diagnostics.
+- Changed-C++ clang-format-21, documentation links and `git diff --check` passed.
+
+Both #17 and #14 changes remain uncommitted for review. No push, issue closure,
+or #18 ingestion implementation was performed this turn.

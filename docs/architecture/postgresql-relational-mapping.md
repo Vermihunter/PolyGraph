@@ -158,3 +158,6 @@ POLYGRAPH_RELATIONAL_TEST_DSN='host=127.0.0.1 port=55413 dbname=postgres user=ak
 
 Without that explicit variable CTest reports the live test as skipped (code 77).
 With it set, failed connections and failed validation assertions fail the test.
+
+The [typed-node reader (#14)](postgresql-relational-nodes.md) now projects configured
+native columns into the existing Node/Record model; ingestion remains #18.

@@ -5,8 +5,9 @@
 [vertex identity catalog](postgresql-relational-identities.md). It resolves both
 endpoints, reads optional attributes from typed SQL columns, and supports
 outgoing, incoming and both-direction lookup. It does not implement node property
-reads (#14), direct FK adjacency (#17), relationship ingestion (#19) or runtime
-BFS wiring (#21).
+reads (#14), relationship ingestion (#19) or runtime BFS wiring (#21).
+[Direct FK lookup (#17)](postgresql-relational-foreign-keys.md) uses a separate
+reader and the same internal streaming engine.
 
 ## API
 
@@ -30,7 +31,7 @@ application rows/schema.
 
 - `relationship_types`: empty selects every mapped dedicated table. Explicit
   unknown or foreign-key relationship IDs are rejected; direct FK mappings are
-  outside this reader's scope.
+  outside this reader's scope. Use `RelationalForeignKeyReader` for those mappings.
 - `target_types`: empty selects every neighbor type; otherwise filters the
   neighbor type for the selected direction. Unknown node type IDs fail.
 - `direction`: `outgoing`, `incoming` or `both`. These are explicit lookup
