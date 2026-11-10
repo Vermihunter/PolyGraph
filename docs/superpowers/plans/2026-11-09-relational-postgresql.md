@@ -158,12 +158,16 @@ Introduce live fixtures with #13; grow them throughout the work. #22 consolidate
 
 **Interfaces:** Consume node mappings/catalog from Task 6. Junction artifacts contain external endpoint keys + configured typed attributes. FK artifacts contain owner key, referenced key or NULL and logical relationship identity for conflict detection.
 
-- [ ] Add failing junction import tests covering external key resolution, optional attributes, parallel edges, self-loops and missing references.
-- [ ] COPY junction rows after referenced nodes exist; honor existing constraints. Verify exact endpoint/type/attribute rows and preserve canonical edge identity in metadata where the application table has no edge key.
+- [x] Add failing junction import tests covering external key resolution, optional attributes, parallel edges, self-loops and missing references.
+- [x] COPY junction rows after referenced nodes exist; honor existing constraints. Verify exact endpoint/type/attribute rows and preserve canonical edge identity in metadata where the application table has no edge key. Uses private typed COPY staging followed by set-based INSERT RETURNING so batch capture never rescans old application rows.
 - [ ] Add failing FK tests for nullable no-edge state, repeated same assignment, conflicting targets, nonnullable columns, missing targets and references crossing backends without local reference rows.
 - [ ] Stage FK assignments and reject cardinality conflicts before modifying rows. Apply updates only to rows inserted by this import under the initial policy. Preflight nonnullable/cyclic FK insertion order: support a feasible constraint-respecting order or report unsupported cases before writes; do not disable constraints or assume all constraints are deferrable.
 - [ ] Verify reverse traversal after both relationship imports and retain placement/partition-cut/proxy metadata outside application attributes. Validate remote references according to the explicit policy, without inventing rows.
 - [ ] Force mid-import failures and assert rollback of node/edge/FK/metadata changes. Run focused tests; commit each relationship mode separately.
+
+The #19 table-import portion includes reverse reads, partition/proxy preservation
+and rollback verification. The joint checkboxes above remain open for #20's FK
+assignment implementation; completing #19 does not claim #20 is implemented.
 
 ## Task 8 — #22 and #12: Integration, documentation and acceptance
 
@@ -493,3 +497,60 @@ Verification:
 
 The user requested implementation, commit and push. No issue closure, merge,
 deployment or work on #19–#22 is part of this task.
+
+## Issue #19 execution record — 2026-11-10
+
+Implemented the dedicated relationship-table portion of Task 7 on top of
+`42610b3`. Node, relationship and reference artifacts remain bound to the frozen
+mapping and typed source index. Endpoints use exact native keys from mapped
+source vertices; an optional native edge PK uses the edge's typed source identity.
+Mapped attributes distinguish NULL from omitted defaults and preserve native
+types. Parallel rows and self-loops remain separate physical rows. No application
+schema changes or extra ID columns are introduced. See the
+[relationship ingestion contract](../../architecture/postgresql-relational-relationship-ingestion.md).
+
+After nodes exist, private typed COPY staging feeds set-based INSERT RETURNING
+into each mapped junction table. Returned batches are checked against explicit
+source values; a durable snapshot captures realized mapped values, including
+volatile defaults. Bounded cursor reads and a disk-backed multiset compare exact
+membership, values and multiplicity before commit, during publication and in
+later verification/recovery. Deferred constraints/triggers are forced before
+final verification, with no subsequent application writes. Node/edge/constraint
+failures roll back the entire PostgreSQL import transaction.
+
+Proxy endpoints retain canonical IDs and authoritative owners and require exact
+existing local rows in reference-only mapped tables. Missing remote-only rows,
+extra reference keys and mixing imported owners with existing references in one
+table fail preflight. No dummy application proxies are created. Published
+`ingestion.json`, `ingestion.sqlite3` and the native relationship snapshot retain
+checksummed canonical edge IDs, replicas, partitions, cut metadata and proxies
+outside application columns. Both publication and recovery verify these files.
+
+Fresh review found a deferred-trigger commit gap and ctid-based tracking that
+rescanned earlier rows and falsely rejected unmapped audit updates. Both were
+reproduced in failing live tests, then fixed in one pass with forced deferred
+checks and staged INSERT RETURNING. Additional failing regressions corrected
+shared endpoint/PK column duplication and checked TEMPORARY privileges during
+preflight. No Critical/Important findings or deferred review items remain.
+
+Verification:
+
+- Full CPU build passed without new warnings.
+- Final full CPU CTest: 622 passed, 3 optional skips, zero failures (625 entries).
+  All 111 live PostgreSQL cases ran: the previous 77 reader/catalog/metadata
+  cases plus 34 ingestion cases (17 node and 17 relationship cases).
+- Relationship coverage includes native PKs/endpoints, optional attributes,
+  volatile defaults, NULL, parallel identical rows across batches, self-loops,
+  reverse reads, remote reference ownership, partition/proxy/replica metadata,
+  missing references, native overflow, populated destinations, source-changing
+  triggers, deferred triggers, unmapped audit updates, publication recovery,
+  changed committed defaults, metadata corruption and restricted TEMP access.
+- Standalone native importer with backends disabled and standalone importer with
+  native executors disabled both built and listed the expected adapters.
+- Changed-C++ clang-format-21, documentation link checker and `git diff --check`
+  passed.
+
+The user explicitly requested a commit containing `Closes #19`, push and issue
+closure. Since the feature branch is not GitHub's default branch, issue closure
+is performed explicitly after the push. #20's FK assignment work and remaining
+#21/#22 acceptance work are not included; their checkboxes remain open.

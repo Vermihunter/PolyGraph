@@ -6,24 +6,31 @@
 #include <unistd.h>
 #include "../src/ingestion/Native.hpp"
 #include "data_access/adapters/PostgreSQL/RelationalIdentityResolver.hpp"
+#include "data_access/adapters/PostgreSQL/RelationalRelationshipTableReader.hpp"
 #include "domain/graph/LogicalGraphSchemaJson.hpp"
 #include "ingestion/InputAdapterRegistry.hpp"
 #include "ingestion/Process.hpp"
 #include "ingestion/RelationalImport.hpp"
+#include "utilities/BackendIds.hpp"
 
 namespace ing = polygraph::ingestion;
 using namespace polygraph;
 namespace {
     class Rows final : public ing::IGraphInputAdapter {
         std::vector<ing::Record> rows_;
+        std::vector<ing::Record> edges_;
 
     public:
-        explicit Rows(std::vector<ing::Record> rows) : rows_(std::move(rows)) {}
+        explicit Rows(std::vector<ing::Record> rows, std::vector<ing::Record> edges) :
+            rows_(std::move(rows)), edges_(std::move(edges)) {}
         void nodes(const ing::RecordConsumer &c) override {
             for (const auto &r: rows_)
                 c(r);
         }
-        void relationships(const ing::RecordConsumer &) override {}
+        void relationships(const ing::RecordConsumer &c) override {
+            for (const auto &r: edges_)
+                c(r);
+        }
         json metadata() const override { return json::object(); }
     };
     class RelationalIngestion : public ::testing::Test {
@@ -33,7 +40,7 @@ namespace {
         std::string limited_role;
         std::unique_ptr<PGconn, decltype(&PQfinish)> admin{nullptr, PQfinish}, db{nullptr, PQfinish};
         ing::InputAdapterRegistry registry;
-        std::vector<ing::Record> rows;
+        std::vector<ing::Record> rows, edges;
         json schema, mapping, targets;
         const std::string uuid = "00000000-0000-0000-0000-00000000000a";
         void sql(PGconn *c, const std::string &s) {
@@ -118,7 +125,7 @@ namespace {
                      .properties = {{"content", "line,\"quoted\"\n雪"}},
                      .identity = ing::SourceIdentity{"app", "Post", uuid}}};
             registry.add({.name = "relational-test",
-                          .factory = [this](const auto &, const auto &) { return std::make_unique<Rows>(rows); },
+                          .factory = [this](const auto &, const auto &) { return std::make_unique<Rows>(rows, edges); },
                           .input_files = [](const auto &o) { return std::vector<ing::fs::path>{o.input}; },
                           .id_policy = ing::InputIdPolicy::typed_external});
             targets = {{"targets",
@@ -140,17 +147,90 @@ namespace {
             if (!root.empty())
                 ing::fs::remove_all(root);
         }
-        json prepare(unsigned max_record_mb = 8) {
-            return ing::prepare({.adapter = "relational-test",
-                                 .input = root / "input.json",
-                                 .placement_config = root / "placement.json",
-                                 .output_dir = root / "prepared",
-                                 .max_record_mb = max_record_mb,
-                                 .input_adapters = &registry,
-                                 .relational_schema = root / "schema.json",
-                                 .relational_mapping = root / "mapping.json"});
+        json prepare(unsigned max_record_mb = 8, bool partitioned = false) {
+            ing::PrepareOptions options{.adapter = "relational-test",
+                                        .input = root / "input.json",
+                                        .placement_config = root / "placement.json",
+                                        .output_dir = root / "prepared",
+                                        .max_record_mb = max_record_mb,
+                                        .input_adapters = &registry,
+                                        .relational_schema = root / "schema.json",
+                                        .relational_mapping = root / "mapping.json"};
+            if (partitioned) {
+                options.partition_file = root / "partitions.jsonl";
+                options.partition_map = root / "partition-map.json";
+            }
+            return ing::prepare(options);
         }
         void execute() { ing::execute(root / "prepared/manifest.json", root / "targets.json", true, 1); }
+        void remote_placement() {
+            ing::write_json_atomic(root / "placement.json",
+                                   {{"storageBackends", {"PostgreSQL", "Neo4J"}},
+                                    {"nodeSources", {{"Person", "PostgreSQL"}, {"Post", "Neo4J"}}},
+                                    {"defaultRelationshipSource", "PostgreSQL"}});
+        }
+        std::unique_ptr<ing::IImportExecutor> pg_executor(const json &prepared) {
+            return ing::detail::postgres_relational_executor({.backend = ing::Backend::postgresql,
+                                                              .root = root / "prepared",
+                                                              .artifacts = prepared["backends"]["PostgreSQL"],
+                                                              .target = targets["targets"]["PostgreSQL"]});
+        }
+        int metadata_count(const std::string &sql) {
+            sqlite3 *raw = nullptr;
+            const auto path = root / "catalog/ingestion.sqlite3";
+            if (sqlite3_open_v2(path.c_str(), &raw, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+                sqlite3_close(raw);
+                throw std::runtime_error("Cannot read published ingestion metadata");
+            }
+            const std::unique_ptr<sqlite3, decltype(&sqlite3_close)> index(raw, sqlite3_close);
+            sqlite3_stmt *statement = nullptr;
+            if (sqlite3_prepare_v2(index.get(), sql.c_str(), -1, &statement, nullptr) != SQLITE_OK)
+                throw std::runtime_error("Cannot prepare published metadata query");
+            const std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> result(statement, sqlite3_finalize);
+            if (sqlite3_step(result.get()) != SQLITE_ROW)
+                throw std::runtime_error("Cannot read published metadata row");
+            return sqlite3_column_int(result.get(), 0);
+        }
+        void relationships(bool keyed = true) {
+            sql(db.get(), "CREATE TABLE app.likes(" + std::string(keyed ? "id bigint PRIMARY KEY," : "") +
+                                  "person_id bigint NOT NULL REFERENCES app.person(id),post_id uuid NOT NULL "
+                                  "REFERENCES app.post(id),"
+                                  "weight smallint DEFAULT 3 CHECK(weight>=0),note text DEFAULT md5(random()::text))");
+            schema["relations"].push_back({{"name", "LIKES"},
+                                           {"from", "Person"},
+                                           {"to", "Post"},
+                                           {"properties", json::array({{{"name", "weight"}, {"type", "integer"}},
+                                                                       {{"name", "note"}, {"type", "string"}}})}});
+            json relation{{"type", "LIKES"},
+                          {"kind", "table"},
+                          {"schema", "app"},
+                          {"table", "likes"},
+                          {"fromColumn", "person_id"},
+                          {"toColumn", "post_id"},
+                          {"properties", {{"weight", "weight"}, {"note", "note"}}}};
+            if (keyed) {
+                relation["primaryKey"] = "id";
+                relation["keyCodec"] = "int64";
+            }
+            mapping["relationships"].push_back(relation);
+            ing::write_json_atomic(root / "schema.json", schema);
+            ing::write_json_atomic(root / "mapping.json", mapping);
+            edges = {{.type = "LIKES",
+                      .properties = {{"weight", 1}, {"note", "雪,\"quoted\"\n"}},
+                      .identity = ing::SourceIdentity{"app", "LIKES", std::int64_t{91}},
+                      .from_identity = rows[0].identity,
+                      .to_identity = rows[2].identity},
+                     {.type = "LIKES",
+                      .properties = {{"weight", nullptr}, {"note", nullptr}},
+                      .identity = ing::SourceIdentity{"app", "LIKES", std::int64_t{92}},
+                      .from_identity = rows[0].identity,
+                      .to_identity = rows[2].identity},
+                     {.type = "LIKES",
+                      .properties = json::object(),
+                      .identity = ing::SourceIdentity{"app", "LIKES", std::int64_t{93}},
+                      .from_identity = rows[1].identity,
+                      .to_identity = rows[2].identity}};
+        }
     };
 } // namespace
 TEST_F(RelationalIngestion, PrepareImportVerifyPreserveTypedValuesDefaultsAndPrimaryKeys) {
@@ -430,6 +510,266 @@ TEST_F(RelationalIngestion, BoundedBatchesPreserveTextKeysAndGeneratedColumns) {
     prepare();
     execute();
     EXPECT_EQ(scalar("SELECT count(*) FROM app.person WHERE display='VALID'"), "301");
+    EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
+}
+TEST_F(RelationalIngestion, ImportsMappedRelationshipsAfterNodesWithNativeKeysAndAttributes) {
+    relationships();
+    const auto prepared = prepare();
+    EXPECT_EQ(prepared["backends"]["PostgreSQL"]["counts"]["edges"], 3);
+    execute();
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes"), "3");
+    EXPECT_EQ(scalar("SELECT person_id FROM app.likes WHERE id=91"), "7");
+    EXPECT_EQ(scalar("SELECT post_id FROM app.likes WHERE id=91"), uuid);
+    EXPECT_EQ(scalar("SELECT note FROM app.likes WHERE id=91"), "雪,\"quoted\"\n");
+    EXPECT_EQ(scalar("SELECT weight IS NULL AND note IS NULL FROM app.likes WHERE id=92"), "t");
+    EXPECT_EQ(scalar("SELECT weight=3 AND note IS NOT NULL FROM app.likes WHERE id=93"), "t");
+    EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
+    EXPECT_TRUE(ing::fs::exists(root / "catalog/ingestion.sqlite3"));
+}
+TEST_F(RelationalIngestion, KeylessParallelRowsAndVolatileDefaultsVerifyAsAMultiset) {
+    relationships(false);
+    for (unsigned i = 0; i < 270; ++i)
+        edges.push_back({.type = "LIKES",
+                         .properties = {{"weight", 1}, {"note", "same"}},
+                         .identity = ing::SourceIdentity{"app", "LIKES", "parallel-" + std::to_string(i)},
+                         .from_identity = rows[0].identity,
+                         .to_identity = rows[2].identity});
+    prepare();
+    execute();
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes WHERE note='same'"), "270");
+    EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
+    sql(db.get(), "UPDATE app.likes SET weight=2 WHERE ctid=(SELECT ctid FROM app.likes WHERE note='same' LIMIT 1)");
+    EXPECT_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"), std::exception);
+}
+TEST_F(RelationalIngestion, RelationshipConstraintFailureRollsBackNodesEdgesAndCatalog) {
+    relationships();
+    edges[1].properties["weight"] = -1;
+    prepare();
+    EXPECT_THROW(execute(), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes"), "0");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.post"), "0");
+    EXPECT_FALSE(ing::fs::exists(root / "catalog/manifest.json"));
+}
+TEST_F(RelationalIngestion, MissingRelationshipEndpointFailsOffline) {
+    relationships();
+    edges[0].from_identity = ing::SourceIdentity{"app", "Person", std::int64_t{999}};
+    EXPECT_THROW(prepare(), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+}
+TEST_F(RelationalIngestion, RelationshipOverflowFailsBeforeAnyBackendMutation) {
+    relationships();
+    edges[0].properties["weight"] = 70000;
+    prepare();
+    try {
+        execute();
+        FAIL() << "Native relationship integer overflow accepted";
+    } catch (const std::exception &e) {
+        EXPECT_NE(std::string(e.what()).find("phase=preflight"), std::string::npos) << e.what();
+    }
+    EXPECT_FALSE(ing::fs::exists(root / "prepared/execution-state.json"));
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+}
+TEST_F(RelationalIngestion, RelationshipPublicationRecoveryChecksCommittedEdgesBeforePublishing) {
+    relationships(false);
+    prepare();
+    ing::fs::create_directory(root / "catalog");
+    EXPECT_THROW(execute(), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes"), "3");
+    ing::fs::remove(root / "catalog");
+    EXPECT_NO_THROW(
+            (void) ing::recover_postgres_relational_identity(root / "prepared/manifest.json", root / "targets.json"));
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes"), "3");
+    EXPECT_TRUE(ing::fs::exists(root / "catalog/manifest.json"));
+}
+TEST_F(RelationalIngestion, CrossBackendReferencesRetainProxyOwnerPartitionsAndCanonicalEdgeIds) {
+    relationships();
+    remote_placement();
+    sql(db.get(), "INSERT INTO app.post VALUES('00000000-0000-0000-0000-00000000000a','existing remote reference')");
+    std::ofstream assignments(root / "partitions.jsonl");
+    for (unsigned i = 0; i < rows.size(); ++i)
+        assignments << json{{"key", ing::source_identity_key(*rows[i].identity)}, {"partition", i}}.dump() << '\n';
+    assignments.close();
+    ing::write_json_atomic(root / "partition-map.json", {{"0", "PostgreSQL"}, {"1", "PostgreSQL"}, {"2", "Neo4J"}});
+    const auto prepared = prepare(8, true);
+    EXPECT_EQ(prepared["backends"]["PostgreSQL"]["counts"]["proxies"], 1);
+    EXPECT_EQ(prepared["backends"]["Neo4J"]["counts"]["edges"], 3);
+    auto executor = pg_executor(prepared);
+    executor->preflight();
+    (void) executor->run();
+    (void) executor->verify();
+    EXPECT_EQ(scalar("SELECT content FROM app.post"), "existing remote reference");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "2");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes"), "3");
+    EXPECT_EQ(metadata_count("SELECT count(*) FROM proxies WHERE backend='PostgreSQL'"), 1);
+    EXPECT_EQ(metadata_count("SELECT count(*) FROM source_edges s JOIN edges e ON s.id=e.id WHERE "
+                             "json_extract(e.properties,'$.is_partition_cut')=1"),
+              3);
+    EXPECT_EQ(metadata_count("SELECT count(*) FROM replicas WHERE backend='Neo4J'"), 3);
+    auto logical = domain::logical_schema_from_json(schema);
+    auto map = postgres::parse_relational_mapping(mapping, *logical);
+    postgres::RelationalIdentityResolver resolver(root / "catalog/manifest.json", map);
+    const std::array<domain::SourceIdentity, 1> identities{*rows[2].identity};
+    const auto post = resolver.resolve(identities);
+    EXPECT_EQ(post[0].owner, NEO4J);
+    EXPECT_EQ(post[0].node.global_id, ing::make_id(ing::Backend::neo4j, 2));
+    postgres::RelationalRelationshipTableReader reader(map, resolver);
+    unsigned incoming = 0;
+    const std::array<NodeRef, 1> frontier{post[0].node};
+    reader.stream(db.get(), frontier, {.direction = postgres::RelationshipLookupDirection::incoming}, [&](auto batch) {
+        incoming += batch.size();
+        for (const auto &row: batch)
+            EXPECT_EQ(row.to.owner, NEO4J);
+    });
+    EXPECT_EQ(incoming, 3);
+}
+TEST_F(RelationalIngestion, RemoteOnlyEndpointFailsPreflightWithoutInventingApplicationRows) {
+    relationships();
+    remote_placement();
+    auto executor = pg_executor(prepare());
+    EXPECT_THROW(executor->preflight(), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.post"), "0");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes"), "0");
+}
+TEST_F(RelationalIngestion, KeylessSelfLoopsAndReverseTraversalPreserveLogicalOrientation) {
+    relationships(false);
+    sql(db.get(), "CREATE TABLE app.knows(a bigint REFERENCES app.person(id),b bigint REFERENCES app.person(id))");
+    schema["relations"].push_back({{"name", "KNOWS"}, {"from", "Person"}, {"to", "Person"}});
+    mapping["relationships"].push_back({{"type", "KNOWS"},
+                                        {"kind", "table"},
+                                        {"schema", "app"},
+                                        {"table", "knows"},
+                                        {"fromColumn", "a"},
+                                        {"toColumn", "b"}});
+    ing::write_json_atomic(root / "schema.json", schema);
+    ing::write_json_atomic(root / "mapping.json", mapping);
+    edges = {{.type = "KNOWS",
+              .identity = ing::SourceIdentity{"app", "KNOWS", "loop"},
+              .from_identity = rows[0].identity,
+              .to_identity = rows[0].identity},
+             {.type = "KNOWS",
+              .identity = ing::SourceIdentity{"app", "KNOWS", "reverse"},
+              .from_identity = rows[1].identity,
+              .to_identity = rows[0].identity}};
+    prepare();
+    execute();
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.knows WHERE a=7 AND b=7"), "1");
+    auto logical = domain::logical_schema_from_json(schema);
+    auto map = postgres::parse_relational_mapping(mapping, *logical);
+    postgres::RelationalIdentityResolver resolver(root / "catalog/manifest.json", map);
+    const std::array<domain::SourceIdentity, 1> identities{*rows[0].identity};
+    const auto person = resolver.resolve(identities);
+    const std::array<NodeRef, 1> frontier{person[0].node};
+    postgres::RelationalRelationshipTableReader reader(map, resolver);
+    unsigned incoming = 0;
+    reader.stream(db.get(), frontier, {.direction = postgres::RelationshipLookupDirection::incoming},
+                  [&](auto batch) { incoming += batch.size(); });
+    EXPECT_EQ(incoming, 2);
+}
+TEST_F(RelationalIngestion, ExistingMappedRelationshipRowsFailBeforeNodeCopy) {
+    relationships();
+    sql(db.get(), "ALTER TABLE app.likes DROP CONSTRAINT likes_person_id_fkey,DROP CONSTRAINT likes_post_id_fkey;"
+                  "INSERT INTO app.likes(id,person_id,post_id) VALUES(999,7,'00000000-0000-0000-0000-00000000000a')");
+    prepare();
+    EXPECT_THROW(execute(), std::exception);
+    EXPECT_FALSE(ing::fs::exists(root / "prepared/execution-state.json"));
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+    EXPECT_EQ(scalar("SELECT id FROM app.likes"), "999");
+}
+TEST_F(RelationalIngestion, RelationshipTriggersCannotSilentlyChangeExplicitSourceValues) {
+    relationships(false);
+    sql(db.get(),
+        "CREATE FUNCTION app.change_weight() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.weight=99; RETURN NEW; "
+        "END $$;"
+        "CREATE TRIGGER change_weight BEFORE INSERT ON app.likes FOR EACH ROW EXECUTE FUNCTION app.change_weight()");
+    prepare();
+    EXPECT_THROW(execute(), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes"), "0");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+}
+TEST_F(RelationalIngestion, RecoveryRejectsChangedRealizedRelationshipDefaults) {
+    relationships(false);
+    prepare();
+    ing::fs::create_directory(root / "catalog");
+    EXPECT_THROW(execute(), std::exception);
+    ing::fs::remove(root / "catalog");
+    sql(db.get(), "UPDATE app.likes SET note='changed' WHERE person_id=8");
+    EXPECT_THROW(
+            (void) ing::recover_postgres_relational_identity(root / "prepared/manifest.json", root / "targets.json"),
+            std::exception);
+    EXPECT_FALSE(ing::fs::exists(root / "catalog/manifest.json"));
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes"), "3");
+}
+TEST_F(RelationalIngestion, PublishedCanonicalEdgeMetadataIsCheckedForCorruption) {
+    relationships();
+    prepare();
+    execute();
+    EXPECT_EQ(metadata_count("SELECT count(*) FROM source_edges"), 3);
+    std::ofstream(root / "catalog/ingestion.sqlite3", std::ios::app) << 'x';
+    EXPECT_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes"), "3");
+}
+TEST_F(RelationalIngestion, EndpointColumnCanAlsoBeTheMappedRelationshipPrimaryKey) {
+    relationships();
+    sql(db.get(), "ALTER TABLE app.likes DROP COLUMN id; ALTER TABLE app.likes ADD PRIMARY KEY(person_id)");
+    mapping["relationships"][0]["primaryKey"] = "person_id";
+    ing::write_json_atomic(root / "mapping.json", mapping);
+    edges = {edges[0], edges[2]};
+    edges[0].identity->value = std::int64_t{7};
+    edges[1].identity->value = std::int64_t{8};
+    prepare();
+    execute();
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes WHERE person_id IN(7,8)"), "2");
+    EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
+}
+TEST_F(RelationalIngestion, RelationshipTemporaryStoragePrivilegeIsCheckedBeforeAnyCopy) {
+    relationships();
+    limited_role = database + "_loader";
+    sql(db.get(), "CREATE ROLE \"" + limited_role + "\" LOGIN; GRANT USAGE ON SCHEMA app TO \"" + limited_role +
+                          "\"; GRANT SELECT,INSERT,UPDATE ON ALL TABLES IN SCHEMA app TO \"" + limited_role +
+                          "\"; REVOKE TEMPORARY ON DATABASE \"" + database + "\" FROM PUBLIC");
+    targets["targets"]["PostgreSQL"]["username"] = limited_role;
+    ing::write_json_atomic(root / "targets.json", targets);
+    prepare();
+    try {
+        execute();
+        FAIL() << "Missing TEMPORARY privilege accepted";
+    } catch (const std::exception &e) {
+        EXPECT_NE(std::string(e.what()).find("phase=preflight"), std::string::npos) << e.what();
+    }
+    EXPECT_FALSE(ing::fs::exists(root / "prepared/execution-state.json"));
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+}
+TEST_F(RelationalIngestion, DeferredRelationshipTriggerChangesRollBackTheEntireImport) {
+    relationships(false);
+    sql(db.get(), "CREATE FUNCTION app.defer_weight() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+                  "UPDATE app.likes SET weight=99 WHERE person_id=NEW.person_id; RETURN NULL; END $$;"
+                  "CREATE CONSTRAINT TRIGGER defer_weight AFTER INSERT ON app.likes DEFERRABLE INITIALLY DEFERRED "
+                  "FOR EACH ROW EXECUTE FUNCTION app.defer_weight()");
+    prepare();
+    EXPECT_THROW(execute(), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.post"), "0");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes"), "0");
+    EXPECT_FALSE(ing::fs::exists(root / "catalog/manifest.json"));
+}
+TEST_F(RelationalIngestion, AuditTriggersCanUpdateUnmappedColumnsAcrossRelationshipBatches) {
+    relationships(false);
+    sql(db.get(),
+        "ALTER TABLE app.likes ADD COLUMN touched_at timestamptz;"
+        "CREATE FUNCTION app.touch_likes() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "UPDATE app.likes SET touched_at=clock_timestamp(); RETURN NULL; END $$;"
+        "CREATE TRIGGER touch_likes AFTER INSERT ON app.likes FOR EACH STATEMENT EXECUTE FUNCTION app.touch_likes()");
+    for (unsigned i = 0; i < 270; ++i)
+        edges.push_back({.type = "LIKES",
+                         .properties = {{"weight", 1}, {"note", "same"}},
+                         .identity = ing::SourceIdentity{"app", "LIKES", "audit-" + std::to_string(i)},
+                         .from_identity = rows[0].identity,
+                         .to_identity = rows[2].identity});
+    prepare();
+    ASSERT_NO_THROW(execute());
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes WHERE touched_at IS NOT NULL"), "273");
     EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
 }
 int main(int argc, char **argv) {

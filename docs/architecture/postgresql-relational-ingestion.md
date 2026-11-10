@@ -4,7 +4,8 @@ The native bulk pipeline can prepare, import and verify nodes in pre-created
 application tables using the [relational mapping](postgresql-relational-mapping.md).
 Each mapped logical type has its own table and native scalar PK. No generic
 `polygraph_nodes` table, application schema migration or synthetic proxy row is
-created. Relationship writes remain #19/#20; relational BFS wiring remains #21.
+created. [Dedicated relationship-table writes (#19)](postgresql-relational-relationship-ingestion.md)
+use the same pipeline; foreign-key writes remain #20 and relational BFS wiring remains #21.
 
 ## Input and preparation
 
@@ -26,9 +27,10 @@ NULL; date/time properties use native PostgreSQL input strings. No coercion of
 strings to numbers or flattening of structured properties is performed.
 
 The adapter also accepts `relationship` records with an `identity` and structured
-`from`/`to` identities for generic destinations. This node-only relational writer
-explicitly rejects PostgreSQL relationship replicas and proxy rows. Metadata
-records, if present, precede data. Source errors include file/line context.
+`from`/`to` identities for generic destinations and mapped dedicated tables.
+Relational proxy identities use existing local reference rows as described in
+the relationship import contract. Metadata records, if present, precede data.
+Source errors include file/line context.
 
 ```sh
 build/cpu-tests/bin/polygraph_bulk_import prepare \
@@ -88,7 +90,9 @@ build/cpu-tests/bin/polygraph_bulk_import execute \
   --target-config targets.json --confirm-create
 ```
 
-Initial imports require every mapped node table to be empty. Unrelated populated
+Initial node imports require every mapped node table to be empty. Relationship
+imports permit existing reference-only tables under their explicit proxy policy.
+Unrelated populated
 tables are allowed and are not modified by the importer. Existing rows are never
 merged, updated or deleted. Native SQL constraints and triggers remain enabled;
 their own side effects follow PostgreSQL's normal transaction/sequence semantics.

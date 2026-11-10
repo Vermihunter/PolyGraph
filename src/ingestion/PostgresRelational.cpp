@@ -1,6 +1,8 @@
 #include "Native.hpp"
 #include "ingestion/RelationalImport.hpp"
 #if POLYGRAPH_INGESTION_HAS_LIBPQ
+#include <algorithm>
+#include <cstdlib>
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <map>
@@ -61,6 +63,10 @@ namespace polygraph::ingestion::detail {
             std::set<std::string> checked_columns_;
             bool require_insert_{false};
             std::uint64_t max_record_bytes_{};
+            std::map<std::string, std::uint64_t> node_counts_, reference_counts_;
+            std::set<std::string> staging_tables_;
+            fs::path relationship_snapshot_;
+            std::optional<Json> snapshot_descriptor_;
             Result query(const std::string &sql, const std::vector<std::string> &params = {}, bool rows = false) {
                 std::vector<const char *> values;
                 for (const auto &p: params)
@@ -129,38 +135,76 @@ namespace polygraph::ingestion::detail {
             const pg::NodeMapping &node(const std::string &type) const {
                 return mapping_.node(logical_->node_type_id(type));
             }
-            const pg::RelationalTableMetadata &meta(const pg::NodeMapping &n) const {
+            const pg::RelationshipMapping &relationship(const std::string &type) const {
+                for (const auto &r: mapping_.relationships())
+                    if (r.logical_type == type && r.kind == pg::RelationshipKind::table)
+                        return r;
+                throw Error("Missing dedicated relationship table mapping: " + type);
+            }
+            const pg::SqlTable &destination(const Json &row) const {
+                return row.value("entity", "node") == "relationship" ? relationship(row.at("type")).table
+                                                                     : node(row.at("type")).table;
+            }
+            const pg::RelationalTableMetadata &meta(const pg::SqlTable &table) const {
                 for (const auto &t: metadata_->tables())
-                    if (t.table == n.table)
+                    if (t.table == table)
                         return t;
                 throw Error("Missing native table metadata");
             }
+            const pg::RelationalTableMetadata &meta(const pg::NodeMapping &n) const { return meta(n.table); }
             void empty() {
                 for (const auto &n: mapping_.nodes()) {
-                    auto r = query("SELECT EXISTS(SELECT 1 FROM " + table(n.table) + " LIMIT 1)", {}, true);
-                    if (std::string(PQgetvalue(r.get(), 0, 0)) == "t")
+                    const auto references = reference_counts_[n.logical_type];
+                    if (references && node_counts_[n.logical_type])
+                        throw Error("Cannot mix imported owners and pre-existing reference rows in one node table");
+                    auto r = query("SELECT count(*) FROM " + table(n.table), {}, true);
+                    if (std::stoull(PQgetvalue(r.get(), 0, 0)) != references)
                         throw Error("Mapped node destination is not empty: " + table(n.table));
                 }
+                for (const auto &r: mapping_.relationships())
+                    if (r.kind == pg::RelationshipKind::table) {
+                        auto count = query("SELECT EXISTS(SELECT 1 FROM " + table(r.table) + " LIMIT 1)", {}, true);
+                        if (std::string(PQgetvalue(count.get(), 0, 0)) == "t")
+                            throw Error("Mapped relationship destination is not empty: " + table(r.table));
+                    }
             }
             void check_row(const Json &r) {
-                const auto &n = node(r.at("type"));
-                const auto &m = meta(n);
+                const bool edge = r.value("entity", "node") == "relationship";
+                const bool reference = r.value("entity", "node") == "reference";
+                const auto &m = meta(destination(r));
+                std::optional<std::string> primary_key;
+                std::set<std::string> allowed;
+                std::vector<std::string> required;
+                if (edge) {
+                    const auto &e = relationship(r.at("type"));
+                    primary_key = e.primary_key;
+                    allowed = {e.from_column, e.to_column};
+                    required = {e.from_column, e.to_column};
+                    for (const auto &p: e.properties)
+                        allowed.insert(p.column);
+                } else {
+                    const auto &n = node(r.at("type"));
+                    primary_key = n.primary_key;
+                    if (!reference)
+                        for (const auto &p: n.properties)
+                            allowed.insert(p.column);
+                }
+                if (primary_key) {
+                    allowed.insert(*primary_key);
+                    required.push_back(*primary_key);
+                }
                 const auto &columns = r.at("columns"), &values = r.at("values");
-                if (!columns.is_array() || columns.empty() || columns.size() != values.size() ||
-                    columns[0] != n.primary_key)
+                if (!columns.is_array() || columns.empty() || columns.size() != values.size())
                     throw Error("Invalid relational artifact columns");
                 std::set<std::string> present;
                 for (std::size_t i = 0; i < columns.size(); ++i) {
                     const auto col = columns[i].get<std::string>();
                     if (!present.insert(col).second)
                         throw Error("Duplicate native column");
-                    bool allowed = col == n.primary_key;
-                    for (const auto &p: n.properties)
-                        allowed = allowed || p.column == col;
-                    if (!allowed || !m.columns.contains(col))
+                    if (!allowed.contains(col) || !m.columns.contains(col))
                         throw Error("Unmapped native write column");
                     const auto &c = m.columns.at(col);
-                    if (c.generated || !c.identity.empty() || (col == n.primary_key && c.has_default))
+                    if (!reference && (c.generated || !c.identity.empty() || (primary_key == col && c.has_default)))
                         throw Error("Explicit import cannot write generated/automatic primary-key columns: " + col);
                     const auto &v = values[i];
                     if (v.is_null()) {
@@ -179,7 +223,8 @@ namespace polygraph::ingestion::detail {
                                 throw Error("Native varchar overflow: " + col);
                         }
                     }
-                    if (require_insert_ && checked_columns_.insert(std::to_string(m.oid) + ":" + col).second) {
+                    if (require_insert_ && !reference &&
+                        checked_columns_.insert(std::to_string(m.oid) + ":" + col).second) {
                         auto privilege = query(
                                 "SELECT "
                                 "pg_catalog.has_column_privilege($1::pg_catalog.oid,$2::pg_catalog.text,'INSERT')",
@@ -188,12 +233,16 @@ namespace polygraph::ingestion::detail {
                             throw Error("INSERT privilege missing for " + col);
                     }
                 }
+                for (const auto &col: required)
+                    if (!present.contains(col))
+                        throw Error("Missing native key/endpoint: " + col);
                 for (const auto &[name, c]: m.columns)
-                    if (!c.nullable && !c.generated && !c.has_default && c.identity.empty() && !present.contains(name))
+                    if (!reference && !c.nullable && !c.generated && !c.has_default && c.identity.empty() &&
+                        !present.contains(name))
                         throw Error("Missing required native column: " + name);
             }
             template<class F>
-            void groups(F action) {
+            void groups(F action, std::string_view kind = "relational_nodes") {
                 std::map<std::string, Json> groups;
                 std::size_t bytes = 0, count = 0;
                 const auto flush = [&] {
@@ -205,8 +254,11 @@ namespace polygraph::ingestion::detail {
                     bytes = count = 0;
                 };
                 for (const auto &a: context_.artifacts.at("artifacts")) {
-                    if (a.at("kind") != "relational_nodes")
+                    if (a.at("kind") != "relational_nodes" && a.at("kind") != "relational_relationships" &&
+                        a.at("kind") != "relational_references")
                         throw Error("Non-relational artifact in mapped import");
+                    if (a.at("kind") != kind)
+                        continue;
                     std::ifstream input(artifact_path(context_.root, a));
                     if (!input)
                         throw Error("Cannot read mapped artifact");
@@ -232,8 +284,7 @@ namespace polygraph::ingestion::detail {
                 flush();
             }
             Result expected(const Json &batch) {
-                const auto &n = node(batch[0].at("type"));
-                const auto &m = meta(n);
+                const auto &m = meta(destination(batch[0]));
                 const auto &columns = batch[0].at("columns");
                 Json values = Json::array();
                 for (const auto &r: batch) {
@@ -250,9 +301,8 @@ namespace polygraph::ingestion::detail {
                 sql += " FROM pg_catalog.jsonb_array_elements($1::pg_catalog.jsonb) AS input(v)";
                 return query(sql, {values.dump()}, true);
             }
-            void copy(const Json &batch) {
-                const auto &n = node(batch[0].at("type"));
-                std::string sql = "COPY " + table(n.table) + "(";
+            void copy(const Json &batch, const pg::SqlTable *target = nullptr) {
+                std::string sql = "COPY " + table(target ? *target : destination(batch[0])) + "(";
                 for (std::size_t i = 0; i < batch[0]["columns"].size(); ++i) {
                     if (i)
                         sql += ",";
@@ -296,68 +346,302 @@ namespace polygraph::ingestion::detail {
                 if (failed || !error.empty())
                     throw Error("Relational COPY failed: " + error);
             }
+            std::vector<std::string> relationship_columns(const pg::RelationshipMapping &r) const {
+                std::vector<std::string> result;
+                const auto add = [&](const std::string &column) {
+                    if (std::find(result.begin(), result.end(), column) == result.end())
+                        result.push_back(column);
+                };
+                if (r.primary_key)
+                    add(*r.primary_key);
+                add(r.from_column);
+                add(r.to_column);
+                for (const auto &p: r.properties)
+                    add(p.column);
+                return result;
+            }
+            static Json native_row(PGresult *rows, int row, int first, int columns) {
+                Json result = Json::array();
+                for (int col = first; col < first + columns; ++col) {
+                    if (PQgetisnull(rows, row, col))
+                        result.push_back(nullptr);
+                    else
+                        result.push_back(pg::detail::sql_text(rows, row, col));
+                }
+                return result;
+            }
+            void record_relationships(const Json &batch, PGresult *expected_rows, AtomicOutput &snapshot) {
+                const auto &r = relationship(batch[0].at("type"));
+                const auto columns = relationship_columns(r);
+                const pg::SqlTable staged{
+                        "pg_temp", "polygraph_edge_stage_" +
+                                           sha256_text(Json::array({r.logical_type, batch[0].at("columns")}).dump())
+                                                   .substr(0, 24)};
+                std::string supplied, definitions;
+                const auto &metadata = meta(r.table);
+                for (const auto &col: batch[0].at("columns")) {
+                    const auto name = col.get<std::string>();
+                    if (!supplied.empty()) {
+                        supplied += ",";
+                        definitions += ",";
+                    }
+                    supplied += pg::quote_identifier(name);
+                    definitions += pg::quote_identifier(name) + " " + sql_type(metadata.columns.at(name));
+                }
+                if (staging_tables_.insert(staged.name).second)
+                    query("CREATE TEMP TABLE " + table(staged) + "(" + definitions + ") ON COMMIT DROP");
+                else
+                    query("TRUNCATE " + table(staged));
+                copy(batch, &staged);
+                // RETURNING identifies this batch directly; rescanning old application rows
+                // would grow quadratically and would confuse audit-trigger tuple updates.
+                std::string sql = "INSERT INTO " + table(r.table) + "(" + supplied + ") SELECT " + supplied + " FROM " +
+                                  table(staged) + " RETURNING ";
+                for (const auto &c: columns) {
+                    if (!sql.ends_with(" RETURNING "))
+                        sql += ",";
+                    sql += pg::quote_identifier(c);
+                }
+                auto actual = query(sql, {}, true);
+                if (PQntuples(actual.get()) != static_cast<int>(batch.size()))
+                    throw Error("Relationship COPY row count differs from prepared batch");
+                std::map<std::string, std::int64_t> expected_values;
+                for (int i = 0; i < PQntuples(expected_rows); ++i)
+                    ++expected_values[native_row(expected_rows, i, 0, PQnfields(expected_rows)).dump()];
+                for (int row = 0; row < PQntuples(actual.get()); ++row) {
+                    const auto values = native_row(actual.get(), row, 0, static_cast<int>(columns.size()));
+                    Json projection = Json::array();
+                    for (const auto &col: batch[0].at("columns")) {
+                        const auto found = std::find(columns.begin(), columns.end(), col.get<std::string>());
+                        if (found == columns.end())
+                            throw Error("Unexpected relationship projection");
+                        projection.push_back(values[static_cast<std::size_t>(found - columns.begin())]);
+                    }
+                    if (--expected_values[projection.dump()] < 0)
+                        throw Error("Relationship COPY changed an explicit native column");
+                    const auto line = Json{{"type", r.logical_type}, {"values", values}}.dump() + "\n";
+                    if (line.size() > max_record_bytes_)
+                        throw Error("Realized relationship row exceeds prepared record limit");
+                    snapshot.write(line);
+                }
+            }
+            void verify_relationships() {
+                const auto count = context_.artifacts.at("counts").at("edges").get<std::uint64_t>();
+                if (!count) {
+                    for (const auto &r: mapping_.relationships())
+                        if (r.kind == pg::RelationshipKind::table) {
+                            auto rows = query("SELECT count(*) FROM " + table(r.table), {}, true);
+                            if (std::string(PQgetvalue(rows.get(), 0, 0)) != "0")
+                                throw Error("Unexpected rows in mapped relationship destination");
+                        }
+                    return;
+                }
+                if (!snapshot_descriptor_)
+                    throw Error("Relationship publication snapshot is missing; recovery cannot reimport rows");
+                const auto path = artifact_path(context_.root, *snapshot_descriptor_);
+                if (fs::file_size(path) != snapshot_descriptor_->at("bytes").get<std::uint64_t>() ||
+                    sha256_file(path) != snapshot_descriptor_->at("sha256"))
+                    throw Error("Relationship snapshot checksum mismatch");
+                auto pattern = (fs::temp_directory_path() / "polygraph-relational-check-XXXXXX").string();
+                if (!::mkdtemp(pattern.data()))
+                    throw Error("Cannot create relational verification workspace");
+                struct Cleanup {
+                    fs::path path;
+                    ~Cleanup() {
+                        std::error_code ignored;
+                        fs::remove_all(path, ignored);
+                    }
+                } cleanup{pattern};
+                Database comparison(cleanup.path / "rows.sqlite3", 4);
+                comparison.exec("CREATE TABLE rows(type TEXT,tuple TEXT,delta INTEGER NOT NULL,PRIMARY "
+                                "KEY(type,tuple)) WITHOUT ROWID; BEGIN");
+                auto add = comparison.statement("INSERT INTO rows VALUES(?,?,?) ON CONFLICT(type,tuple) DO UPDATE SET "
+                                                "delta=delta+excluded.delta");
+                const auto accumulate = [&](const std::string &type, const Json &values, std::int64_t delta) {
+                    add.bind(1, type);
+                    add.bind(2, values.dump());
+                    add.bind(3, delta);
+                    add.run();
+                };
+                std::ifstream input(path);
+                std::string line;
+                std::uint64_t expected_count = 0, actual_count = 0;
+                while (std::getline(input, line)) {
+                    if (line.size() + 1 > max_record_bytes_)
+                        throw Error("Oversized relationship verification row");
+                    const auto row = Json::parse(line);
+                    const auto type = row.at("type").get<std::string>();
+                    if (row.at("values").size() != relationship_columns(relationship(type)).size())
+                        throw Error("Invalid relationship snapshot columns");
+                    accumulate(type, row.at("values"), 1);
+                    ++expected_count;
+                }
+                if (!input.eof() || expected_count != count)
+                    throw Error("Relationship snapshot count/read mismatch");
+                for (const auto &r: mapping_.relationships()) {
+                    if (r.kind != pg::RelationshipKind::table)
+                        continue;
+                    const auto columns = relationship_columns(r);
+                    std::string select = "SELECT ";
+                    for (const auto &column: columns) {
+                        if (select != "SELECT ")
+                            select += ",";
+                        select += pg::quote_identifier(column);
+                    }
+                    query("DECLARE polygraph_edge_check NO SCROLL CURSOR FOR " + select + " FROM " + table(r.table));
+                    for (;;) {
+                        auto rows = query("FETCH FORWARD 128 FROM polygraph_edge_check", {}, true);
+                        if (!PQntuples(rows.get()))
+                            break;
+                        for (int i = 0; i < PQntuples(rows.get()); ++i) {
+                            accumulate(r.logical_type, native_row(rows.get(), i, 0, static_cast<int>(columns.size())),
+                                       -1);
+                            ++actual_count;
+                        }
+                    }
+                    query("CLOSE polygraph_edge_check");
+                }
+                auto mismatch = comparison.statement("SELECT 1 FROM rows WHERE delta<>0 LIMIT 1");
+                if (actual_count != count || mismatch.step())
+                    throw Error("Stored relationship multiset differs from committed import");
+                comparison.exec("COMMIT");
+            }
+            void verify_node_batch(const Json &batch, std::map<std::string, std::uint64_t> &counts) {
+                const auto canonical = expected(batch);
+                const auto &n = node(batch[0].at("type"));
+                const auto &m = meta(n);
+                const auto &columns = batch[0].at("columns");
+                Json keys = Json::array();
+                for (const auto &r: batch)
+                    keys.push_back(r["values"][0]);
+                std::string sql = "SELECT k.ordinality";
+                for (const auto &col: columns)
+                    sql += ",n." + pg::quote_identifier(col.get<std::string>());
+                std::string pk = "n." + pg::quote_identifier(n.primary_key);
+                const auto &collation = m.columns.at(n.primary_key).collation;
+                if (collation)
+                    pk += " COLLATE " + table(*collation);
+                sql += " FROM pg_catalog.jsonb_array_elements_text($1::pg_catalog.jsonb) WITH ORDINALITY AS "
+                       "k(value,ordinality) LEFT JOIN " +
+                       table(n.table) + " n ON " + pk +
+                       " OPERATOR(pg_catalog.=) k.value::" + sql_type(m.columns.at(n.primary_key)) +
+                       " ORDER BY k.ordinality";
+                auto actual = query(sql, {keys.dump()}, true);
+                if (PQntuples(actual.get()) != static_cast<int>(batch.size()))
+                    throw Error("Native row membership mismatch");
+                for (int row = 0; row < PQntuples(actual.get()); ++row) {
+                    if (PQgetisnull(actual.get(), row, 1))
+                        throw Error("Missing imported native PK");
+                    for (std::size_t col = 0; col < columns.size(); ++col) {
+                        if (PQgetisnull(actual.get(), row, static_cast<int>(col) + 1) !=
+                            PQgetisnull(canonical.get(), row, static_cast<int>(col)))
+                            throw Error("Native NULL mismatch");
+                        if (!PQgetisnull(canonical.get(), row, static_cast<int>(col)) &&
+                            std::string(PQgetvalue(actual.get(), row, static_cast<int>(col) + 1)) !=
+                                    PQgetvalue(canonical.get(), row, static_cast<int>(col)))
+                            throw Error("Imported native column mismatch");
+                    }
+                    ++counts[n.logical_type];
+                }
+            }
             void verify_rows() {
                 std::map<std::string, std::uint64_t> counts;
-                groups([&](const Json &batch) {
-                    const auto canonical = expected(batch);
-                    const auto &n = node(batch[0].at("type"));
-                    const auto &m = meta(n);
-                    const auto &columns = batch[0].at("columns");
-                    Json keys = Json::array();
-                    for (const auto &r: batch)
-                        keys.push_back(r["values"][0]);
-                    std::string sql = "SELECT k.ordinality";
-                    for (const auto &col: columns)
-                        sql += ",n." + pg::quote_identifier(col.get<std::string>());
-                    std::string pk = "n." + pg::quote_identifier(n.primary_key);
-                    const auto &collation = m.columns.at(n.primary_key).collation;
-                    if (collation)
-                        pk += " COLLATE " + table(*collation);
-                    sql += " FROM pg_catalog.jsonb_array_elements_text($1::pg_catalog.jsonb) WITH ORDINALITY AS "
-                           "k(value,ordinality) LEFT JOIN " +
-                           table(n.table) + " n ON " + pk +
-                           " OPERATOR(pg_catalog.=) k.value::" + sql_type(m.columns.at(n.primary_key)) +
-                           " ORDER BY k.ordinality";
-                    auto actual = query(sql, {keys.dump()}, true);
-                    if (PQntuples(actual.get()) != static_cast<int>(batch.size()))
-                        throw Error("Native row membership mismatch");
-                    for (int row = 0; row < PQntuples(actual.get()); ++row) {
-                        if (PQgetisnull(actual.get(), row, 1))
-                            throw Error("Missing imported native PK");
-                        for (std::size_t col = 0; col < columns.size(); ++col) {
-                            if (PQgetisnull(actual.get(), row, static_cast<int>(col) + 1) !=
-                                PQgetisnull(canonical.get(), row, static_cast<int>(col)))
-                                throw Error("Native NULL mismatch");
-                            if (!PQgetisnull(canonical.get(), row, static_cast<int>(col)) &&
-                                std::string(PQgetvalue(actual.get(), row, static_cast<int>(col) + 1)) !=
-                                        PQgetvalue(canonical.get(), row, static_cast<int>(col)))
-                                throw Error("Imported native column mismatch");
-                        }
-                        ++counts[n.logical_type];
-                    }
-                });
+                for (const auto *kind: {"relational_nodes", "relational_references"})
+                    groups([&](const Json &batch) { verify_node_batch(batch, counts); }, kind);
                 for (const auto &n: mapping_.nodes()) {
                     auto r = query("SELECT count(*) FROM " + table(n.table), {}, true);
                     if (std::stoull(PQgetvalue(r.get(), 0, 0)) != counts[n.logical_type])
                         throw Error("Native destination count differs from prepared nodes");
                 }
+                verify_relationships();
+            }
+            bool has_relationship_metadata() const {
+                return context_.artifacts.at("counts").at("edges") != 0 ||
+                       context_.artifacts.at("counts").at("proxies") != 0;
+            }
+            void copy_metadata_file(const fs::path &source, const fs::path &target, const Json &descriptor) {
+                if (!fs::exists(target)) {
+                    AtomicOutput output(target);
+                    std::ifstream input(source, std::ios::binary);
+                    std::array<char, 65536> buffer{};
+                    while (input) {
+                        input.read(buffer.data(), buffer.size());
+                        output.write(std::string(buffer.data(), static_cast<std::size_t>(input.gcount())));
+                    }
+                    if (!input.eof())
+                        throw Error("Cannot copy relational import metadata");
+                    output.commit();
+                }
+                if (fs::file_size(target) != descriptor.at("bytes").get<std::uint64_t>() ||
+                    sha256_file(target) != descriptor.at("sha256"))
+                    throw Error("Published relational import metadata checksum mismatch");
+            }
+            Json metadata_manifest() const {
+                const auto prepared = read_json(context_.root / "manifest.json");
+                auto index = prepared.at("index");
+                index["path"] = "ingestion.sqlite3";
+                Json result{{"format", "polygraph.relational-import"},
+                            {"version", 1},
+                            {"binding", binding_},
+                            {"source_generation", prepared.at("generation_id")},
+                            {"index", index},
+                            {"counts", context_.artifacts.at("counts")}};
+                if (snapshot_descriptor_) {
+                    auto rows = *snapshot_descriptor_;
+                    rows["path"] = "relationship-rows.jsonl";
+                    result["relationships"] = rows;
+                }
+                return result;
+            }
+            void publish_metadata(const fs::path &directory) {
+                if (!has_relationship_metadata())
+                    return;
+                const auto prepared = read_json(context_.root / "manifest.json");
+                copy_metadata_file(artifact_path(context_.root, prepared.at("index")), directory / "ingestion.sqlite3",
+                                   prepared.at("index"));
+                if (snapshot_descriptor_)
+                    copy_metadata_file(artifact_path(context_.root, *snapshot_descriptor_),
+                                       directory / "relationship-rows.jsonl", *snapshot_descriptor_);
+                write_json_atomic(directory / "ingestion.json", metadata_manifest());
+            }
+            void verify_metadata(const fs::path &directory) {
+                if (!has_relationship_metadata())
+                    return;
+                const auto expected = metadata_manifest();
+                if (read_json(directory / "ingestion.json") != expected)
+                    throw Error("Published relational metadata generation mismatch");
+                for (const auto *field: {"index", "relationships"})
+                    if (expected.contains(field)) {
+                        const auto &descriptor = expected.at(field);
+                        const auto path = artifact_path(directory, descriptor);
+                        if (fs::file_size(path) != descriptor.at("bytes").get<std::uint64_t>() ||
+                            sha256_file(path) != descriptor.at("sha256"))
+                            throw Error("Published relational metadata checksum mismatch");
+                    }
             }
             void verify_catalog(const fs::path &manifest) {
                 const pg::RelationalIdentityResolver resolver(manifest, mapping_);
-                if (read_json(manifest).at("counts").at("nodes") != context_.artifacts.at("counts").at("nodes"))
+                if (read_json(manifest).at("counts").at("nodes").get<std::uint64_t>() !=
+                    context_.artifacts.at("counts").at("nodes").get<std::uint64_t>() +
+                            context_.artifacts.at("counts").at("proxies").get<std::uint64_t>())
                     throw Error("Published catalog count differs from prepared nodes");
-                groups([&](const Json &batch) {
-                    const auto canonical = expected(batch);
-                    const auto &n = node(batch[0].at("type"));
-                    std::vector<domain::SourceIdentity> sources;
-                    for (int row = 0; row < PQntuples(canonical.get()); ++row)
-                        sources.push_back(pg::relational_source_identity(
-                                n, pg::detail::sql_key(canonical.get(), row, 0, n.key_codec)));
-                    const auto resolved = resolver.resolve(sources);
-                    for (std::size_t i = 0; i < resolved.size(); ++i)
-                        if (resolved[i].node.global_id != std::bit_cast<Id>(batch[i].at("id").get<std::int64_t>()))
-                            throw Error("Published catalog ID differs from prepared canonical ID");
-                });
+                for (const auto *kind: {"relational_nodes", "relational_references"})
+                    groups(
+                            [&](const Json &batch) {
+                                const auto canonical = expected(batch);
+                                const auto &n = node(batch[0].at("type"));
+                                std::vector<domain::SourceIdentity> sources;
+                                for (int row = 0; row < PQntuples(canonical.get()); ++row)
+                                    sources.push_back(pg::relational_source_identity(
+                                            n, pg::detail::sql_key(canonical.get(), row, 0, n.key_codec)));
+                                const auto resolved = resolver.resolve(sources);
+                                for (std::size_t i = 0; i < resolved.size(); ++i)
+                                    if (resolved[i].node.global_id !=
+                                        std::bit_cast<Id>(batch[i].at("id").get<std::int64_t>()))
+                                        throw Error("Published catalog ID differs from prepared canonical ID");
+                            },
+                            kind);
+                verify_metadata(manifest.parent_path());
             }
             Json publish() {
                 const auto staged = output_.parent_path() / (".polygraph-" + binding_ + ".staged");
@@ -379,6 +663,7 @@ namespace polygraph::ingestion::detail {
                         (void) pg::attach_relational_nodes(
                                 connection_.get(), mapping_,
                                 {.output_dir = staged, .source_manifest = context_.root / "manifest.json"});
+                    publish_metadata(staged);
                 }
                 try {
                     // Keep application rows stable through verification, rename and the durable
@@ -434,19 +719,37 @@ namespace polygraph::ingestion::detail {
                 output_ = context_.target.at("relationalIdentityOutput").get<std::string>();
                 if (!output_.is_absolute())
                     throw Error("relationalIdentityOutput must resolve to an absolute path");
-                if (context_.artifacts.at("counts").at("edges") != 0 ||
-                    context_.artifacts.at("counts").at("proxies") != 0)
-                    throw Error("Relational relationship/proxy ingestion is not supported by #18");
+                groups([&](const Json &batch) {
+                    node_counts_[batch[0].at("type").get<std::string>()] += batch.size();
+                });
+                groups(
+                        [&](const Json &batch) {
+                            reference_counts_[batch[0].at("type").get<std::string>()] += batch.size();
+                        },
+                        "relational_references");
                 binding_ = sha256_text(Json{{"generation", prepared.at("generation_id")},
                                             {"target", context_.target},
                                             {"mapping", config.at("mapping_sha256")}}
                                                .dump());
                 journal_ = context_.root / "relational-postgresql-publication.json";
+                relationship_snapshot_ = context_.root / "relational-postgresql-relationships.jsonl";
+                if (fs::exists(journal_)) {
+                    const auto journal = read_json(journal_);
+                    if (journal.at("binding") == binding_ && journal.contains("relationship_snapshot"))
+                        snapshot_descriptor_ = journal.at("relationship_snapshot");
+                }
             }
             ~RelationalPostgres() override { rollback(); }
             void preflight() override {
                 try {
                     begin(false);
+                    if (context_.artifacts.at("counts").at("edges") != 0) {
+                        auto privilege = query(
+                                "SELECT pg_catalog.has_database_privilege(pg_catalog.current_database(),'TEMPORARY')",
+                                {}, true);
+                        if (std::string(PQgetvalue(privilege.get(), 0, 0)) != "t")
+                            throw Error("TEMPORARY database privilege required for relationship import verification");
+                    }
                     for (const auto &t: metadata_->tables()) {
                         const auto privilege =
                                 query("SELECT pg_catalog.has_table_privilege($1::pg_catalog.oid,'UPDATE')",
@@ -458,6 +761,10 @@ namespace polygraph::ingestion::detail {
                     require_insert_ = true;
                     empty();
                     groups([&](const Json &batch) { (void) expected(batch); });
+                    groups([&](const Json &batch) { (void) expected(batch); }, "relational_relationships");
+                    std::map<std::string, std::uint64_t> reference_counts;
+                    groups([&](const Json &batch) { verify_node_batch(batch, reference_counts); },
+                           "relational_references");
                     query("COMMIT");
                 } catch (...) {
                     rollback();
@@ -470,14 +777,36 @@ namespace polygraph::ingestion::detail {
                 try {
                     begin(true);
                     empty();
+                    std::map<std::string, std::uint64_t> references;
+                    groups([&](const Json &batch) { verify_node_batch(batch, references); }, "relational_references");
                     groups([&](const Json &batch) {
                         (void) expected(batch);
                         copy(batch);
                     });
+                    if (context_.artifacts.at("counts").at("edges") != 0) {
+                        AtomicOutput snapshot(relationship_snapshot_);
+                        groups(
+                                [&](const Json &batch) {
+                                    auto canonical = expected(batch);
+                                    record_relationships(batch, canonical.get(), snapshot);
+                                },
+                                "relational_relationships");
+                        snapshot.commit();
+                        snapshot_descriptor_ = {{"path", relationship_snapshot_.filename().string()},
+                                                {"bytes", fs::file_size(relationship_snapshot_)},
+                                                {"sha256", sha256_file(relationship_snapshot_)}};
+                    }
+                    // Flush deferred checks/triggers while rollback is still possible.
+                    // No application writes follow the final verification.
+                    query("SET CONSTRAINTS ALL IMMEDIATE");
                     verify_rows();
-                    write_json_atomic(journal_, {{"binding", binding_}, {"state", "pending_commit"}});
+                    Json journal{{"binding", binding_}, {"state", "pending_commit"}};
+                    if (snapshot_descriptor_)
+                        journal["relationship_snapshot"] = *snapshot_descriptor_;
+                    write_json_atomic(journal_, journal);
                     query("COMMIT");
-                    write_json_atomic(journal_, {{"binding", binding_}, {"state", "data_committed"}});
+                    journal["state"] = "data_committed";
+                    write_json_atomic(journal_, journal);
                     return publish();
                 } catch (...) {
                     rollback();
