@@ -141,6 +141,52 @@ namespace polygraph::ingestion::detail {
                         return r;
                 throw Error("Missing dedicated relationship table mapping: " + type);
             }
+            const pg::RelationshipMapping &foreign_key(const std::string &type) const {
+                for (const auto &r: mapping_.relationships())
+                    if (r.logical_type == type && r.kind == pg::RelationshipKind::foreign_key)
+                        return r;
+                throw Error("Missing FK mapping: " + type);
+            }
+            TypeId fk_owner(const pg::RelationshipMapping &r) const {
+                return r.owner == pg::ForeignKeyOwner::from ? r.from_type : r.to_type;
+            }
+            std::uint64_t artifact_count(std::string_view kind) const {
+                std::uint64_t count = 0;
+                for (const auto &a: context_.artifacts.at("artifacts"))
+                    if (a.at("kind") == kind)
+                        count += a.at("records").get<std::uint64_t>();
+                return count;
+            }
+            std::vector<std::string> node_order() {
+                std::map<TypeId, std::set<TypeId>> dependencies;
+                for (const auto &n: mapping_.nodes())
+                    if (node_counts_[n.logical_type])
+                        dependencies[n.type];
+                for (const auto &r: mapping_.relationships()) {
+                    if (r.kind != pg::RelationshipKind::foreign_key)
+                        continue;
+                    const auto &owner = mapping_.node(fk_owner(r));
+                    const auto target = r.owner == pg::ForeignKeyOwner::from ? r.to_type : r.from_type;
+                    const auto &column = meta(owner).columns.at(r.column);
+                    if (!column.nullable && dependencies.contains(owner.type) && dependencies.contains(target))
+                        dependencies[owner.type].insert(target);
+                }
+                std::vector<std::string> result;
+                while (!dependencies.empty()) {
+                    auto ready = std::find_if(dependencies.begin(), dependencies.end(),
+                                              [](const auto &entry) { return entry.second.empty(); });
+                    if (ready == dependencies.end())
+                        throw Error("Unsupported nonnullable FK dependency cycle; no rows have been imported");
+                    const auto type = ready->first;
+                    result.push_back(mapping_.node(type).logical_type);
+                    dependencies.erase(ready);
+                    for (auto &[owner, refs]: dependencies) {
+                        (void) owner;
+                        refs.erase(type);
+                    }
+                }
+                return result;
+            }
             const pg::SqlTable &destination(const Json &row) const {
                 return row.value("entity", "node") == "relationship" ? relationship(row.at("type")).table
                                                                      : node(row.at("type")).table;
@@ -171,6 +217,7 @@ namespace polygraph::ingestion::detail {
             void check_row(const Json &r) {
                 const bool edge = r.value("entity", "node") == "relationship";
                 const bool reference = r.value("entity", "node") == "reference";
+                const bool assignment = r.value("entity", "node") == "foreignKey";
                 const auto &m = meta(destination(r));
                 std::optional<std::string> primary_key;
                 std::set<std::string> allowed;
@@ -188,6 +235,16 @@ namespace polygraph::ingestion::detail {
                     if (!reference)
                         for (const auto &p: n.properties)
                             allowed.insert(p.column);
+                    if (!reference)
+                        for (const auto &fk: mapping_.relationships())
+                            if (fk.kind == pg::RelationshipKind::foreign_key && fk_owner(fk) == n.type)
+                                allowed.insert(fk.column);
+                    if (assignment) {
+                        const auto &fk = foreign_key(r.at("foreign_key"));
+                        if (fk_owner(fk) != n.type)
+                            throw Error("FK assignment owner differs from mapping");
+                        required.push_back(fk.column);
+                    }
                 }
                 if (primary_key) {
                     allowed.insert(*primary_key);
@@ -223,7 +280,7 @@ namespace polygraph::ingestion::detail {
                                 throw Error("Native varchar overflow: " + col);
                         }
                     }
-                    if (require_insert_ && !reference &&
+                    if (require_insert_ && !reference && !assignment &&
                         checked_columns_.insert(std::to_string(m.oid) + ":" + col).second) {
                         auto privilege = query(
                                 "SELECT "
@@ -237,12 +294,12 @@ namespace polygraph::ingestion::detail {
                     if (!present.contains(col))
                         throw Error("Missing native key/endpoint: " + col);
                 for (const auto &[name, c]: m.columns)
-                    if (!reference && !c.nullable && !c.generated && !c.has_default && c.identity.empty() &&
-                        !present.contains(name))
+                    if (!reference && !assignment && !c.nullable && !c.generated && !c.has_default &&
+                        c.identity.empty() && !present.contains(name))
                         throw Error("Missing required native column: " + name);
             }
             template<class F>
-            void groups(F action, std::string_view kind = "relational_nodes") {
+            void groups(F action, std::string_view kind = "relational_nodes", const std::string &type = "") {
                 std::map<std::string, Json> groups;
                 std::size_t bytes = 0, count = 0;
                 const auto flush = [&] {
@@ -255,9 +312,11 @@ namespace polygraph::ingestion::detail {
                 };
                 for (const auto &a: context_.artifacts.at("artifacts")) {
                     if (a.at("kind") != "relational_nodes" && a.at("kind") != "relational_relationships" &&
-                        a.at("kind") != "relational_references")
+                        a.at("kind") != "relational_references" && a.at("kind") != "relational_foreign_keys")
                         throw Error("Non-relational artifact in mapped import");
                     if (a.at("kind") != kind)
+                        continue;
+                    if (!type.empty() && a.at("collection") != type)
                         continue;
                     std::ifstream input(artifact_path(context_.root, a));
                     if (!input)
@@ -270,7 +329,8 @@ namespace polygraph::ingestion::detail {
                         if (count && (bytes + line.size() > 4 * 1024 * 1024 || count >= 128))
                             flush();
                         auto row = Json::parse(line);
-                        const auto group = Json::array({row.at("type"), row.at("columns")}).dump();
+                        const auto group =
+                                Json::array({row.at("type"), row.at("columns"), row.value("foreign_key", "")}).dump();
                         if (!groups.contains(group))
                             groups[group] = Json::array();
                         groups[group].push_back(std::move(row));
@@ -370,22 +430,18 @@ namespace polygraph::ingestion::detail {
                 }
                 return result;
             }
-            void record_relationships(const Json &batch, PGresult *expected_rows, AtomicOutput &snapshot) {
-                const auto &r = relationship(batch[0].at("type"));
-                const auto columns = relationship_columns(r);
-                const pg::SqlTable staged{
-                        "pg_temp", "polygraph_edge_stage_" +
-                                           sha256_text(Json::array({r.logical_type, batch[0].at("columns")}).dump())
-                                                   .substr(0, 24)};
-                std::string supplied, definitions;
-                const auto &metadata = meta(r.table);
+            pg::SqlTable stage_rows(const Json &batch, const std::string &prefix) {
+                const pg::SqlTable staged{"pg_temp",
+                                          prefix + sha256_text(Json::array({batch[0].at("type"), batch[0].at("columns"),
+                                                                            batch[0].value("foreign_key", "")})
+                                                                       .dump())
+                                                           .substr(0, 24)};
+                const auto &metadata = meta(destination(batch[0]));
+                std::string definitions;
                 for (const auto &col: batch[0].at("columns")) {
                     const auto name = col.get<std::string>();
-                    if (!supplied.empty()) {
-                        supplied += ",";
+                    if (!definitions.empty())
                         definitions += ",";
-                    }
-                    supplied += pg::quote_identifier(name);
                     definitions += pg::quote_identifier(name) + " " + sql_type(metadata.columns.at(name));
                 }
                 if (staging_tables_.insert(staged.name).second)
@@ -393,6 +449,68 @@ namespace polygraph::ingestion::detail {
                 else
                     query("TRUNCATE " + table(staged));
                 copy(batch, &staged);
+                return staged;
+            }
+            void copy_nodes(const Json &batch) {
+                (void) expected(batch);
+                Json initial = batch;
+                for (auto &row: initial) {
+                    const auto &n = node(row.at("type"));
+                    for (const auto &r: mapping_.relationships())
+                        if (r.kind == pg::RelationshipKind::foreign_key && fk_owner(r) == n.type &&
+                            meta(n).columns.at(r.column).nullable) {
+                            for (std::size_t i = 0; i < row.at("columns").size(); ++i)
+                                if (row.at("columns")[i] == r.column)
+                                    row["values"][i] = nullptr;
+                        }
+                }
+                copy(initial);
+            }
+            void assign_foreign_keys(const Json &batch) {
+                auto canonical = expected(batch);
+                const auto &r = foreign_key(batch[0].at("foreign_key"));
+                const auto &owner = node(batch[0].at("type"));
+                const auto &metadata = meta(owner);
+                if (!metadata.columns.at(r.column).nullable)
+                    return; // Nonnullable values were supplied during dependency-ordered insertion.
+                const auto staged = stage_rows(batch, "polygraph_fk_stage_");
+                // Fresh TEMP tables otherwise get a generic cardinality estimate that
+                // can make each small batch scan the entire newly imported owner table.
+                query("ANALYZE " + table(staged));
+                std::string pk = "n." + pg::quote_identifier(owner.primary_key);
+                if (const auto &collation = metadata.columns.at(owner.primary_key).collation)
+                    pk += " COLLATE " + table(*collation);
+                std::string sql = "UPDATE " + table(owner.table) + " n SET " + pg::quote_identifier(r.column) + "=s." +
+                                  pg::quote_identifier(r.column) + " FROM " + table(staged) + " s WHERE " + pk +
+                                  " OPERATOR(pg_catalog.=) s." + pg::quote_identifier(owner.primary_key) +
+                                  " RETURNING ";
+                for (const auto &col: batch[0].at("columns")) {
+                    if (!sql.ends_with(" RETURNING "))
+                        sql += ",";
+                    sql += "n." + pg::quote_identifier(col.get<std::string>());
+                }
+                auto actual = query(sql, {}, true);
+                if (PQntuples(actual.get()) != static_cast<int>(batch.size()))
+                    throw Error("FK update did not match exactly the imported owner rows");
+                std::map<std::string, std::int64_t> values;
+                for (int row = 0; row < PQntuples(canonical.get()); ++row)
+                    ++values[native_row(canonical.get(), row, 0, PQnfields(canonical.get())).dump()];
+                for (int row = 0; row < PQntuples(actual.get()); ++row)
+                    if (--values[native_row(actual.get(), row, 0, PQnfields(actual.get())).dump()] < 0)
+                        throw Error("FK update changed an explicit owner/reference value");
+            }
+            void record_relationships(const Json &batch, PGresult *expected_rows, AtomicOutput &snapshot) {
+                const auto &r = relationship(batch[0].at("type"));
+                const auto columns = relationship_columns(r);
+                const auto staged = stage_rows(batch, "polygraph_edge_stage_");
+                std::string supplied;
+                for (const auto &col: batch[0].at("columns")) {
+                    const auto name = col.get<std::string>();
+                    if (!supplied.empty()) {
+                        supplied += ",";
+                    }
+                    supplied += pg::quote_identifier(name);
+                }
                 // RETURNING identifies this batch directly; rescanning old application rows
                 // would grow quadratically and would confuse audit-trigger tuple updates.
                 std::string sql = "INSERT INTO " + table(r.table) + "(" + supplied + ") SELECT " + supplied + " FROM " +
@@ -426,7 +544,7 @@ namespace polygraph::ingestion::detail {
                 }
             }
             void verify_relationships() {
-                const auto count = context_.artifacts.at("counts").at("edges").get<std::uint64_t>();
+                const auto count = artifact_count("relational_relationships");
                 if (!count) {
                     for (const auto &r: mapping_.relationships())
                         if (r.kind == pg::RelationshipKind::table) {
@@ -554,6 +672,8 @@ namespace polygraph::ingestion::detail {
                         throw Error("Native destination count differs from prepared nodes");
                 }
                 verify_relationships();
+                std::map<std::string, std::uint64_t> assignments;
+                groups([&](const Json &batch) { verify_node_batch(batch, assignments); }, "relational_foreign_keys");
             }
             bool has_relationship_metadata() const {
                 return context_.artifacts.at("counts").at("edges") != 0 ||
@@ -743,7 +863,7 @@ namespace polygraph::ingestion::detail {
             void preflight() override {
                 try {
                     begin(false);
-                    if (context_.artifacts.at("counts").at("edges") != 0) {
+                    if (artifact_count("relational_relationships") || artifact_count("relational_foreign_keys")) {
                         auto privilege = query(
                                 "SELECT pg_catalog.has_database_privilege(pg_catalog.current_database(),'TEMPORARY')",
                                 {}, true);
@@ -762,6 +882,9 @@ namespace polygraph::ingestion::detail {
                     empty();
                     groups([&](const Json &batch) { (void) expected(batch); });
                     groups([&](const Json &batch) { (void) expected(batch); }, "relational_relationships");
+                    groups([&](const Json &batch) { (void) expected(batch); }, "relational_foreign_keys");
+                    if (artifact_count("relational_foreign_keys"))
+                        (void) node_order();
                     std::map<std::string, std::uint64_t> reference_counts;
                     groups([&](const Json &batch) { verify_node_batch(batch, reference_counts); },
                            "relational_references");
@@ -779,11 +902,13 @@ namespace polygraph::ingestion::detail {
                     empty();
                     std::map<std::string, std::uint64_t> references;
                     groups([&](const Json &batch) { verify_node_batch(batch, references); }, "relational_references");
-                    groups([&](const Json &batch) {
-                        (void) expected(batch);
-                        copy(batch);
-                    });
-                    if (context_.artifacts.at("counts").at("edges") != 0) {
+                    if (artifact_count("relational_foreign_keys"))
+                        for (const auto &type: node_order())
+                            groups([&](const Json &batch) { copy_nodes(batch); }, "relational_nodes", type);
+                    else
+                        groups([&](const Json &batch) { copy_nodes(batch); });
+                    groups([&](const Json &batch) { assign_foreign_keys(batch); }, "relational_foreign_keys");
+                    if (artifact_count("relational_relationships")) {
                         AtomicOutput snapshot(relationship_snapshot_);
                         groups(
                                 [&](const Json &batch) {

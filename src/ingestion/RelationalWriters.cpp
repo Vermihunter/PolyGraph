@@ -83,12 +83,55 @@ namespace polygraph::ingestion::detail {
         const auto config = relational_configuration(o);
         auto logical = domain::logical_schema_from_json(config.at("schema"));
         const auto mapping = postgres::parse_relational_mapping(config.at("mapping"), *logical);
+        bool foreign_keys = false;
+        for (const auto &r: mapping.relationships())
+            foreign_keys = foreign_keys || r.kind == postgres::RelationshipKind::foreign_key;
+        if (foreign_keys) {
+            // TEMP belongs to this read-only SQLite connection, never the immutable index.
+            db.exec("CREATE TEMP TABLE relational_fk(owner_id INTEGER,type TEXT,target_id INTEGER,target_key "
+                    "TEXT,PRIMARY KEY(owner_id,type)) WITHOUT ROWID; BEGIN");
+            auto candidates = db.statement(
+                    "SELECT e.type,f.id,f.key,f.type,f.owner,t.id,t.key,t.type,t.owner FROM replicas r "
+                    "JOIN edges e ON e.id=r.edge_id JOIN nodes f ON f.id=e.from_id JOIN nodes t ON t.id=e.to_id "
+                    "WHERE r.backend='PostgreSQL' ORDER BY e.id");
+            auto existing = db.statement("SELECT target_id FROM relational_fk WHERE owner_id=? AND type=?");
+            auto insert = db.statement("INSERT INTO relational_fk VALUES(?,?,?,?)");
+            while (candidates.step()) {
+                for (const auto &r: mapping.relationships()) {
+                    if (r.kind != postgres::RelationshipKind::foreign_key || r.logical_type != candidates.text(0))
+                        continue;
+                    if (candidates.text(3) != mapping.node(r.from_type).logical_type ||
+                        candidates.text(7) != mapping.node(r.to_type).logical_type)
+                        throw Error("FK endpoint logical type differs from mapping: " + r.logical_type);
+                    const int owner = r.owner == postgres::ForeignKeyOwner::from ? 1 : 5;
+                    const int target = owner == 1 ? 5 : 1;
+                    if (candidates.text(owner + 3) != "PostgreSQL")
+                        throw Error("FK owner must be a newly imported PostgreSQL node, not an existing reference row");
+                    existing.bind(1, candidates.integer(owner));
+                    existing.bind(2, r.logical_type);
+                    if (existing.step()) {
+                        if (existing.integer(0) != candidates.integer(target))
+                            throw Error("Conflicting FK targets for owner/column: " + r.logical_type + "." + r.column);
+                        existing.reset();
+                        continue;
+                    }
+                    existing.reset();
+                    insert.bind(1, candidates.integer(owner));
+                    insert.bind(2, r.logical_type);
+                    insert.bind(3, candidates.integer(target));
+                    insert.bind(4, node_key(mapping.node(owner == 1 ? r.to_type : r.from_type),
+                                            candidates.text(target + 1)));
+                    insert.run();
+                }
+            }
+            db.exec("COMMIT");
+        }
         Json artifacts = Json::array();
         std::unique_ptr<AtomicOutput> output;
         fs::path path;
         std::uint64_t bytes = 0, count = 0, total = 0, edge_count = 0, proxy_count = 0;
         unsigned sequence = 0;
-        std::string kind;
+        std::string kind, collection;
         const auto close = [&] {
             if (!output)
                 return;
@@ -96,19 +139,20 @@ namespace polygraph::ingestion::detail {
             output.reset();
             artifacts.push_back({{"path", fs::relative(path, root).generic_string()},
                                  {"kind", kind},
-                                 {"collection", ""},
+                                 {"collection", collection},
                                  {"records", count},
                                  {"bytes", fs::file_size(path)},
                                  {"sha256", sha256_file(path)}});
         };
-        const auto write = [&](const Json &row, const std::string &row_kind) {
+        const auto write = [&](const Json &row, const std::string &row_kind, const std::string &row_collection = "") {
             const auto line = row.dump() + "\n";
             if (line.size() > static_cast<std::uint64_t>(o.max_record_mb) * 1024 * 1024)
                 throw Error("Relational artifact row exceeds max-record-mb");
-            if (output &&
-                (row_kind != kind || bytes + line.size() > static_cast<std::uint64_t>(o.chunk_size_mb) * 1024 * 1024))
+            if (output && (row_kind != kind || collection != row_collection ||
+                           bytes + line.size() > static_cast<std::uint64_t>(o.chunk_size_mb) * 1024 * 1024))
                 close();
             kind = row_kind;
+            collection = row_collection;
             if (!output) {
                 path = directory / (kind + "-" + std::to_string(sequence++) + ".jsonl");
                 output = std::make_unique<AtomicOutput>(path);
@@ -118,15 +162,30 @@ namespace polygraph::ingestion::detail {
             bytes += line.size();
             ++count;
         };
-        auto rows = db.statement("SELECT id,key,type,properties FROM nodes WHERE owner='PostgreSQL' ORDER BY id");
+        const auto assignment = [&](std::int64_t id, const std::string &type) {
+            auto q = db.statement("SELECT target_id,target_key FROM relational_fk WHERE owner_id=? AND type=?");
+            q.bind(1, id);
+            q.bind(2, type);
+            if (q.step())
+                return Json{{"id", q.integer(0)}, {"key", q.text(1)}};
+            return Json{{"id", nullptr}, {"key", nullptr}};
+        };
+        auto rows = db.statement(
+                std::string("SELECT id,key,type,properties FROM nodes WHERE owner='PostgreSQL' ORDER BY ") +
+                (foreign_keys ? "type,id" : "id"));
         while (rows.step()) {
             const auto type = rows.text(2);
             const auto &node = mapping.node(logical->node_type_id(type));
             const auto pk = node_key(node, rows.text(1));
             Json columns = Json::array({node.primary_key}), values = Json::array({pk});
             properties(columns, values, Json::parse(rows.text(3)), node.properties, type);
+            if (foreign_keys)
+                for (const auto &r: mapping.relationships())
+                    if (r.kind == postgres::RelationshipKind::foreign_key &&
+                        (r.owner == postgres::ForeignKeyOwner::from ? r.from_type : r.to_type) == node.type)
+                        column(columns, values, r.column, assignment(rows.integer(0), r.logical_type).at("key"));
             write({{"id", rows.integer(0)}, {"type", type}, {"columns", columns}, {"values", values}},
-                  "relational_nodes");
+                  "relational_nodes", foreign_keys ? type : "");
             ++total;
         }
         auto edges = db.statement("SELECT e.id,e.type,e.properties,f.id,f.key,f.type,t.id,t.key,t.type,s.key "
@@ -139,11 +198,15 @@ namespace polygraph::ingestion::detail {
             for (const auto &r: mapping.relationships())
                 if (r.logical_type == type)
                     relation = &r;
-            if (!relation || relation->kind != postgres::RelationshipKind::table)
-                throw Error("Dedicated relationship-table mapping required for " + type + "; FK writes remain #20");
+            if (!relation)
+                throw Error("Relationship mapping required for " + type);
             const auto &from = mapping.node(relation->from_type), &to = mapping.node(relation->to_type);
             if (edges.text(5) != from.logical_type || edges.text(8) != to.logical_type)
                 throw Error("Relationship endpoint logical type differs from mapping: " + type);
+            if (relation->kind == postgres::RelationshipKind::foreign_key) {
+                ++edge_count;
+                continue;
+            }
             Json columns = Json::array(), values = Json::array();
             if (relation->primary_key) {
                 if (edges.text(9).empty())
@@ -190,6 +253,28 @@ namespace polygraph::ingestion::detail {
                    {"values", Json::array({node_key(node, proxies.text(1))})}},
                   "relational_references");
             ++proxy_count;
+        }
+        if (foreign_keys) {
+            auto owners = db.statement("SELECT id,key,type FROM nodes WHERE owner='PostgreSQL' ORDER BY type,id");
+            while (owners.step()) {
+                const auto &n = mapping.node(logical->node_type_id(owners.text(2)));
+                for (const auto &r: mapping.relationships()) {
+                    if (r.kind != postgres::RelationshipKind::foreign_key ||
+                        (r.owner == postgres::ForeignKeyOwner::from ? r.from_type : r.to_type) != n.type)
+                        continue;
+                    const auto target = assignment(owners.integer(0), r.logical_type);
+                    Json columns = Json::array({n.primary_key}), values = Json::array({node_key(n, owners.text(1))});
+                    column(columns, values, r.column, target.at("key"));
+                    write({{"entity", "foreignKey"},
+                           {"id", owners.integer(0)},
+                           {"type", n.logical_type},
+                           {"foreign_key", r.logical_type},
+                           {"target_id", target.at("id")},
+                           {"columns", columns},
+                           {"values", values}},
+                          "relational_foreign_keys");
+                }
+            }
         }
         close();
         return {{"artifacts", artifacts},

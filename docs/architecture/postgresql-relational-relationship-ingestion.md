@@ -3,7 +3,8 @@
 The [relational import pipeline](postgresql-relational-ingestion.md) writes edges
 into configured `kind: "table"` relationship tables after their nodes exist.
 The same mapping drives the [relationship-table reader](postgresql-relational-relationships.md).
-Foreign-key assignment writes remain #20; runtime BFS integration remains #21.
+[Foreign-key assignment writes (#20)](postgresql-relational-fk-ingestion.md) use
+the same transaction; runtime BFS integration remains #21.
 
 ## Mapping and source identities
 
@@ -43,8 +44,8 @@ A PK may also be an endpoint/property column when their exact values agree.
 Endpoint selectors must resolve to normalized source vertices of the mapping's
 logical endpoint types. The writer extracts each vertex's canonical native key;
 internal routing IDs are never written into endpoint columns. Wrong/missing
-types, unresolved source identities and foreign-key relationship mappings fail
-offline preparation. Explicit edge identities are required for mapped edge PKs;
+types and unresolved source identities fail offline preparation. Explicit edge
+identities are required for mapped edge PKs;
 keyless tables also support normalized edges without an external edge identity.
 
 ## Import, native values and verification

@@ -5,6 +5,7 @@
 #include <sqlite3.h>
 #include <unistd.h>
 #include "../src/ingestion/Native.hpp"
+#include "data_access/adapters/PostgreSQL/RelationalForeignKeyReader.hpp"
 #include "data_access/adapters/PostgreSQL/RelationalIdentityResolver.hpp"
 #include "data_access/adapters/PostgreSQL/RelationalRelationshipTableReader.hpp"
 #include "domain/graph/LogicalGraphSchemaJson.hpp"
@@ -190,6 +191,24 @@ namespace {
             if (sqlite3_step(result.get()) != SQLITE_ROW)
                 throw std::runtime_error("Cannot read published metadata row");
             return sqlite3_column_int(result.get(), 0);
+        }
+        void foreign_keys(bool owner_to = false, bool nullable = true) {
+            const auto column = owner_to ? "author_id" : "fav_post";
+            sql(db.get(), std::string("ALTER TABLE app.") +
+                                  (owner_to ? "post ADD COLUMN author_id bigint" : "person ADD COLUMN fav_post uuid") +
+                                  (nullable ? "" : " NOT NULL") + " REFERENCES app." +
+                                  (owner_to ? "person(id)" : "post(id)"));
+            schema["relations"].push_back({{"name", "FAVORITE"}, {"from", "Person"}, {"to", "Post"}});
+            mapping["relationships"].push_back({{"type", "FAVORITE"},
+                                                {"kind", "foreignKey"},
+                                                {"owner", owner_to ? "to" : "from"},
+                                                {"column", column}});
+            ing::write_json_atomic(root / "schema.json", schema);
+            ing::write_json_atomic(root / "mapping.json", mapping);
+            edges = {{.type = "FAVORITE",
+                      .identity = ing::SourceIdentity{"app", "FAVORITE", "fav-1"},
+                      .from_identity = rows[0].identity,
+                      .to_identity = rows[2].identity}};
         }
         void relationships(bool keyed = true) {
             sql(db.get(), "CREATE TABLE app.likes(" + std::string(keyed ? "id bigint PRIMARY KEY," : "") +
@@ -770,6 +789,221 @@ TEST_F(RelationalIngestion, AuditTriggersCanUpdateUnmappedColumnsAcrossRelations
     prepare();
     ASSERT_NO_THROW(execute());
     EXPECT_EQ(scalar("SELECT count(*) FROM app.likes WHERE touched_at IS NOT NULL"), "273");
+    EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
+}
+TEST_F(RelationalIngestion, ForeignKeyImportResolvesNativeTargetsAndNullableAbsence) {
+    foreign_keys();
+    prepare();
+    execute();
+    EXPECT_EQ(scalar("SELECT fav_post FROM app.person WHERE id=7"), uuid);
+    EXPECT_EQ(scalar("SELECT fav_post IS NULL FROM app.person WHERE id=8"), "t");
+    EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
+    auto logical = domain::logical_schema_from_json(schema);
+    auto map = postgres::parse_relational_mapping(mapping, *logical);
+    postgres::RelationalIdentityResolver resolver(root / "catalog/manifest.json", map);
+    const std::array<domain::SourceIdentity, 1> ids{*rows[2].identity};
+    const auto post = resolver.resolve(ids);
+    const std::array<NodeRef, 1> frontier{post[0].node};
+    postgres::RelationalForeignKeyReader reader(map, resolver);
+    unsigned incoming = 0;
+    reader.stream(db.get(), frontier, {.direction = postgres::RelationshipLookupDirection::incoming},
+                  [&](auto batch) { incoming += batch.size(); });
+    EXPECT_EQ(incoming, 1);
+}
+TEST_F(RelationalIngestion, ForeignKeyOwnerToUsesReferencedFromKey) {
+    foreign_keys(true);
+    prepare();
+    execute();
+    EXPECT_EQ(scalar("SELECT author_id FROM app.post"), "7");
+    EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
+}
+TEST_F(RelationalIngestion, ForeignKeyDuplicateAssignmentsAreIdempotent) {
+    foreign_keys();
+    auto duplicate = edges[0];
+    duplicate.identity->value = "fav-duplicate";
+    edges.push_back(duplicate);
+    prepare();
+    execute();
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person WHERE fav_post IS NOT NULL"), "1");
+    EXPECT_EQ(metadata_count("SELECT count(*) FROM source_edges"), 2);
+}
+TEST_F(RelationalIngestion, ForeignKeyConflictingTargetsAreRejectedOffline) {
+    foreign_keys();
+    rows.push_back(
+            {.type = "Post", .identity = ing::SourceIdentity{"app", "Post", "00000000-0000-0000-0000-00000000000b"}});
+    auto conflict = edges[0];
+    conflict.identity->value = "conflict";
+    conflict.to_identity = rows.back().identity;
+    edges.push_back(conflict);
+    EXPECT_THROW(prepare(), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+}
+TEST_F(RelationalIngestion, ForeignKeyNonnullableAcyclicDependenciesInsertReferencedTypesFirst) {
+    foreign_keys(false, false);
+    auto second = edges[0];
+    second.identity->value = "fav-2";
+    second.from_identity = rows[1].identity;
+    edges.push_back(second);
+    prepare();
+    execute();
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person WHERE fav_post IS NOT NULL"), "2");
+}
+TEST_F(RelationalIngestion, ForeignKeyRequiredAbsenceFailsPreflight) {
+    foreign_keys(false, false);
+    prepare();
+    EXPECT_THROW(execute(), std::exception);
+    EXPECT_FALSE(ing::fs::exists(root / "prepared/execution-state.json"));
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.post"), "0");
+}
+TEST_F(RelationalIngestion, ForeignKeyNullableNoEdgeOverridesNativeDefault) {
+    foreign_keys();
+    sql(db.get(), "ALTER TABLE app.person ALTER COLUMN fav_post SET DEFAULT '00000000-0000-0000-0000-00000000000a'");
+    edges.clear();
+    prepare();
+    execute();
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person WHERE fav_post IS NULL"), "2");
+    EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
+}
+TEST_F(RelationalIngestion, ForeignKeyRecoveryChecksCommittedAssignmentsWithoutReimporting) {
+    foreign_keys();
+    prepare();
+    ing::fs::create_directory(root / "catalog");
+    EXPECT_THROW(execute(), std::exception);
+    EXPECT_EQ(scalar("SELECT fav_post FROM app.person WHERE id=7"), uuid);
+    ing::fs::remove(root / "catalog");
+    EXPECT_NO_THROW(
+            (void) ing::recover_postgres_relational_identity(root / "prepared/manifest.json", root / "targets.json"));
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "2");
+    sql(db.get(), "UPDATE app.person SET fav_post=NULL WHERE id=7");
+    EXPECT_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"), std::exception);
+}
+TEST_F(RelationalIngestion, ForeignKeyNonnullableCyclesFailBeforeAnyWrites) {
+    foreign_keys(false, false);
+    sql(db.get(), "ALTER TABLE app.post ADD COLUMN creator_id bigint NOT NULL REFERENCES app.person(id) DEFERRABLE "
+                  "INITIALLY DEFERRED");
+    schema["relations"].push_back({{"name", "CREATOR"}, {"from", "Post"}, {"to", "Person"}});
+    mapping["relationships"].push_back(
+            {{"type", "CREATOR"}, {"kind", "foreignKey"}, {"owner", "from"}, {"column", "creator_id"}});
+    ing::write_json_atomic(root / "schema.json", schema);
+    ing::write_json_atomic(root / "mapping.json", mapping);
+    auto second = edges[0];
+    second.identity->value = "fav-2";
+    second.from_identity = rows[1].identity;
+    edges.push_back(second);
+    edges.push_back({.type = "CREATOR",
+                     .identity = ing::SourceIdentity{"app", "CREATOR", "creator"},
+                     .from_identity = rows[2].identity,
+                     .to_identity = rows[0].identity});
+    prepare();
+    try {
+        execute();
+        FAIL() << "Unsupported nonnullable cycle accepted";
+    } catch (const std::exception &e) {
+        EXPECT_NE(std::string(e.what()).find("phase=preflight"), std::string::npos);
+    }
+    EXPECT_FALSE(ing::fs::exists(root / "prepared/execution-state.json"));
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.post"), "0");
+}
+TEST_F(RelationalIngestion, ForeignKeyNullableCyclesAndSelfLoopsAreAssignedAfterInsertion) {
+    foreign_keys();
+    sql(db.get(), "ALTER TABLE app.person ADD COLUMN manager_id bigint REFERENCES app.person(id)");
+    schema["relations"].push_back({{"name", "MANAGER"}, {"from", "Person"}, {"to", "Person"}});
+    mapping["relationships"].push_back(
+            {{"type", "MANAGER"}, {"kind", "foreignKey"}, {"owner", "from"}, {"column", "manager_id"}});
+    ing::write_json_atomic(root / "schema.json", schema);
+    ing::write_json_atomic(root / "mapping.json", mapping);
+    rows.push_back({.type = "Person", .identity = ing::SourceIdentity{"app", "Person", std::int64_t{9}}});
+    for (const auto &[from, to]: std::vector<std::pair<unsigned, unsigned>>{{0, 1}, {1, 0}, {3, 3}})
+        edges.push_back({.type = "MANAGER",
+                         .identity = ing::SourceIdentity{"app", "MANAGER", std::int64_t{from}},
+                         .from_identity = rows[from].identity,
+                         .to_identity = rows[to].identity});
+    prepare();
+    execute();
+    EXPECT_EQ(scalar("SELECT manager_id FROM app.person WHERE id=7"), "8");
+    EXPECT_EQ(scalar("SELECT manager_id FROM app.person WHERE id=8"), "7");
+    EXPECT_EQ(scalar("SELECT manager_id FROM app.person WHERE id=9"), "9");
+    EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
+}
+TEST_F(RelationalIngestion, ForeignKeyRemoteTargetUsesExistingLocalReferenceAndPreservesOwner) {
+    foreign_keys();
+    remote_placement();
+    sql(db.get(), "INSERT INTO app.post VALUES('00000000-0000-0000-0000-00000000000a','remote reference')");
+    auto executor = pg_executor(prepare());
+    executor->preflight();
+    (void) executor->run();
+    (void) executor->verify();
+    EXPECT_EQ(scalar("SELECT fav_post FROM app.person WHERE id=7"), uuid);
+    EXPECT_EQ(scalar("SELECT content FROM app.post"), "remote reference");
+    EXPECT_EQ(metadata_count("SELECT count(*) FROM proxies WHERE backend='PostgreSQL'"), 1);
+    EXPECT_EQ(metadata_count("SELECT count(*) FROM source_edges"), 1);
+}
+TEST_F(RelationalIngestion, ForeignKeyRemoteOnlyTargetIsRejectedBeforeWrites) {
+    foreign_keys();
+    remote_placement();
+    auto executor = pg_executor(prepare());
+    EXPECT_THROW(executor->preflight(), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.post"), "0");
+}
+TEST_F(RelationalIngestion, ForeignKeyPreexistingReferenceOwnerIsNeverUpdated) {
+    foreign_keys(true);
+    remote_placement();
+    sql(db.get(), "INSERT INTO app.post(id,content) VALUES('00000000-0000-0000-0000-00000000000a','preserve')");
+    EXPECT_THROW(prepare(), std::exception);
+    EXPECT_EQ(scalar("SELECT author_id IS NULL FROM app.post"), "t");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+}
+TEST_F(RelationalIngestion, ForeignKeyUpdateConstraintFailureRollsBackAllInsertedRows) {
+    foreign_keys();
+    sql(db.get(), "ALTER TABLE app.person ADD CHECK(fav_post IS NULL OR id<>7)");
+    prepare();
+    EXPECT_THROW(execute(), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.post"), "0");
+    EXPECT_FALSE(ing::fs::exists(root / "catalog/manifest.json"));
+}
+TEST_F(RelationalIngestion, ForeignKeyAssignmentsStayCorrectAcrossBoundedBatches) {
+    foreign_keys();
+    for (std::int64_t i = 10; i < 280; ++i) {
+        rows.push_back({.type = "Person", .identity = ing::SourceIdentity{"app", "Person", i}});
+        edges.push_back({.type = "FAVORITE",
+                         .identity = ing::SourceIdentity{"app", "FAVORITE", i},
+                         .from_identity = rows.back().identity,
+                         .to_identity = rows[2].identity});
+    }
+    prepare();
+    execute();
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person WHERE fav_post IS NOT NULL"), "271");
+    EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
+}
+TEST_F(RelationalIngestion, ForeignKeyUnresolvedSourceReferenceIsRejectedOffline) {
+    foreign_keys();
+    edges[0].to_identity = ing::SourceIdentity{"app", "Post", "00000000-0000-0000-0000-00000000000b"};
+    EXPECT_THROW(prepare(), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.person"), "0");
+}
+TEST_F(RelationalIngestion, ForeignKeyMappedPropertyCannotContradictRelationshipAssignment) {
+    foreign_keys(true);
+    schema["nodeTypes"][1]["properties"].push_back({{"name", "author"}, {"type", "integer"}});
+    mapping["nodes"][1]["properties"]["author"] = "author_id";
+    ing::write_json_atomic(root / "schema.json", schema);
+    ing::write_json_atomic(root / "mapping.json", mapping);
+    rows[2].properties["author"] = 8;
+    EXPECT_THROW(prepare(), std::exception);
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.post"), "0");
+}
+TEST_F(RelationalIngestion, ForeignKeyAndJunctionRelationshipsShareOneAtomicImport) {
+    relationships();
+    const auto junction = edges;
+    foreign_keys();
+    edges.insert(edges.end(), junction.begin(), junction.end());
+    prepare();
+    execute();
+    EXPECT_EQ(scalar("SELECT count(*) FROM app.likes"), "3");
+    EXPECT_EQ(scalar("SELECT fav_post FROM app.person WHERE id=7"), uuid);
+    EXPECT_EQ(metadata_count("SELECT count(*) FROM source_edges"), 4);
     EXPECT_NO_THROW((void) ing::verify_live(root / "prepared/manifest.json", root / "targets.json"));
 }
 int main(int argc, char **argv) {

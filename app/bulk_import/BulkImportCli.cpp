@@ -29,7 +29,7 @@ polygraph_bulk_import import --graph-manifest <domain.json>
     Existing load --docker remains the disposable resource lifecycle entry point.
 
 polygraph_bulk_import recover-relational --manifest <manifest.json> --target-config <targets.json>
-    Verify committed relational node data and finish interrupted identity publication.
+    Verify committed relational data and finish interrupted identity publication.
     Never reimports or overwrites application rows.
 
 polygraph_bulk_import adapters

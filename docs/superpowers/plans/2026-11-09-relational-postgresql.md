@@ -160,14 +160,14 @@ Introduce live fixtures with #13; grow them throughout the work. #22 consolidate
 
 - [x] Add failing junction import tests covering external key resolution, optional attributes, parallel edges, self-loops and missing references.
 - [x] COPY junction rows after referenced nodes exist; honor existing constraints. Verify exact endpoint/type/attribute rows and preserve canonical edge identity in metadata where the application table has no edge key. Uses private typed COPY staging followed by set-based INSERT RETURNING so batch capture never rescans old application rows.
-- [ ] Add failing FK tests for nullable no-edge state, repeated same assignment, conflicting targets, nonnullable columns, missing targets and references crossing backends without local reference rows.
-- [ ] Stage FK assignments and reject cardinality conflicts before modifying rows. Apply updates only to rows inserted by this import under the initial policy. Preflight nonnullable/cyclic FK insertion order: support a feasible constraint-respecting order or report unsupported cases before writes; do not disable constraints or assume all constraints are deferrable.
-- [ ] Verify reverse traversal after both relationship imports and retain placement/partition-cut/proxy metadata outside application attributes. Validate remote references according to the explicit policy, without inventing rows.
-- [ ] Force mid-import failures and assert rollback of node/edge/FK/metadata changes. Run focused tests; commit each relationship mode separately.
+- [x] Add failing FK tests for nullable no-edge state, repeated same assignment, conflicting targets, nonnullable columns, missing targets and references crossing backends without local reference rows.
+- [x] Stage FK assignments and reject cardinality conflicts before modifying rows. Apply updates only to rows inserted by this import under the initial policy. Preflight nonnullable/cyclic FK insertion order: support a feasible constraint-respecting order or report unsupported cases before writes; do not disable constraints or assume all constraints are deferrable.
+- [x] Verify reverse traversal after both relationship imports and retain placement/partition-cut/proxy metadata outside application attributes. Validate remote references according to the explicit policy, without inventing rows.
+- [x] Force mid-import failures and assert rollback of node/edge/FK/metadata changes. Run focused tests; commit each relationship mode separately.
 
-The #19 table-import portion includes reverse reads, partition/proxy preservation
-and rollback verification. The joint checkboxes above remain open for #20's FK
-assignment implementation; completing #19 does not claim #20 is implemented.
+The #19 and #20 portions are now implemented separately, including reverse reads,
+partition/proxy preservation and rollback verification. Nonnullable FK cycles are
+explicitly rejected before writes under the documented initial policy.
 
 ## Task 8 — #22 and #12: Integration, documentation and acceptance
 
@@ -554,3 +554,57 @@ The user explicitly requested a commit containing `Closes #19`, push and issue
 closure. Since the feature branch is not GitHub's default branch, issue closure
 is performed explicitly after the push. #20's FK assignment work and remaining
 #21/#22 acceptance work are not included; their checkboxes remain open.
+
+## Issue #20 execution record — 2026-11-10
+
+Implemented the remaining Task 7 FK portion on top of `4e31bbb`. Offline
+preparation resolves exact native owner/referenced keys and aggregates assignments
+in SQLite TEMP state without changing the immutable normalized index. Different
+targets for one owner/column fail preparation; repeated identical assignments
+remain idempotent native state with distinct source identities in metadata.
+Every imported owner gets explicit final FK values or NULL for no source edge,
+including when native defaults exist. Mapped properties cannot contradict those
+values. See the [FK ingestion contract](../../architecture/postgresql-relational-fk-ingestion.md).
+
+Nullable columns are initially inserted NULL and assigned through bounded native
+UPDATE staging after all nodes exist. Nonnullable FKs use a preflight topological
+type order. Nonnullable dependency cycles/self references are explicitly rejected
+before writes, even when deferrable; nullable cycles and self-loops work. Only new
+PostgreSQL owners may be updated. Existing local reference targets are preserved;
+remote-only targets and existing reference owners fail without fabricated rows
+or updates to pre-existing owners.
+
+Nodes, junction inserts and FK assignments share one transaction with deferred
+checks before final verification. Final node/FK values and no-edge NULL states
+are verified during import, live verification and recovery. Physical junction
+counts are independent of logical FK edge counts, preserving mixed imports and
+metadata identity/placement semantics. Recovery never repeats application writes.
+
+Fresh review returned no Critical/Important correctness findings. Its staging
+planner question was measured with EXPLAIN ANALYZE on 100000 disposable owner
+rows and 128 staged keys: absent staging statistics produced a 100000-row owner
+scan; ANALYZE of the private stage produced 128 PK index searches. The FK update
+path now refreshes bounded staging statistics. This is query-plan evidence, not
+an overall production throughput claim; no application ANALYZE/DDL is added.
+
+Verification:
+
+- Initial FK gate: 7/8 new tests failed against the unsupported-FK guard before
+  implementation; all eight passed after implementation. Expanded ingestion
+  suite passed all 52 cases, including 18 new FK cases.
+- Final full CPU CTest: 622 passed, 3 optional skips, zero failures (625 entries).
+  All 129 live PostgreSQL cases ran: 77 metadata/catalog/read cases plus 52
+  node/junction/FK ingestion cases.
+- Coverage includes both owner directions, NULL/default absence, duplicate and
+  conflicting targets, nonnullable order/cycles, nullable cycles/self-loops,
+  remote target/owner policy, unresolved keys, native update failure rollback,
+  bounded updates, mapped-property conflicts, mixed junction/FK transactions,
+  reverse reads and catalog recovery/live drift detection.
+- Full CPU build, standalone native importer with backends disabled and native-
+  executors-disabled standalone importer passed with no new compiler warnings.
+- Changed-C++ clang-format-21, documentation links and `git diff --check` passed.
+
+Continues the user's established implementation/commit/push/close workflow with
+`Closes #20`. The feature branch is not GitHub's default branch, so closure is
+performed explicitly after pushing. No #21 runtime BFS or #22 final acceptance
+implementation is included.
