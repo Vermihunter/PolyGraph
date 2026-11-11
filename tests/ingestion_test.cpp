@@ -1,3 +1,4 @@
+#include "../src/ingestion/Native.hpp"
 #include "ingestion/Import.hpp"
 #include "ingestion/Process.hpp"
 
@@ -808,4 +809,17 @@ TEST_F(IngestionTest, OwnedOutputCannotFollowSymlinksIntoSourceFiles) {
     fs::create_symlink(source, o.output_dir / "redirected.csv");
     EXPECT_THROW((void) prepare(o), Error);
     EXPECT_EQ(sha256_file(source), original);
+}
+
+TEST(RelationalImportConfig, NeverFallsBackToGenericNativeExecution) {
+    ImportContext context{.backend = Backend::postgresql,
+                          .root = {},
+                          .artifacts = Json::object(),
+                          .target = {{"relationalMapping", "application.json"}}};
+    try {
+        (void) detail::native_executor(std::move(context));
+        FAIL() << "selected generic native importer";
+    } catch (const Error &e) {
+        EXPECT_NE(std::string(e.what()).find("relational"), std::string::npos);
+    }
 }

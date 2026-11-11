@@ -27,6 +27,8 @@ namespace polygraph::cli {
 
     class GraphRuntimeBuilder {
     public:
+        // Loads the existing logical schema contract without creating stores or reading graph data.
+        [[nodiscard]] static domain::graph_t load_schema(const std::string &path);
         [[nodiscard]] static std::shared_ptr<DatabaseContext> build(const GraphRuntimeConfig &config);
     };
 

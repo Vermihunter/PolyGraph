@@ -37,6 +37,10 @@ namespace polygraph {
 
         // For Neo4j/Arango/Memgraph clusters or replicas
         std::vector<std::string> replica_endpoints;
+
+        // Absolute relational runtime references, resolved against backend config.
+        std::optional<std::string> relational_mapping = {};
+        std::optional<std::string> relational_identity = {};
     };
 
 } // namespace polygraph

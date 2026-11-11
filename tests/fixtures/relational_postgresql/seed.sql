@@ -1,0 +1,10 @@
+INSERT INTO geo.place VALUES ('7', 'Central 雪');
+INSERT INTO app.person VALUES (7, 'Zoë 雪', true, 9223372036854775807, 7),
+    (8, NULL, false, -9223372036854775808, 7), (9, 'isolated', true, NULL, NULL);
+INSERT INTO app.document VALUES ('00000000-0000-0000-0000-00000000000a', 'quoted, "title"', '7'),
+    ('00000000-0000-0000-0000-00000000000b', NULL, NULL);
+INSERT INTO app.reads VALUES ('r1', 7, '00000000-0000-0000-0000-00000000000a', 1.25),
+    ('r2', 7, '00000000-0000-0000-0000-00000000000a', 2.5);
+INSERT INTO app.opens VALUES ('7', 7);
+INSERT INTO refs.next VALUES (7, '7');
+INSERT INTO refs.returns VALUES ('7', 8);

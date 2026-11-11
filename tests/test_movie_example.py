@@ -144,7 +144,7 @@ class MovieExampleTest(unittest.TestCase):
         )
         self.assertEqual(listing.returncode, 0)
         self.assertEqual(
-            listing.stdout.splitlines(), ["ldbc-snb", "movie-graph", "polygraph-jsonl"]
+            listing.stdout.splitlines(), ["ldbc-snb", "movie-graph", "polygraph-jsonl", "source-jsonl"]
         )
         manifest = self.example / "domain.json"
         document = json.loads(manifest.read_text())

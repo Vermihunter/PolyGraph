@@ -30,3 +30,13 @@ level; this avoids repeated index-build overhead in the default index-free mode.
 
 For manual experiments the equivalent SQL is in
 `optional/traversal_indexes.sql`.
+
+## Existing relational schemas
+
+Use explicit mappings and an immutable identity catalog to attach populated
+application tables or import into pre-created typed tables. Both junction and
+direct-FK adjacency work with distributed BFS. See the
+[relational example and live acceptance](../../docs/examples/relational-postgresql/README.md)
+and [mapping contract](../../docs/architecture/postgresql-relational-mapping.md).
+This directory's default initialization still selects generic storage; relational
+mode never migrates or alters application tables.

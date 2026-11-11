@@ -87,6 +87,9 @@ namespace polygraph::ingestion::detail {
     void finish_partition_metadata(const PrepareOptions &options, Database &db, const fs::path &scratch,
                                    Json &partitioning);
     void verify_partition_metadata(Database &db, const fs::path &root, const Json &manifest);
+    [[nodiscard]] Json relational_configuration(const PrepareOptions &);
+    [[nodiscard]] Json generate_relational_postgres(Database &, const PrepareOptions &, const fs::path &,
+                                                    const fs::path &);
     [[nodiscard]] Json generate_backend(Backend backend, const PrepareOptions &options, const fs::path &scratch,
                                         const fs::path &generation, const fs::path &root,
                                         bool partition_metadata = false);

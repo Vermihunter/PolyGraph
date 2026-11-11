@@ -59,14 +59,14 @@ class NativeLogicalContractTest(unittest.TestCase):
     def test_cli_discovers_adapters_and_rejects_unknown_names_before_input_or_docker(self):
         discovery = subprocess.run([self.binary, 'adapters'], capture_output=True, text=True)
         self.assertEqual(discovery.returncode, 0, discovery.stderr)
-        self.assertEqual(discovery.stdout.splitlines(), ['ldbc-snb', 'polygraph-jsonl'])
+        self.assertEqual(discovery.stdout.splitlines(), ['ldbc-snb', 'polygraph-jsonl', 'source-jsonl'])
         for command, extra in [('prepare', []), ('load', ['--docker'])]:
             with self.subTest(command=command):
                 result = subprocess.run([self.binary, command, '--adapter', 'missing-adapter', '--input', 'missing',
                                          '--placement-config', 'missing', '--output-dir', str(self.root / command),
                                          *extra], capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn('Unknown adapter: missing-adapter (available: ldbc-snb, polygraph-jsonl)', result.stderr)
+                self.assertIn('Unknown adapter: missing-adapter (available: ldbc-snb, polygraph-jsonl, source-jsonl)', result.stderr)
                 self.assertFalse((self.root / command).exists())
 
     def test_documented_graph_prepares_all_backends_and_preserves_parallel_edges(self):

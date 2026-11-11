@@ -1,0 +1,13 @@
+{
+  "format": "polygraph.postgresql-relational",
+  "version": 1,
+  "nodes": [
+    {"type": "Person", "schema": "app", "table": "person", "primaryKey": "id", "namespace": "application", "keyCodec": "int64", "properties": {"name": "name"}},
+    {"type": "Post", "schema": "app", "table": "post", "primaryKey": "id", "namespace": "application", "keyCodec": "uuid", "properties": {"content": "content"}},
+    {"type": "Comment", "schema": "app", "table": "comment", "primaryKey": "id", "namespace": "application", "keyCodec": "string", "properties": {"content": "content"}}
+  ],
+  "relationships": [
+    {"type": "Knows", "kind": "table", "schema": "app", "table": "person_knows_person", "fromColumn": "person_id", "toColumn": "friend_id", "properties": {"since": "since"}},
+    {"type": "ReplyOf", "kind": "foreignKey", "owner": "from", "column": "reply_to_post_id"}
+  ]
+}

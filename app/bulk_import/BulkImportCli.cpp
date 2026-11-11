@@ -9,6 +9,7 @@
 #include "ingestion/GraphManifest.hpp"
 #include "ingestion/Import.hpp"
 #include "ingestion/InputAdapterRegistry.hpp"
+#include "ingestion/RelationalImport.hpp"
 
 namespace {
     using namespace polygraph::ingestion;
@@ -26,6 +27,10 @@ polygraph_bulk_import import --graph-manifest <domain.json>
     containers, deletes volumes, resets targets or retries failed imports.
     Prints JSON graph/adapter, output locations, counts and prepared/verified state.
     Existing load --docker remains the disposable resource lifecycle entry point.
+
+polygraph_bulk_import recover-relational --manifest <manifest.json> --target-config <targets.json>
+    Verify committed relational data and finish interrupted identity publication.
+    Never reimports or overwrites application rows.
 
 polygraph_bulk_import adapters
     List statically linked input adapter names, one per line.
@@ -47,6 +52,7 @@ polygraph_bulk_import prepare --adapter <name>
   [--partition-preset default|eco|strong] [--partition-map <partition-backends.json>]
   [--chunk-size-mb 64] [--max-record-mb 8]
   [--partition-file <assignments.jsonl> --partition-map <partition-backends.json>]
+  [--relational-schema <schema.json> --relational-mapping <mapping.json>]
     prepare is offline: never connects to databases. Existing valid artifacts/checkpoints
     are reused only when input and configuration SHA-256 hashes match.
     KaMinPar requires the optional POLYGRAPH_INGESTION_KAMINPAR build and --partitions.
@@ -154,10 +160,21 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
         else if (command == "validate")
             allowed = {"--graph-manifest", "--execution"};
         else if (command == "prepare")
-            allowed = {"--graph-manifest",  "--adapter",       "--input",         "--placement-config",
-                       "--output-dir",      "--partitioner",   "--seed",          "--threads",
-                       "--memory-limit-mb", "--chunk-size-mb", "--max-record-mb", "--partition-file",
-                       "--partition-map"};
+            allowed = {"--graph-manifest",
+                       "--adapter",
+                       "--input",
+                       "--placement-config",
+                       "--output-dir",
+                       "--partitioner",
+                       "--seed",
+                       "--threads",
+                       "--memory-limit-mb",
+                       "--chunk-size-mb",
+                       "--max-record-mb",
+                       "--partition-file",
+                       "--partition-map",
+                       "--relational-schema",
+                       "--relational-mapping"};
         else if (command == "load")
             allowed = {"--adapter",           "--input",
                        "--placement-config",  "--docker",
@@ -177,7 +194,7 @@ See docs/guides/BULK_INGESTION.md for target configuration and safety/recovery r
             allowed = {"--manifest", "--strict"};
         else if (command == "execute")
             allowed = {"--manifest", "--target-config", "--confirm-create", "--concurrency", "--skip-verification"};
-        else if (command == "verify-live")
+        else if (command == "verify-live" || command == "recover-relational")
             allowed = {"--manifest", "--target-config"};
         else
             throw Error("Unknown command: " + command);
@@ -347,6 +364,8 @@ int polygraph::ingestion::run_bulk_import_cli(int argc, char **argv, const Input
                 options.max_record_mb = args.number("--max-record-mb", 8);
                 options.partition_file = args.get("--partition-file", "");
                 options.partition_map = args.get("--partition-map", "");
+                options.relational_schema = args.get("--relational-schema", "");
+                options.relational_mapping = args.get("--relational-mapping", "");
             }
             const auto manifest =
                     prepare(options, [](const std::string &stage) { std::cerr << "prepare: " << stage << '\n'; });
@@ -366,7 +385,12 @@ int polygraph::ingestion::run_bulk_import_cli(int argc, char **argv, const Input
             std::cout << (args.flags.contains("--skip-verification")
                                   ? "All native imports completed; correctness verification skipped\n"
                                   : "All native imports and live validation succeeded\n");
-        } else
+        } else if (command == "recover-relational")
+            std::cout << recover_postgres_relational_identity(args.require("--manifest"),
+                                                              args.require("--target-config"))
+                                 .dump(2)
+                      << '\n';
+        else
             std::cout << verify_live(args.require("--manifest"), args.require("--target-config")).dump(2) << '\n';
         return 0;
     } catch (const Error &e) {

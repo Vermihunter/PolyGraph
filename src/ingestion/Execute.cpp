@@ -6,6 +6,21 @@
 #include "Native.hpp"
 
 namespace polygraph::ingestion::detail {
+    Json resolved_relational_targets(Json config, const fs::path &path) {
+        for (auto &[name, target]: config.at("targets").items()) {
+            (void) name;
+            for (const auto *field: {"relationalMapping", "relationalIdentityOutput"})
+                if (target.contains(field)) {
+                    fs::path value = target.at(field).get<std::string>();
+                    if (value.empty())
+                        throw Error(std::string(field) + " must not be empty");
+                    if (value.is_relative())
+                        value = fs::absolute(path).parent_path() / value;
+                    target[field] = value.lexically_normal().string();
+                }
+        }
+        return config;
+    }
     Json checked_targets(const Json &config, std::span<const Backend> backends) {
         if (!config.is_object() || !config.contains("targets") || !config["targets"].is_object())
             throw Error("Target configuration requires a targets object");
@@ -77,7 +92,8 @@ namespace polygraph::ingestion {
         const auto root = fs::absolute(manifest_path).parent_path();
         detail::DirectoryLock lock(root);
         const bool full_verification = verification == VerificationMode::full;
-        const auto manifest = verify(manifest_path, full_verification), targets = read_json(target_path);
+        const auto manifest = verify(manifest_path, full_verification),
+                   targets = detail::resolved_relational_targets(read_json(target_path), target_path);
         const auto target_hash = sha256_text(targets.dump());
         const auto journal_path = root / "execution-state.json";
         Json journal = {{"schema_version", 1},
@@ -206,7 +222,8 @@ namespace polygraph::ingestion {
         const auto manifest = verify(manifest_path, true);
         const auto create = effective_factory(factory);
         Json report = {{"generation_id", manifest.at("generation_id")}, {"backends", Json::object()}};
-        for (auto &context: contexts(root, manifest, read_json(target_path))) {
+        for (auto &context:
+             contexts(root, manifest, detail::resolved_relational_targets(read_json(target_path), target_path))) {
             const auto name = backend_name(context.backend);
             try {
                 report["backends"][name] = create(std::move(context))->verify();
@@ -221,6 +238,13 @@ namespace polygraph::ingestion {
 } // namespace polygraph::ingestion
 namespace polygraph::ingestion::detail {
     std::unique_ptr<IImportExecutor> native_executor(ImportContext context) {
+        if (context.target.contains("relationalMapping") ||
+            context.artifacts.value("importer", std::string{}) == "libpq-relational-copy") {
+            if (context.backend != Backend::postgresql || !context.target.contains("relationalMapping") ||
+                context.artifacts.value("importer", std::string{}) != "libpq-relational-copy")
+                throw Error("relational target/artifact mismatch; refusing generic-table execution");
+            return postgres_relational_executor(std::move(context));
+        }
         switch (context.backend) {
             case Backend::neo4j:
                 return neo4j_executor(std::move(context));

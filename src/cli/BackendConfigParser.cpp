@@ -5,6 +5,8 @@
  */
 
 #include "cli/BackendConfigParser.hpp"
+#include <filesystem>
+#include "data_access/adapters/PostgreSQL/RelationalMapping.hpp"
 
 #include "insertion/BackendEncodedUuid.hpp"
 #include "utilities/BackendIds.hpp"
@@ -246,6 +248,25 @@ namespace polygraph::config {
     BackendConnectionConfig parse_connection_config(const json &backend_json, const BackendId id,
                                                     const BackendKind kind) {
         const json conn = backend_json.value("connection", json::object());
+        const auto reference = [&](const std::string &field) -> std::optional<std::string> {
+            if (conn.contains(field))
+                throw std::invalid_argument(field + " belongs on the backend object, not connection");
+            if (!backend_json.contains(field))
+                return std::nullopt;
+            if (kind != BackendKind::PostgreSQL)
+                throw std::invalid_argument(field + " is supported only for PostgreSQL");
+            const auto &value = backend_json.at(field);
+            if (!value.is_string() || value.get<std::string>().empty() ||
+                value.get<std::string>().find('\0') != std::string::npos ||
+                !std::filesystem::path(value.get<std::string>()).is_absolute())
+                throw std::invalid_argument(field + " must be an absolute path; load relative references "
+                                                    "through the backend configuration file loader");
+            return value.get<std::string>();
+        };
+        auto mapping = reference("relationalMapping"), identity = reference("relationalIdentity");
+        if (identity && !mapping)
+            throw std::invalid_argument("relationalIdentity requires relationalMapping");
+
 
         BackendConnectionConfig config{
                 .id = id,
@@ -258,6 +279,8 @@ namespace polygraph::config {
                 .transport = conn.value("transport", backend_json.value("transport", std::string{"http"})),
                 .bolt_endpoint = conn.value("bolt_endpoint", backend_json.value("bolt_endpoint", std::string{})),
                 .replica_endpoints = {},
+                .relational_mapping = std::move(mapping),
+                .relational_identity = std::move(identity),
         };
 
         if (conn.contains("credentials") && !conn["credentials"].is_null()) {
@@ -361,7 +384,23 @@ namespace polygraph::config {
 
     json load_backend_config_file_or_default(const std::optional<std::string> &path) {
         if (path.has_value() && !path->empty()) {
-            return load_json_file(*path);
+            auto root = load_json_file(*path);
+            if (root.contains("backends") && root["backends"].is_array()) {
+                for (auto &backend: root["backends"]) {
+                    if (auto mapping = postgres::relational_mapping_path(backend, *path))
+                        backend["relationalMapping"] = mapping->string();
+                    if (backend.contains("relationalIdentity")) {
+                        const auto value = backend.at("relationalIdentity").get<std::string>();
+                        if (value.empty() || value.find('\0') != std::string::npos)
+                            throw std::invalid_argument("relationalIdentity must be a nonempty NUL-free path");
+                        auto identity = std::filesystem::path(value);
+                        if (identity.is_relative())
+                            identity = std::filesystem::absolute(*path).parent_path() / identity;
+                        backend["relationalIdentity"] = identity.lexically_normal().string();
+                    }
+                }
+            }
+            return root;
         }
 
         return default_backend_config_json();

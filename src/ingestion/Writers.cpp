@@ -406,6 +406,8 @@ namespace polygraph::ingestion::detail {
         const auto directory = generation / name;
         fs::create_directories(directory);
         Database db(scratch / "graph.sqlite3", std::max(1U, o.memory_limit_mb / (4 * std::min(o.threads, 3U))), true);
+        if (backend == Backend::postgresql && (!o.relational_mapping.empty() || !o.relational_configuration.empty()))
+            return generate_relational_postgres(db, o, directory, root);
         Counts counts;
         Json artifacts = Json::array();
         switch (backend) {

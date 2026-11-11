@@ -1,4 +1,5 @@
 set(POLYGRAPH_MODEL_SOURCES
+    "${PROJECT_SOURCE_DIR}/src/domain/graph/LogicalGraphSchemaJson.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_model/Record.cpp"
     "${PROJECT_SOURCE_DIR}/src/data_model/Value.cpp"
     "${PROJECT_SOURCE_DIR}/src/domain/graph/LogicalGraphSchema.cpp"

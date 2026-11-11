@@ -1,0 +1,3 @@
+add_executable(polygraph_attach_postgres main.cpp)
+target_link_libraries(polygraph_attach_postgres PRIVATE polygraph::runtime)
+polygraph_configure_target(polygraph_attach_postgres)

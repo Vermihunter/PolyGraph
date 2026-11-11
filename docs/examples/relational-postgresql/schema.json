@@ -1,0 +1,11 @@
+{
+  "nodeTypes": [
+    {"name": "Person", "properties": [{"name": "name", "type": "string"}]},
+    {"name": "Post", "properties": [{"name": "content", "type": "string"}]},
+    {"name": "Comment", "properties": [{"name": "content", "type": "string"}]}
+  ],
+  "relations": [
+    {"name": "Knows", "from": "Person", "to": "Person", "directed": true, "properties": [{"name": "since", "type": "date"}]},
+    {"name": "ReplyOf", "from": "Comment", "to": "Post", "directed": true, "properties": []}
+  ]
+}

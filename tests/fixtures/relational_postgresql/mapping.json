@@ -1,0 +1,114 @@
+{
+  "format": "polygraph.postgresql-relational",
+  "version": 1,
+  "nodes": [
+    {
+      "type": "Person",
+      "schema": "app",
+      "table": "person",
+      "primaryKey": "id",
+      "namespace": "acceptance",
+      "keyCodec": "int64",
+      "properties": {
+        "name": "name",
+        "active": "active",
+        "total": "total"
+      }
+    },
+    {
+      "type": "Document",
+      "schema": "app",
+      "table": "document",
+      "primaryKey": "id",
+      "namespace": "acceptance",
+      "keyCodec": "uuid",
+      "properties": {
+        "title": "title"
+      }
+    },
+    {
+      "type": "Place",
+      "schema": "geo",
+      "table": "place",
+      "primaryKey": "code",
+      "namespace": "acceptance",
+      "keyCodec": "string",
+      "properties": {
+        "label": "label"
+      }
+    },
+    {
+      "type": "Gateway",
+      "schema": "refs",
+      "table": "gateway",
+      "primaryKey": "id",
+      "namespace": "acceptance",
+      "keyCodec": "int64",
+      "properties": {
+        "name": "name"
+      }
+    },
+    {
+      "type": "Sensor",
+      "schema": "refs",
+      "table": "sensor",
+      "primaryKey": "code",
+      "namespace": "acceptance",
+      "keyCodec": "string",
+      "properties": {
+        "name": "name"
+      }
+    }
+  ],
+  "relationships": [
+    {
+      "type": "READS",
+      "kind": "table",
+      "schema": "app",
+      "table": "reads",
+      "primaryKey": "id",
+      "keyCodec": "string",
+      "fromColumn": "person",
+      "toColumn": "document",
+      "properties": {
+        "weight": "weight"
+      }
+    },
+    {
+      "type": "AT",
+      "kind": "foreignKey",
+      "owner": "from",
+      "column": "place"
+    },
+    {
+      "type": "OPENS",
+      "kind": "table",
+      "schema": "app",
+      "table": "opens",
+      "fromColumn": "place",
+      "toColumn": "gateway"
+    },
+    {
+      "type": "NEXT",
+      "kind": "table",
+      "schema": "refs",
+      "table": "next",
+      "fromColumn": "gateway",
+      "toColumn": "sensor"
+    },
+    {
+      "type": "RETURNS",
+      "kind": "table",
+      "schema": "refs",
+      "table": "returns",
+      "fromColumn": "sensor",
+      "toColumn": "person"
+    },
+    {
+      "type": "MANAGER",
+      "kind": "foreignKey",
+      "owner": "from",
+      "column": "manager"
+    }
+  ]
+}

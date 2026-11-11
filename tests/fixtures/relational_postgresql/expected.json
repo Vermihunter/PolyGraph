@@ -1,0 +1,304 @@
+{
+  "nodes": {
+    "p7": {
+      "namespace": "acceptance",
+      "type": "Person",
+      "idType": "int64",
+      "id": 7
+    },
+    "p8": {
+      "namespace": "acceptance",
+      "type": "Person",
+      "idType": "int64",
+      "id": 8
+    },
+    "p9": {
+      "namespace": "acceptance",
+      "type": "Person",
+      "idType": "int64",
+      "id": 9
+    },
+    "doc": {
+      "namespace": "acceptance",
+      "type": "Document",
+      "idType": "string",
+      "id": "00000000-0000-0000-0000-00000000000a"
+    },
+    "empty": {
+      "namespace": "acceptance",
+      "type": "Document",
+      "idType": "string",
+      "id": "00000000-0000-0000-0000-00000000000b"
+    },
+    "place": {
+      "namespace": "acceptance",
+      "type": "Place",
+      "idType": "string",
+      "id": "7"
+    },
+    "gateway": {
+      "namespace": "acceptance",
+      "type": "Gateway",
+      "idType": "int64",
+      "id": 7
+    },
+    "sensor": {
+      "namespace": "acceptance",
+      "type": "Sensor",
+      "idType": "string",
+      "id": "7"
+    }
+  },
+  "edges": [
+    [
+      "READS",
+      "p7",
+      "doc"
+    ],
+    [
+      "READS",
+      "p7",
+      "doc"
+    ],
+    [
+      "AT",
+      "doc",
+      "place"
+    ],
+    [
+      "OPENS",
+      "place",
+      "gateway"
+    ],
+    [
+      "NEXT",
+      "gateway",
+      "sensor"
+    ],
+    [
+      "RETURNS",
+      "sensor",
+      "p8"
+    ],
+    [
+      "MANAGER",
+      "p7",
+      "p7"
+    ],
+    [
+      "MANAGER",
+      "p8",
+      "p7"
+    ]
+  ],
+  "cases": [
+    {
+      "name": "full-directed",
+      "root": "p7",
+      "direction": "directed",
+      "layers": [
+        [
+          "p7"
+        ],
+        [
+          "doc"
+        ],
+        [
+          "place"
+        ],
+        [
+          "gateway"
+        ],
+        [
+          "sensor"
+        ],
+        [
+          "p8"
+        ]
+      ]
+    },
+    {
+      "name": "both",
+      "root": "p7",
+      "direction": "both",
+      "layers": [
+        [
+          "p7"
+        ],
+        [
+          "doc",
+          "p8"
+        ],
+        [
+          "place",
+          "sensor"
+        ],
+        [
+          "gateway"
+        ]
+      ]
+    },
+    {
+      "name": "incoming-from-p8",
+      "root": "p8",
+      "direction": "undirected",
+      "layers": [
+        [
+          "p8"
+        ],
+        [
+          "p7",
+          "sensor"
+        ],
+        [
+          "doc",
+          "gateway"
+        ],
+        [
+          "place"
+        ]
+      ]
+    },
+    {
+      "name": "both-from-sensor",
+      "root": "sensor",
+      "direction": "both",
+      "layers": [
+        [
+          "sensor"
+        ],
+        [
+          "gateway",
+          "p8"
+        ],
+        [
+          "place",
+          "p7"
+        ],
+        [
+          "doc"
+        ]
+      ]
+    },
+    {
+      "name": "junction-filter",
+      "root": "p7",
+      "direction": "directed",
+      "edgeTypes": [
+        "READS"
+      ],
+      "layers": [
+        [
+          "p7"
+        ],
+        [
+          "doc"
+        ]
+      ]
+    },
+    {
+      "name": "native-filter",
+      "root": "gateway",
+      "direction": "directed",
+      "edgeTypes": [
+        "NEXT"
+      ],
+      "layers": [
+        [
+          "gateway"
+        ],
+        [
+          "sensor"
+        ]
+      ]
+    },
+    {
+      "name": "target-filter",
+      "root": "sensor",
+      "direction": "directed",
+      "targetTypes": [
+        "Person"
+      ],
+      "layers": [
+        [
+          "sensor"
+        ],
+        [
+          "p8"
+        ],
+        [
+          "p7"
+        ]
+      ]
+    },
+    {
+      "name": "mapped-target-filter",
+      "root": "p7",
+      "direction": "directed",
+      "targetTypes": [
+        "Document"
+      ],
+      "layers": [
+        [
+          "p7"
+        ],
+        [
+          "doc"
+        ]
+      ]
+    },
+    {
+      "name": "depth-limit",
+      "root": "p7",
+      "direction": "directed",
+      "maxDepth": 3,
+      "layers": [
+        [
+          "p7"
+        ],
+        [
+          "doc"
+        ],
+        [
+          "place"
+        ],
+        [
+          "gateway"
+        ]
+      ]
+    },
+    {
+      "name": "isolated",
+      "root": "p9",
+      "direction": "both",
+      "layers": [
+        [
+          "p9"
+        ]
+      ]
+    },
+    {
+      "name": "null-fk",
+      "root": "empty",
+      "direction": "directed",
+      "layers": [
+        [
+          "empty"
+        ]
+      ]
+    },
+    {
+      "name": "unmapped-filter",
+      "root": "p7",
+      "direction": "directed",
+      "edgeTypes": [
+        "UNMAPPED"
+      ],
+      "layers": [
+        [
+          "p7"
+        ]
+      ]
+    }
+  ]
+}

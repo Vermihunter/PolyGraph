@@ -42,6 +42,9 @@ polygraph_add_unit_test(polygraph_bfs_executor_test bfs_executor_test.cpp polygr
 polygraph_add_unit_test(polygraph_backend_encoded_uuid_test backend_encoded_uuid_test.cpp polygraph::core)
 polygraph_add_unit_test(polygraph_backend_load_tracker_test backend_load_tracker_test.cpp polygraph::core)
 if(TARGET polygraph_backends)
+    polygraph_add_unit_test(polygraph_postgres_relational_identity_test postgres_relational_identity_test.cpp polygraph::backends)
+    polygraph_add_unit_test(polygraph_postgres_relational_config_test postgres_relational_config_test.cpp polygraph::backends)
+    polygraph_add_unit_test(polygraph_postgres_relational_mapping_test postgres_relational_mapping_test.cpp polygraph::backends)
     polygraph_add_unit_test(
         polygraph_redis_graph_store_test
         redis_graph_store_test.cpp
@@ -196,6 +199,10 @@ add_test(NAME python.ingestion_live_graph
     COMMAND "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_live_graph -v)
 set_tests_properties(python.ingestion_live_graph PROPERTIES
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 20)
+add_test(NAME python.ingestion_relational_live
+    COMMAND "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_relational_live -v)
+set_tests_properties(python.ingestion_relational_live PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 20)
 if(TARGET polygraph_bulk_import)
     add_test(NAME python.ingestion_docker_workflow
         COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
@@ -265,4 +272,76 @@ if(TARGET polygraph_bulk_import)
                 "${Python3_EXECUTABLE}" -m unittest tests.test_adapter_contract -v)
     set_tests_properties(python.adapter_contracts PROPERTIES
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion;contract" TIMEOUT 90)
+endif()
+
+if(TARGET polygraph_backends)
+    add_executable(polygraph_postgres_relational_metadata_test postgres_relational_metadata_test.cpp)
+    target_link_libraries(polygraph_postgres_relational_metadata_test PRIVATE polygraph::backends GTest::gtest)
+    polygraph_enable_project_checks(polygraph_postgres_relational_metadata_test)
+    add_test(NAME integration.postgres-relational-metadata COMMAND polygraph_postgres_relational_metadata_test)
+    set_tests_properties(integration.postgres-relational-metadata PROPERTIES LABELS "integration;live;postgresql" TIMEOUT 60 SKIP_RETURN_CODE 77)
+endif()
+
+if(TARGET polygraph_runtime AND TARGET polygraph_ingestion)
+    add_executable(polygraph_postgres_relational_acceptance_test postgres_relational_acceptance_test.cpp)
+    target_link_libraries(polygraph_postgres_relational_acceptance_test PRIVATE polygraph::runtime GTest::gtest)
+    polygraph_enable_project_checks(polygraph_postgres_relational_acceptance_test)
+    if(POLYGRAPH_INGESTION_LIVE_TESTS)
+        add_test(NAME integration.postgres-relational
+            COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/ingestion/relational_live.py"
+                --run --unique-output --binary "$<TARGET_FILE:polygraph_bulk_import>"
+                --bfs "$<TARGET_FILE:polygraph_bfs>" --attach "$<TARGET_FILE:polygraph_attach_postgres>"
+                --probe "$<TARGET_FILE:polygraph_postgres_relational_acceptance_test>"
+                --output-dir "${CMAKE_BINARY_DIR}/relational-live")
+        set_tests_properties(integration.postgres-relational PROPERTIES
+            LABELS "integration;live;postgresql;ingestion" TIMEOUT 900 RUN_SERIAL TRUE)
+    endif()
+
+    add_executable(polygraph_postgres_relational_bfs_test postgres_relational_bfs_test.cpp)
+    target_link_libraries(polygraph_postgres_relational_bfs_test PRIVATE polygraph::runtime polygraph::ingestion GTest::gtest)
+    polygraph_enable_project_checks(polygraph_postgres_relational_bfs_test)
+    add_test(NAME integration.postgres-relational-bfs COMMAND polygraph_postgres_relational_bfs_test)
+    set_tests_properties(integration.postgres-relational-bfs PROPERTIES LABELS "integration;live;postgresql" TIMEOUT 120 SKIP_RETURN_CODE 77)
+
+    add_executable(polygraph_postgres_relational_attachment_test postgres_relational_attachment_test.cpp)
+    target_link_libraries(polygraph_postgres_relational_attachment_test PRIVATE polygraph::runtime polygraph::ingestion GTest::gtest)
+    polygraph_enable_project_checks(polygraph_postgres_relational_attachment_test)
+    target_compile_definitions(polygraph_postgres_relational_attachment_test PRIVATE POLYGRAPH_ATTACH_POSTGRES="$<TARGET_FILE:polygraph_attach_postgres>")
+    add_dependencies(polygraph_postgres_relational_attachment_test polygraph_attach_postgres)
+    add_test(NAME integration.postgres-relational-identity COMMAND polygraph_postgres_relational_attachment_test)
+    set_tests_properties(integration.postgres-relational-identity PROPERTIES LABELS "integration;live;postgresql" TIMEOUT 90 SKIP_RETURN_CODE 77)
+endif()
+
+if(TARGET polygraph_backends)
+    add_executable(polygraph_postgres_relational_relationship_test postgres_relational_relationship_test.cpp)
+    target_link_libraries(polygraph_postgres_relational_relationship_test PRIVATE polygraph::backends GTest::gtest)
+    polygraph_enable_project_checks(polygraph_postgres_relational_relationship_test)
+    add_test(NAME integration.postgres-relational-relationships COMMAND polygraph_postgres_relational_relationship_test)
+    set_tests_properties(integration.postgres-relational-relationships PROPERTIES LABELS "integration;live;postgresql" TIMEOUT 90 SKIP_RETURN_CODE 77)
+endif()
+
+if(TARGET polygraph_backends)
+    add_executable(polygraph_postgres_relational_foreign_key_test postgres_relational_foreign_key_test.cpp)
+    target_link_libraries(polygraph_postgres_relational_foreign_key_test PRIVATE polygraph::backends GTest::gtest)
+    polygraph_enable_project_checks(polygraph_postgres_relational_foreign_key_test)
+    add_test(NAME integration.postgres-relational-foreign-keys COMMAND polygraph_postgres_relational_foreign_key_test)
+    set_tests_properties(integration.postgres-relational-foreign-keys PROPERTIES LABELS "integration;live;postgresql" TIMEOUT 90 SKIP_RETURN_CODE 77)
+endif()
+
+if(TARGET polygraph_backends)
+    add_executable(polygraph_postgres_relational_node_test postgres_relational_node_test.cpp)
+    target_link_libraries(polygraph_postgres_relational_node_test PRIVATE polygraph::backends GTest::gtest)
+    polygraph_enable_project_checks(polygraph_postgres_relational_node_test)
+    add_test(NAME integration.postgres-relational-nodes COMMAND polygraph_postgres_relational_node_test)
+    set_tests_properties(integration.postgres-relational-nodes PROPERTIES LABELS "integration;live;postgresql" TIMEOUT 90 SKIP_RETURN_CODE 77)
+endif()
+
+if(TARGET polygraph_ingestion AND TARGET polygraph_relational AND POLYGRAPH_INGESTION_NATIVE_EXECUTORS)
+    add_executable(polygraph_postgres_relational_ingestion_test postgres_relational_ingestion_test.cpp)
+    target_link_libraries(polygraph_postgres_relational_ingestion_test PRIVATE polygraph::ingestion polygraph::relational GTest::gtest)
+    target_compile_definitions(polygraph_postgres_relational_ingestion_test PRIVATE POLYGRAPH_BULK_IMPORT="$<TARGET_FILE:polygraph_bulk_import>")
+    add_dependencies(polygraph_postgres_relational_ingestion_test polygraph_bulk_import)
+    polygraph_enable_project_checks(polygraph_postgres_relational_ingestion_test)
+    add_test(NAME integration.postgres-relational-ingestion COMMAND polygraph_postgres_relational_ingestion_test)
+    set_tests_properties(integration.postgres-relational-ingestion PROPERTIES LABELS "integration;live;postgresql" TIMEOUT 120 SKIP_RETURN_CODE 77)
 endif()

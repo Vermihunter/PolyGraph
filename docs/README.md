@@ -26,6 +26,17 @@ PolyGraph is a C++23 research runtime that executes graph traversals over a **si
 
 ### Architecture · understand how it works
 
+[Relational PostgreSQL example and live acceptance](examples/relational-postgresql/README.md)
+[Relational PostgreSQL acceptance matrix (issue 22)](architecture/postgresql-relational-acceptance.md)
+[Relational PostgreSQL typed node reads (issue 14)](architecture/postgresql-relational-nodes.md)
+[Relational PostgreSQL node ingestion (issue 18)](architecture/postgresql-relational-ingestion.md)
+[Relational PostgreSQL relationship ingestion (issue 19)](architecture/postgresql-relational-relationship-ingestion.md)
+[Relational PostgreSQL FK ingestion (issue 20)](architecture/postgresql-relational-fk-ingestion.md)
+[Relational PostgreSQL runtime and BFS (issue 21)](architecture/postgresql-relational-bfs.md)
+[Relational PostgreSQL foreign-key relationships (issue 17)](architecture/postgresql-relational-foreign-keys.md)
+[Relational PostgreSQL relationship tables (issue 16)](architecture/postgresql-relational-relationships.md)
+[Relational PostgreSQL identity catalogs (issue 15)](architecture/postgresql-relational-identities.md)
+[Relational PostgreSQL mapping contract (issue 13)](architecture/postgresql-relational-mapping.md)
 [Graph extensibility audit (issue 28)](architecture/graph-extensibility-audit.md)
 [Logical graph and adapter contract (issue 29)](architecture/logical-graph-contract.md)
 [Graph manifests and preflight (issue 31)](guides/GRAPH_MANIFESTS.md)
