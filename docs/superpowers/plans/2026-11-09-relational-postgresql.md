@@ -173,13 +173,13 @@ explicitly rejected before writes under the documented initial policy.
 
 **Files:** Create `tests/fixtures/relational_postgresql/` with schema, seed data, mappings and hand-checked BFS results; `tools/ingestion/relational_live.py`; `docs/examples/relational-postgresql/README.md`. Modify `tests/CMakeLists.txt`, documentation entry points and PostgreSQL storage docs.
 
-- [ ] Reuse disposable live-test lifecycle for isolated PostgreSQL plus existing Neo4j/ArangoDB services. Register `integration.postgres-relational`; an explicitly requested run must fail if services are unavailable rather than report acceptance from skipped tests.
-- [ ] Exercise two workflows: attach an already populated native database read-only, and import into pre-created empty typed tables. Include unrelated populated sentinel tables and compare schema/data before and after.
-- [ ] Cover integer/text/UUID keys, overlapping IDs, multiple SQL schemas, nullable/invalid FKs, both edge representations, properties, parallel edges, cycles, self-loops, unknown mappings and generation mismatch.
-- [ ] Compare hand-checked BFS distances and valid predecessors across PostgreSQL-only and PostgreSQL → Neo4j → ArangoDB → PostgreSQL paths, with forward/reverse/both directions, type filters, partition cuts and proxies. Require rich/minimal/streamed parity.
-- [ ] Document mapping format, key/type limits, attachment and generation refresh, import append policy, FK cardinality/cross-backend limits, required permissions, generic-mode compatibility and recoverable import publication failures.
-- [ ] Run full CPU regressions, live relational/mixed-backend suite, generic live smoke, documentation/link checks and whitespace checks. Record actual commands/results and any unavailable checks before claiming completion.
-- [ ] Review every acceptance criterion in #13–#22 against tests and documented limitations. Keep #12 open until unsupported cases have been explicitly accepted or implemented. No automatic issue closure, merge or deployment.
+- [x] Reuse disposable live-test lifecycle for isolated PostgreSQL plus existing Neo4j/ArangoDB services. Register `integration.postgres-relational`; an explicitly requested run must fail if services are unavailable rather than report acceptance from skipped tests.
+- [x] Exercise two workflows: attach an already populated native database read-only, and import into pre-created empty typed tables. Include unrelated populated sentinel tables and compare schema/data before and after.
+- [x] Cover integer/text/UUID keys, overlapping IDs, multiple SQL schemas, nullable/invalid FKs, both edge representations, properties, parallel edges, cycles, self-loops, unknown mappings and generation mismatch.
+- [x] Compare hand-checked BFS distances and valid predecessors across PostgreSQL-only and PostgreSQL → Neo4j → ArangoDB → PostgreSQL paths, with forward/reverse/both directions, type filters, partition cuts and proxies. Require rich/minimal/streamed parity.
+- [x] Document mapping format, key/type limits, attachment and generation refresh, import append policy, FK cardinality/cross-backend limits, required permissions, generic-mode compatibility and recoverable import publication failures.
+- [x] Run full CPU regressions, live relational/mixed-backend suite, generic live smoke, documentation/link checks and whitespace checks. Record actual commands/results and any unavailable checks before claiming completion.
+- [x] Review every acceptance criterion in #13–#22 against tests and documented limitations. Keep #12 open until unsupported cases have been explicitly accepted or implemented. No automatic issue closure, merge or deployment.
 
 ## Verification commands
 
@@ -664,3 +664,67 @@ Neo4j/ArangoDB stores to exercise routing through the actual BFS executor. Full
 live three-service acceptance remains #22. The user explicitly requested commit
 with `Closes #21`, push and closure; the issue is closed explicitly after pushing
 the non-default feature branch. No #22 implementation or parent #12 closure.
+
+## Issue #22 execution record — 2026-11-11
+
+Completed Task 8 on top of `38937ce` with tests and documentation; production
+adapter/import behavior is unchanged. The owned Docker lifecycle now supports a
+consolidated `integration.postgres-relational` acceptance test, registered only
+with `POLYGRAPH_INGESTION_LIVE_TESTS=ON`. Explicitly requested runs fail on missing
+executables, images or services instead of reporting skipped acceptance.
+
+The checked-in fixture contains five logical types across app/geo/refs schemas,
+eight vertices and eight logical edges, scalar bigint/text/UUID keys, typed/NULL
+properties, parallel keyed junction rows, direct FKs, a cycle and a self-loop.
+Literal oracle layers and edge lists are independent of the importer/readers.
+The two workflows are SELECT-only populated attachment (including stable-ID
+refresh) and native import into pre-created empty destinations with compatible
+remote reference rows. Schema dumps, native row values and the unrelated sentinel
+are compared before/after. The mixed graph traverses actual PostgreSQL → Neo4j →
+ArangoDB → PostgreSQL stores; no peer stand-ins are used by this acceptance test.
+
+Five C++ probe cases run for attachment, refresh and mixed import (15 total).
+They verify typed source roots/owners, native property precision/NULLs, all three
+adjacency interfaces in every direction, literal BFS layers and valid
+predecessors, unknown mappings and generation rejection. Twelve oracle cases per
+primary workflow run through the real CLI with/without predecessors (48 runs).
+Four partition cuts, three backend cuts and two relational proxies are asserted.
+Negative command checks require the intended diagnostic, protecting against
+false acceptance from unrelated process failures. Read-only attachment leaves
+the full native dump unchanged and works without PostgreSQL TEMP privileges.
+
+Initial fixture/build failures corrected an unsupported relationship namespace
+field, a test sentinel constant and missing lifecycle state in a unit fixture.
+The service-free runner contract was RED before its implementation, then all five
+cases passed, including missing-prerequisite failure and wrong-rejection checks.
+No production correctness issue or broadened supported schema policy was needed.
+
+Verification:
+
+- Full CPU build passed. Configuration reused cached dependencies with
+  `FETCHCONTENT_FULLY_DISCONNECTED=ON` and the build's existing CMake executable;
+  the shell's alternate CMake initially attempted an unavailable network clone.
+- `POLYGRAPH_RELATIONAL_TEST_DSN='host=127.0.0.1 port=55413 dbname=postgres user=akos'
+  ctest --test-dir build/cpu-tests --output-on-failure -j 2 -E
+  '(^integration[.]ingestion[.]|^integration[.]postgres-relational$)'`:
+  625 passed, 3 optional skips, zero failures (628 entries), including all 143
+  existing live PostgreSQL component cases. Docker-only tests run separately.
+- `ctest --test-dir build/cpu-tests -R
+  '^(integration[.]postgres-relational|integration[.]ingestion[.]polygraph-jsonl)$'
+  --output-on-failure`: both registered tests passed. Relational acceptance took
+  63.10s, generic three-backend smoke 39.99s. The relational report confirms all
+  48 CLI runs, stable refreshed IDs, native schema/data, partition/proxy counts,
+  negative cases, owned cleanup and preservation of existing Docker resources.
+- Changed-C++ clang-format-21, documentation links and `git diff --check` passed.
+- Fresh-context review found no Critical, Important or material Minor findings.
+  Previous #13–#21 internals retain their existing reviews/regressions. Unsupported
+  types/CDC/FK arrangements remain documented; SIGKILL/daemon-loss recovery is not
+  claimed by this acceptance run. No deferred review findings remain.
+
+The [acceptance matrix](../../architecture/postgresql-relational-acceptance.md)
+maps every child criterion to tests/contracts; the
+[example guide](../../examples/relational-postgresql/README.md) documents operation
+and limits. Continue the user's established commit/push/child-closure workflow
+with `Closes #22`, explicitly closing the child after pushing this non-default
+branch. Parent #12 remains open for explicit acceptance of the documented limits.
+No merge or deployment is part of this task.

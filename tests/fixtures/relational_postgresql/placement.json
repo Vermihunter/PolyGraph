@@ -1,0 +1,22 @@
+{
+  "storageBackends": [
+    "Neo4J",
+    "ArangoDB",
+    "PostgreSQL"
+  ],
+  "nodeSources": {
+    "Person": "PostgreSQL",
+    "Document": "PostgreSQL",
+    "Place": "PostgreSQL",
+    "Gateway": "Neo4J",
+    "Sensor": "ArangoDB"
+  },
+  "relationshipSources": {
+    "READS": "PostgreSQL",
+    "AT": "PostgreSQL",
+    "OPENS": "PostgreSQL",
+    "NEXT": "Neo4J",
+    "RETURNS": "ArangoDB",
+    "MANAGER": "PostgreSQL"
+  }
+}

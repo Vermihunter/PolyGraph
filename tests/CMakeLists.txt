@@ -199,6 +199,10 @@ add_test(NAME python.ingestion_live_graph
     COMMAND "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_live_graph -v)
 set_tests_properties(python.ingestion_live_graph PROPERTIES
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 20)
+add_test(NAME python.ingestion_relational_live
+    COMMAND "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_relational_live -v)
+set_tests_properties(python.ingestion_relational_live PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 20)
 if(TARGET polygraph_bulk_import)
     add_test(NAME python.ingestion_docker_workflow
         COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
@@ -279,6 +283,20 @@ if(TARGET polygraph_backends)
 endif()
 
 if(TARGET polygraph_runtime AND TARGET polygraph_ingestion)
+    add_executable(polygraph_postgres_relational_acceptance_test postgres_relational_acceptance_test.cpp)
+    target_link_libraries(polygraph_postgres_relational_acceptance_test PRIVATE polygraph::runtime GTest::gtest)
+    polygraph_enable_project_checks(polygraph_postgres_relational_acceptance_test)
+    if(POLYGRAPH_INGESTION_LIVE_TESTS)
+        add_test(NAME integration.postgres-relational
+            COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/ingestion/relational_live.py"
+                --run --unique-output --binary "$<TARGET_FILE:polygraph_bulk_import>"
+                --bfs "$<TARGET_FILE:polygraph_bfs>" --attach "$<TARGET_FILE:polygraph_attach_postgres>"
+                --probe "$<TARGET_FILE:polygraph_postgres_relational_acceptance_test>"
+                --output-dir "${CMAKE_BINARY_DIR}/relational-live")
+        set_tests_properties(integration.postgres-relational PROPERTIES
+            LABELS "integration;live;postgresql;ingestion" TIMEOUT 900 RUN_SERIAL TRUE)
+    endif()
+
     add_executable(polygraph_postgres_relational_bfs_test postgres_relational_bfs_test.cpp)
     target_link_libraries(polygraph_postgres_relational_bfs_test PRIVATE polygraph::runtime polygraph::ingestion GTest::gtest)
     polygraph_enable_project_checks(polygraph_postgres_relational_bfs_test)

@@ -124,4 +124,7 @@ runtime construction, attached source roots, native table/FK adjacency, generic
 PostgreSQL BFS parity, directions/filters/depths/predecessors, metadata proxy-owner
 handoff, bounded chunks/callbacks, read-only roles, concurrent requests, callback
 failure and reentrancy. Cross-owner tests use real PostgreSQL plus deterministic
-in-process Neo4j/ArangoDB stores; full live three-service acceptance remains #22.
+in-process Neo4j/ArangoDB stores. The opt-in
+[consolidated acceptance suite](postgresql-relational-acceptance.md) additionally
+uses real PostgreSQL, Neo4j and ArangoDB services for both attachment/import
+workflow coverage and cross-owner BFS.

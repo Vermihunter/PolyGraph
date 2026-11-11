@@ -1,0 +1,113 @@
+{
+  "nodeTypes": [
+    {
+      "name": "Person",
+      "properties": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "active",
+          "type": "boolean"
+        },
+        {
+          "name": "total",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "Document",
+      "properties": [
+        {
+          "name": "title",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "Place",
+      "properties": [
+        {
+          "name": "label",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "Gateway",
+      "properties": [
+        {
+          "name": "name",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "Sensor",
+      "properties": [
+        {
+          "name": "name",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "name": "READS",
+      "from": "Person",
+      "to": "Document",
+      "directed": true,
+      "properties": [
+        {
+          "name": "weight",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "name": "AT",
+      "from": "Document",
+      "to": "Place",
+      "directed": true,
+      "properties": []
+    },
+    {
+      "name": "OPENS",
+      "from": "Place",
+      "to": "Gateway",
+      "directed": true,
+      "properties": []
+    },
+    {
+      "name": "NEXT",
+      "from": "Gateway",
+      "to": "Sensor",
+      "directed": true,
+      "properties": []
+    },
+    {
+      "name": "RETURNS",
+      "from": "Sensor",
+      "to": "Person",
+      "directed": true,
+      "properties": []
+    },
+    {
+      "name": "MANAGER",
+      "from": "Person",
+      "to": "Person",
+      "directed": true,
+      "properties": []
+    },
+    {
+      "name": "UNMAPPED",
+      "from": "Person",
+      "to": "Person",
+      "directed": true,
+      "properties": []
+    }
+  ]
+}
