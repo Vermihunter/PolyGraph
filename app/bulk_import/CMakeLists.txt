@@ -1,3 +1,8 @@
+add_library(polygraph_ingestion_cli STATIC BulkImportCli.cpp)
+add_library(polygraph::ingestion_cli ALIAS polygraph_ingestion_cli)
+target_link_libraries(polygraph_ingestion_cli PUBLIC polygraph::ingestion)
+polygraph_configure_target(polygraph_ingestion_cli)
+
 add_executable(polygraph_bulk_import main.cpp)
-target_link_libraries(polygraph_bulk_import PRIVATE polygraph::ingestion)
+target_link_libraries(polygraph_bulk_import PRIVATE polygraph::ingestion_cli)
 polygraph_configure_target(polygraph_bulk_import)

@@ -51,6 +51,14 @@ sudo apt install libpq-dev
 
 CMake discovers it with `find_package(PostgreSQL)` and links `PostgreSQL::PostgreSQL`. The Python loader separately uses psycopg 3 from `tools/requirements.txt`.
 
+## SQLite runtime dependency
+
+Runtime builds require SQLite development headers/libraries for indexed typed
+source-root lookup, even when the standalone importer is disabled. This reuses
+the native ingestion dependency and does not link the ingestion engine into BFS.
+On Ubuntu, install `libsqlite3-dev`. See
+[runtime source roots](RUNTIME_GRAPH_METADATA.md) for the metadata boundary.
+
 ## Dependency fetching
 
 By default presets enable `POLYGRAPH_FETCH_DEPENDENCIES`. First configuration therefore needs network access for missing FetchContent dependencies. In an offline build environment, preinstall/provide those dependencies or point CMake at an existing dependency prefix.

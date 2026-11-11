@@ -5,24 +5,16 @@
 namespace polygraph::ingestion::detail {
     namespace {
         constexpr std::size_t mib = 1024 * 1024;
-        unsigned tuning(const Json &target, const std::string &name, unsigned fallback, unsigned maximum) {
-            if (!target.contains(name))
-                return fallback;
-            const auto &value = target.at(name);
-            if (!value.is_number_integer() || value < 1 || value > maximum)
-                throw Error("Arango " + name + " must be an integer in [1," + std::to_string(maximum) + "]");
-            return value.get<unsigned>();
-        }
         class Arango final : public IImportExecutor {
         public:
             explicit Arango(ImportContext context) :
                 context_(std::move(context)), base_("/_db/" + context_.target.at("database").get<std::string>()),
-                batch_bytes_(tuning(context_.target, "import_batch_mb", 1, 64) * mib),
-                limits_{.workers = tuning(context_.target, "import_concurrency", 4, 32),
+                batch_bytes_(arango_import_tuning(context_.target, "import_batch_mb", 1, 64) * mib),
+                limits_{.workers = arango_import_tuning(context_.target, "import_concurrency", 4, 32),
                         .max_queued_batches = 8,
-                        .max_buffered_bytes = tuning(context_.target, "import_buffer_mb", 128, 1024) * mib} {
-                if (limits_.max_buffered_bytes < batch_bytes_)
-                    throw Error("Arango import_buffer_mb must be at least import_batch_mb");
+                        .max_buffered_bytes =
+                                arango_import_tuning(context_.target, "import_buffer_mb", 128, 1024) * mib} {
+                validate_arango_import_options(context_.target);
             }
             void preflight() override { ensure_empty(); }
             Json run() override {

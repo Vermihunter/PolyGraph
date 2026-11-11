@@ -24,7 +24,6 @@ from tools.measurement.graph_bench.config import (
 )
 from tools.measurement.graph_bench.graph_data import read_start_uuids
 from tools.measurement.graph_bench.orchestrator import BfsBenchmarkOrchestrator, normalize_backends
-from tools.measurement.graph_bench.plotting import write_plots
 from tools.measurement.graph_bench.services import wait_http
 from tools.measurement.graph_bench.subprocesses import CommandRunner
 
@@ -117,6 +116,10 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
     if not isinstance(raw, dict):
         raise ValueError("Benchmark configuration root must be a JSON object")
 
+    path_base = raw.get("pathBase", "repository")
+    if path_base not in ("repository", "config"):
+        raise ValueError("pathBase must be repository or config")
+    path_root = config_path.parent if path_base == "config" else ROOT
     build_raw = _object(raw, "build")
     services_raw = _object(raw, "services")
     bfs_raw = _object(raw, "bfs")
@@ -128,6 +131,7 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
 
     datasets: list[DatasetSpec] = []
     seen_names: set[str] = set()
+    seen_paths: set[str] = set()
     for index, item in enumerate(datasets_raw):
         if not isinstance(item, dict):
             raise ValueError(f"datasets[{index}] must be an object")
@@ -137,6 +141,10 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
         if name in seen_names:
             raise ValueError(f"Duplicate dataset name: {name}")
         seen_names.add(name)
+        directory_name = _safe_name(name)
+        if directory_name in seen_paths:
+            raise ValueError(f"Dataset output path collision: {name}")
+        seen_paths.add(directory_name)
         if "domain" not in item:
             raise ValueError(f"datasets[{index}].domain is required")
 
@@ -183,10 +191,10 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
         datasets.append(
             DatasetSpec(
                 name=name,
-                domain=_repo_path(str(item["domain"])),
+                domain=_repo_path(str(item["domain"]), root=path_root),
                 compose_instance=compose_instance,
                 compose_project=compose_project,
-                start_uuids_file=_repo_path(str(starts_file)) if starts_file else None,
+                start_uuids_file=_repo_path(str(starts_file), root=path_root) if starts_file else None,
                 start_uuids=_string_list(item.get("startUuids"), field_name=f"datasets[{index}].startUuids"),
                 prepare=prepare,
             )
@@ -244,7 +252,7 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
             "scenarios.loadDistributed is false"
         )
 
-    output_dir = _repo_path(str(raw.get("outputDir", f"measurements/{raw.get('name', 'bfs-suite')}")))
+    output_dir = _repo_path(str(raw.get("outputDir", f"measurements/{raw.get('name', 'bfs-suite')}")), root=path_root)
     binary_raw = raw.get("graphDbBinary")
 
     return SuiteConfig(
@@ -256,8 +264,8 @@ def load_suite_config(path: str | Path) -> SuiteConfig:
         fail_on_mismatch=bool(raw.get("failOnMismatch", True)),
         reconstruct_logs=bool(raw.get("reconstructLogs", True)),
         batch_size=int(raw.get("batchSize", 5000)),
-        graph_db_binary=_repo_path(str(binary_raw)) if binary_raw else None,
-        docker_compose=_repo_path(str(raw.get("dockerCompose", "storage_layer/docker-compose.yml"))),
+        graph_db_binary=_repo_path(str(binary_raw), root=path_root) if binary_raw else None,
+        docker_compose=_repo_path(str(raw.get("dockerCompose", ROOT / "storage_layer/docker-compose.yml")), root=path_root),
         build=BuildSpec(
             enabled=bool(build_raw.get("enabled", True)),
             preset=str(build_raw.get("preset", "gpu-bfs")),
@@ -398,6 +406,8 @@ def _benchmark_config(config: SuiteConfig, domain: DomainConfig) -> BenchmarkCon
 def _dataset_starts(dataset: DatasetSpec, domain: DomainConfig, count: int) -> list[str]:
     starts = read_start_uuids(dataset.start_uuids, dataset.start_uuids_file)
     if not starts:
+        if domain.start_uuid is None:
+            raise ValueError("Benchmark suites need startUuids/startUuidsFile for typed-root graphs; use polygraph.py run --start-source for direct typed-root execution")
         starts = [domain.start_uuid]
     if len(starts) < count:
         raise ValueError(
@@ -542,6 +552,8 @@ def run_suite(
     skip_services: bool = False,
     resume: bool = False,
 ) -> Path:
+    from tools.measurement.graph_bench.plotting import write_plots
+
     effective_run_id = _safe_name(run_id or config.name)
     suite_output = Path(output_dir).expanduser().resolve() if output_dir else config.output_dir / effective_run_id
     output_nonempty = suite_output.exists() and any(suite_output.iterdir())
@@ -586,6 +598,7 @@ def run_suite(
         )
 
 
+    validated_starts: dict[str, list[str]] = {}
     for dataset in config.datasets:
         should_prepare = not resume and dataset.prepare and (
             not dataset.prepare.when_missing or not _dataset_files_ready(dataset)
@@ -601,6 +614,7 @@ def run_suite(
             )
         if not dry_run:
             prepared_domain = load_domain_manifest(dataset.domain)
+            validated_starts[dataset.name] = _dataset_starts(dataset, prepared_domain, config.start_uuid_count)
             for required in (
                 prepared_domain.paths.schema,
                 prepared_domain.paths.data,
@@ -650,6 +664,9 @@ def run_suite(
             continue
 
         domain = load_domain_manifest(dataset.domain)
+        starts = validated_starts.get(dataset.name)
+        if starts is None:
+            starts = _dataset_starts(dataset, domain, config.start_uuid_count)
 
         if (
             config.services.start
@@ -698,7 +715,6 @@ def run_suite(
             initialized_projects.add(dataset.compose_project)
             active_compose_project = dataset.compose_project
 
-        starts = _dataset_starts(dataset, domain, config.start_uuid_count)
         dataset_output = suite_output / "datasets" / _safe_name(dataset.name)
         orchestrator = BfsBenchmarkOrchestrator(
             _benchmark_config(config, domain),

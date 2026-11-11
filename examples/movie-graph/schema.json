@@ -1,0 +1,93 @@
+{
+  "nodeTypes": [
+    {
+      "name": "Person",
+      "properties": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "birth_year",
+          "type": "integer"
+        },
+        {
+          "name": "active",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "name": "Film",
+      "properties": [
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "release_year",
+          "type": "integer"
+        },
+        {
+          "name": "rating",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "name": "Studio",
+      "properties": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "independent",
+          "type": "boolean"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "name": "ACTED_IN",
+      "from": "Person",
+      "to": "Film",
+      "directed": true,
+      "properties": [
+        {
+          "name": "role",
+          "type": "string"
+        },
+        {
+          "name": "credited",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "name": "DIRECTED",
+      "from": "Person",
+      "to": "Film",
+      "directed": true,
+      "properties": [
+        {
+          "name": "fee",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "PRODUCED_BY",
+      "from": "Film",
+      "to": "Studio",
+      "directed": true,
+      "properties": [
+        {
+          "name": "budget",
+          "type": "float"
+        }
+      ]
+    }
+  ]
+}

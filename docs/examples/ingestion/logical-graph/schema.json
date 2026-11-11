@@ -1,0 +1,28 @@
+{
+  "nodeTypes": [
+    {"name": "Device", "properties": [
+      {"name": "external_id", "type": "integer"},
+      {"name": "enabled", "type": "boolean"},
+      {"name": "temperature", "type": "float"},
+      {"name": "note", "type": "string"}
+    ]},
+    {"name": "Site", "properties": [
+      {"name": "external_id", "type": "integer"},
+      {"name": "name", "type": "string"}
+    ]},
+    {"name": "Gateway", "properties": [
+      {"name": "external_id", "type": "integer"},
+      {"name": "name", "type": "string"}
+    ]},
+    {"name": "Sensor", "properties": [
+      {"name": "external_id", "type": "integer"},
+      {"name": "name", "type": "string"}
+    ]}
+  ],
+  "relations": [
+    {"name": "INSTALLED_AT", "from": "Device", "to": "Site", "directed": true,
+     "properties": [{"name": "since", "type": "date"}]},
+    {"name": "REPORTS_TO", "from": "Sensor", "to": "Gateway", "directed": true, "properties": []},
+    {"name": "CONNECTS", "from": "Gateway", "to": "Device", "directed": true, "properties": []}
+  ]
+}

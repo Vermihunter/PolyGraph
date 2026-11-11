@@ -1,3 +1,5 @@
+find_package(SQLite3 REQUIRED)
+
 set(POLYGRAPH_RUNTIME_SOURCES
     "${PROJECT_SOURCE_DIR}/src/cli/CommandLine.cpp"
     "${PROJECT_SOURCE_DIR}/src/cli/CurlGlobalGuard.cpp"
@@ -5,6 +7,7 @@ set(POLYGRAPH_RUNTIME_SOURCES
     "${PROJECT_SOURCE_DIR}/src/cli/GraphDataReader.cpp"
     "${PROJECT_SOURCE_DIR}/src/cli/GraphRuntimeBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/src/cli/NativeNodeIdResolver.cpp"
+    "${PROJECT_SOURCE_DIR}/src/cli/SourceNodeIdResolver.cpp"
     "${PROJECT_SOURCE_DIR}/src/cli/BfsCli.cpp"
     "${PROJECT_SOURCE_DIR}/src/cli/Cli.cpp"
 )
@@ -21,6 +24,7 @@ target_link_libraries(
         argparse::argparse
     PRIVATE
         polygraph::curl
+        SQLite::SQLite3
 )
 
 if(POLYGRAPH_ENABLE_GPU)

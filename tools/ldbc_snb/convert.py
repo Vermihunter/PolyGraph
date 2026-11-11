@@ -939,7 +939,7 @@ def convert_dataset(
         )
         gpu_storage_result = plan_gpu_storage(
             graph_output,
-            gpu_distribution_raw,
+            gpu_distribution_config if gpu_distribution_config is not None else gpu_distribution_raw,
             output_dir=gpu_storage_root,
             routing_layout=placement.routing_layout(),
             planning_db_path=planning_db,
@@ -951,7 +951,7 @@ def convert_dataset(
     if cache_raw:
         cache_result = plan_graph_caches(
             graph_output,
-            cache_raw,
+            cache_config,
             output_dir=cache_root,
             routing_layout=placement.routing_layout(),
             planning_db_path=planning_db,

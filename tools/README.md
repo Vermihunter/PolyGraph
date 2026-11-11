@@ -91,3 +91,11 @@ python3 tools/measurement/run_cache_matrix.py \
 The matrix activates the requested storage SF, ensures the Redis cache service is
 up, validates that all eight cache plans exist, creates one unmeasured warm-up
 round, then runs `N` measured rounds for every cache configuration.
+
+## Generic graph configuration
+
+Use `polygraph.py import --graph-manifest <file|directory|ID>` for native import;
+`--data-root` selects an external graph search directory. Generic runtime/cache
+commands accept that same selector. Existing positional and named LDBC aliases
+remain supported. See [graph-aware Python tools](../docs/guides/GRAPH_TOOLS.md) for
+path rules, native load aliases, typed roots and portable benchmark configs.

@@ -1,0 +1,8 @@
+add_library(polygraph_movie_input STATIC MovieAdapter.cpp)
+target_link_libraries(polygraph_movie_input PUBLIC polygraph::ingestion)
+target_include_directories(polygraph_movie_input PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+polygraph_configure_target(polygraph_movie_input)
+
+add_executable(polygraph_movie_import main.cpp)
+target_link_libraries(polygraph_movie_import PRIVATE polygraph_movie_input polygraph::ingestion_cli)
+polygraph_configure_target(polygraph_movie_import)

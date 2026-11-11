@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .workspace import claim_output, claim_index, default_planning_index
+
 import array
 import itertools
 import json
@@ -969,7 +971,7 @@ def plan_graph_caches(
 ) -> dict[str, Any]:
     graph = Path(graph_path).expanduser().resolve()
     output = Path(output_dir).expanduser().resolve()
-    output.mkdir(parents=True, exist_ok=True)
+    claim_output(output, graph, protected=(Path(cache_config),) if isinstance(cache_config, (str, Path)) else ())
     config = cache_config if isinstance(cache_config, dict) else load_cache_config(cache_config)
     metadata = open_graph_reader(graph).metadata()
     # Constructing the routing layout validates the graph's ID-routing metadata even
@@ -979,8 +981,9 @@ def plan_graph_caches(
     planning_db = (
         Path(planning_db_path).expanduser().resolve()
         if planning_db_path is not None
-        else graph.parent / "cache-plan.sqlite3"
+        else default_planning_index(graph)
     )
+    claim_index(planning_db, graph)
     reuse_index = planning_db.is_file()
     if reuse_index:
         print(

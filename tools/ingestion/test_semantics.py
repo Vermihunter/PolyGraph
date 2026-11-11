@@ -15,10 +15,128 @@ import unittest
 
 from tools.graphio.id_codec import BackendLayout, canonical_global_id, local_payload, to_signed_storage
 from tools.graphio.loaders import EndpointInfo, _build_proxy_node, relationship_stored_on
-from tools.graphio.domain import sanitize_name
+from tools.graphio.domain import sanitize_name, validate_graph
+from tools.graphio.reader import open_graph_reader
 from tools.ldbc_snb.convert import discover_csv_files, iter_nodes, iter_relationships, load_placement
 
 FIXTURE = Path(__file__).resolve().parents[2] / 'tests/fixtures/ingestion'
+CONTRACT_EXAMPLE = Path(__file__).resolve().parents[2] / 'docs/examples/ingestion/logical-graph'
+
+
+class LogicalContractExampleTest(unittest.TestCase):
+    def test_documented_graph_preserves_typed_values_and_distinct_source_id_entities(self):
+        graph = CONTRACT_EXAMPLE / 'graph.jsonl'
+        self.assertTrue(graph.is_file(), 'The logical graph contract needs a runnable JSONL example')
+        result = validate_graph(graph)
+        self.assertEqual(result['errors'], [])
+        reader = open_graph_reader(graph)
+        nodes = list(reader.iter_nodes())
+        self.assertEqual([(n.type, n.properties['external_id']) for n in nodes],
+                         [('Device', 7), ('Site', 7), ('Gateway', 7), ('Sensor', 7)])
+        self.assertEqual(len({n.uuid for n in nodes}), 4)
+        self.assertEqual(nodes[0].source, nodes[1].source)  # Type identity, not different owner bits.
+        self.assertIs(type(nodes[0].properties['enabled']), bool)
+        self.assertIs(type(nodes[0].properties['temperature']), float)
+        self.assertIsNone(nodes[0].properties['note'])
+        self.assertEqual(nodes[0].properties['tags'], ['indoor', 'primary'])
+        self.assertEqual(nodes[-1].uuid, 9223372036854775809)
+
+
+class NativeLogicalContractTest(unittest.TestCase):
+    def setUp(self):
+        self.binary = os.environ.get('POLYGRAPH_BULK_IMPORT')
+        if not self.binary:
+            self.skipTest('POLYGRAPH_BULK_IMPORT is required; CTest supplies the built executable')
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def prepare(self, graph, output):
+        return subprocess.run([self.binary, 'prepare', '--adapter', 'polygraph-jsonl', '--input', str(graph),
+                               '--placement-config', str(CONTRACT_EXAMPLE / 'placement.json'),
+                               '--output-dir', str(output)], capture_output=True, text=True)
+
+    def test_cli_discovers_adapters_and_rejects_unknown_names_before_input_or_docker(self):
+        discovery = subprocess.run([self.binary, 'adapters'], capture_output=True, text=True)
+        self.assertEqual(discovery.returncode, 0, discovery.stderr)
+        self.assertEqual(discovery.stdout.splitlines(), ['ldbc-snb', 'polygraph-jsonl'])
+        for command, extra in [('prepare', []), ('load', ['--docker'])]:
+            with self.subTest(command=command):
+                result = subprocess.run([self.binary, command, '--adapter', 'missing-adapter', '--input', 'missing',
+                                         '--placement-config', 'missing', '--output-dir', str(self.root / command),
+                                         *extra], capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Unknown adapter: missing-adapter (available: ldbc-snb, polygraph-jsonl)', result.stderr)
+                self.assertFalse((self.root / command).exists())
+
+    def test_documented_graph_prepares_all_backends_and_preserves_parallel_edges(self):
+        output = self.root / 'prepared'
+        result = self.prepare(CONTRACT_EXAMPLE / 'graph.jsonl', output)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads((output / 'manifest.json').read_text())
+        self.assertEqual(manifest['counts'], {'nodes': 4, 'edges': 4})
+        self.assertEqual(manifest['id_strategy'], 'preserve-canonical-v2')
+        self.assertEqual(set(manifest['backends']), {'Neo4J', 'ArangoDB', 'PostgreSQL'})
+        for backend in manifest['backends'].values():
+            self.assertGreater(backend['counts']['nodes'], 0)
+            self.assertGreater(backend['counts']['edges'], 0)
+        with sqlite3.connect(output / manifest['index']['path']) as db:
+            rows = db.execute('SELECT id,type,properties FROM nodes ORDER BY type').fetchall()
+            self.assertEqual({kind: json.loads(props)['external_id'] for _, kind, props in rows},
+                             {'Device': 7, 'Gateway': 7, 'Sensor': 7, 'Site': 7})
+            self.assertEqual(len({identifier for identifier, _, _ in rows}), 4)
+            self.assertEqual(db.execute('SELECT from_id,to_id FROM edges WHERE type="INSTALLED_AT"').fetchall(),
+                             [(281474976710657, 281474976710658)] * 2)
+            device = next(json.loads(props) for _, kind, props in rows if kind == 'Device')
+            self.assertIsNone(device['note'])
+        verification = subprocess.run([self.binary, 'verify', '--manifest', str(output / 'manifest.json'), '--strict'],
+                                      capture_output=True, text=True)
+        self.assertEqual(verification.returncode, 0, verification.stderr)
+
+    def test_missing_endpoint_duplicate_identity_and_missing_jsonl_edge_id_do_not_publish(self):
+        original = [json.loads(line) for line in (CONTRACT_EXAMPLE / 'graph.jsonl').read_text().splitlines()]
+        for case in ('missing-endpoint', 'duplicate-node', 'cross-kind-id', 'missing-edge-id'):
+            with self.subTest(case=case):
+                records = json.loads(json.dumps(original))
+                if case == 'missing-endpoint':
+                    records[-1]['to'] = 281474976711655
+                elif case == 'duplicate-node':
+                    records.insert(2, records[1])
+                elif case == 'cross-kind-id':
+                    records[5]['uuid'] = records[1]['uuid']
+                else:
+                    del records[-1]['uuid']
+                graph = self.root / f'{case}.jsonl'
+                graph.write_text(''.join(json.dumps(record) + '\n' for record in records))
+                output = self.root / case
+                result = self.prepare(graph, output)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((output / 'manifest.json').exists())
+                if case == 'missing-endpoint':
+                    self.assertIn('Unresolved relationship endpoint', result.stderr)
+
+    def test_ldbc_equal_source_ids_in_different_types_share_owner_without_collision(self):
+        raw = self.root / 'raw'
+        raw.mkdir()
+        (raw / 'person_0_0.csv').write_text('id|firstName\n7|Ada\n')
+        (raw / 'post_0_0.csv').write_text('id|content\n7|Hello\n')
+        (raw / 'person_likes_post_0_0.csv').write_text('Person.id|Post.id\n7|7\n')
+        placement = self.root / 'placement.json'
+        placement.write_text(json.dumps({'storageBackends': ['Neo4J'],
+                                        'defaultNodeSource': 'Neo4J', 'defaultRelationshipSource': 'Neo4J'}))
+        output = self.root / 'ldbc'
+        result = subprocess.run([self.binary, 'prepare', '--adapter', 'ldbc-snb', '--input', str(raw),
+                                 '--placement-config', str(placement), '--output-dir', str(output)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads((output / 'manifest.json').read_text())
+        self.assertEqual(manifest['id_strategy'], 'ldbc-block31-v3')
+        with sqlite3.connect(output / manifest['index']['path']) as db:
+            nodes = db.execute('SELECT key,id,owner FROM nodes ORDER BY key').fetchall()
+            self.assertEqual(nodes, [('Person:7', 281474976710663, 'Neo4J'),
+                                     ('Post:7', 281477124194311, 'Neo4J')])
+            self.assertEqual(db.execute('SELECT from_id,to_id FROM edges').fetchall(),
+                             [(281474976710663, 281477124194311)])
 
 
 class NativeSemanticsTest(unittest.TestCase):

@@ -6,6 +6,7 @@
 #include "cli/BackendConfigParser.hpp"
 #include "cli/CommandLine.hpp"
 #include "cli/CurlGlobalGuard.hpp"
+#include "cli/DomainManifest.hpp"
 #include "cli/GraphRuntimeBuilder.hpp"
 #include "data_access/IGraphStore.hpp"
 #include "data_access/adapters/ArangoDB/ArangoGraphStore.hpp"
@@ -65,6 +66,39 @@
 #include "utilities/curl.hpp"
 #include "utilities/uuid.hpp"
 
+#include <fstream>
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 TEST(PublicHeadersTest, CpuFacingHeadersCompileTogether) { SUCCEED(); }
+
+TEST(DomainManifestCompatibilityTest, NativeIngestionExtensionPreservesRuntimePathsAndBfsDefaults) {
+    const auto directory = std::filesystem::path(POLYGRAPH_PROJECT_ROOT) / "docs/examples/ingestion/logical-graph";
+    const auto manifest = polygraph::cli::load_domain_manifest(directory / "domain.json");
+    EXPECT_EQ(manifest.id, "logical-contract-example");
+    EXPECT_EQ(manifest.logical_graph_schema_path, directory / "schema.json");
+    EXPECT_EQ(manifest.data_path, directory / "graph.jsonl");
+    EXPECT_EQ(manifest.backend_config_path, directory / "backends.json");
+    EXPECT_EQ(manifest.bfs.start_uuid, "281474976710657");
+    EXPECT_EQ(manifest.bfs.direction, "undirected");
+    EXPECT_EQ(manifest.bfs.max_depth, 2);
+}
+
+TEST(DomainManifestCompatibilityTest, NativeDefaultArtifactPathMatchesWorkspace) {
+    auto pattern = (std::filesystem::temp_directory_path() / "polygraph-runtime-workspace-XXXXXX").string();
+    const auto directory = ::mkdtemp(pattern.data());
+    ASSERT_NE(directory, nullptr);
+    const auto root = std::filesystem::path(directory);
+    const auto path = root / "domain.json";
+    std::ofstream(path) << json{
+            {"format", "polygraph.domain"},
+            {"version", 1},
+            {"id", "inventory"},
+            {"workspace", {{"root", "generated"}, {"id", "stable"}}},
+            {"paths", {{"schema", "schema.json"}, {"data", "graph.jsonl"}, {"backendConfig", "backends.json"}}},
+            {"ingestion", {{"adapter", "polygraph-jsonl"}}}};
+    const auto manifest = polygraph::cli::load_domain_manifest(path);
+    EXPECT_EQ(manifest.ingestion_artifacts_path, root / "generated/stable/ingestion");
+    EXPECT_FALSE(std::filesystem::exists(root / "generated"));
+    std::filesystem::remove_all(root);
+}

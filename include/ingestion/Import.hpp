@@ -1,6 +1,7 @@
 #ifndef POLYGRAPH_INGESTION_IMPORT_HPP
 #define POLYGRAPH_INGESTION_IMPORT_HPP
 
+#include "domain/graph/SourceIdentity.hpp"
 #include "ingestion/Partition.hpp"
 #include "utilities/json.hpp"
 
@@ -33,6 +34,11 @@ namespace polygraph::ingestion {
     [[nodiscard]] constexpr std::int64_t signed_id(Id id) noexcept { return std::bit_cast<std::int64_t>(id); }
     [[nodiscard]] std::string sanitize_name(const std::string &name);
 
+    // Exact source ID values: string, signed int64 or unsigned uint64 (no coercion).
+    using SourceIdentity = domain::SourceIdentity;
+    // Stable, injective v1 encoding; kind defaults to vertex for endpoint/partition keys.
+    [[nodiscard]] std::string source_identity_key(const SourceIdentity &identity, bool edge = false);
+
     struct Record {
         std::string key;
         std::string type;
@@ -42,6 +48,10 @@ namespace polygraph::ingestion {
         std::string from;
         std::string to;
         std::optional<unsigned> partition;
+        // Additive typed-source API. Legacy key/from/to keep their existing meaning.
+        std::optional<SourceIdentity> identity = {};
+        std::optional<SourceIdentity> from_identity = {};
+        std::optional<SourceIdentity> to_identity = {};
     };
     using RecordConsumer = std::function<void(Record)>;
     // Each call streams one phase, never retaining the graph. Consumers may batch externally.
@@ -53,6 +63,12 @@ namespace polygraph::ingestion {
         [[nodiscard]] virtual Json metadata() const = 0;
     };
 
+    class InputAdapterRegistry;
+    struct ArtifactWorkspace {
+        fs::path root;
+        fs::path manifest;
+        fs::path graph;
+    };
     struct PrepareOptions {
         std::string adapter;
         fs::path input;
@@ -67,6 +83,11 @@ namespace polygraph::ingestion {
         unsigned memory_limit_mb = 256;
         unsigned chunk_size_mb = 64;
         unsigned max_record_mb = 8;
+        // Optional caller-owned registry; must outlive prepare(). Null selects immutable built-ins.
+        const InputAdapterRegistry *input_adapters = nullptr;
+        // Optional graph declaration/schema/config files bound to preparation identity.
+        std::vector<fs::path> configuration_files = {};
+        std::optional<ArtifactWorkspace> workspace = {};
     };
     struct Placement {
         Json configuration;

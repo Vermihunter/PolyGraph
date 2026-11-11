@@ -1,0 +1,144 @@
+{
+  "nodes": [
+    {
+      "ref": "node-0",
+      "identity": {
+        "uuid": 281474976710657
+      },
+      "type": "Person",
+      "owner": "Neo4J",
+      "properties": {
+        "firstName": "Zoë|😀",
+        "birthday": "2000-01-01",
+        "ldbc_id": 1,
+        "email": [
+          "a@example.org",
+          "b@example.org"
+        ],
+        "language": [
+          "en",
+          "sk"
+        ]
+      }
+    },
+    {
+      "ref": "node-1",
+      "identity": {
+        "uuid": 562952100904962
+      },
+      "type": "Post",
+      "owner": "ArangoDB",
+      "properties": {
+        "content": "hello, \"world\"\nnext",
+        "length": 12,
+        "ldbc_id": 2
+      }
+    },
+    {
+      "ref": "node-2",
+      "identity": {
+        "uuid": 9223372041149743107
+      },
+      "type": "Place",
+      "owner": "PostgreSQL",
+      "properties": {
+        "name": "Bratislava",
+        "ldbc_id": 3
+      }
+    }
+  ],
+  "edges": [
+    {
+      "ref": "edge-0",
+      "identity": {
+        "uuid": 9223574346994286592
+      },
+      "type": "PERSON_LIKES_POST",
+      "owner": "PostgreSQL",
+      "from": "node-0",
+      "to": "node-1",
+      "properties": {
+        "creationDate": "2020-01-01T00:00:00.000+0000"
+      }
+    },
+    {
+      "ref": "edge-1",
+      "identity": {
+        "uuid": 496979255754752
+      },
+      "type": "POST_HASCREATOR_PERSON",
+      "owner": "Neo4J",
+      "from": "node-1",
+      "to": "node-0",
+      "properties": {}
+    },
+    {
+      "ref": "edge-2",
+      "identity": {
+        "uuid": 787250325487616
+      },
+      "type": "POST_ISLOCATEDIN_PLACE",
+      "owner": "ArangoDB",
+      "from": "node-1",
+      "to": "node-2",
+      "properties": {}
+    }
+  ],
+  "traversals": [
+    {
+      "root": "node-0",
+      "direction": "directed",
+      "layers": [
+        [
+          "node-0"
+        ],
+        [
+          "node-1"
+        ],
+        [
+          "node-2"
+        ]
+      ]
+    },
+    {
+      "root": "node-0",
+      "direction": "undirected",
+      "layers": [
+        [
+          "node-0"
+        ],
+        [
+          "node-1"
+        ],
+        [
+          "node-2"
+        ]
+      ]
+    },
+    {
+      "root": "node-2",
+      "direction": "directed",
+      "layers": [
+        [
+          "node-2"
+        ],
+        []
+      ]
+    },
+    {
+      "root": "node-2",
+      "direction": "undirected",
+      "layers": [
+        [
+          "node-2"
+        ],
+        [
+          "node-1"
+        ],
+        [
+          "node-0"
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "nodeTypes": [{"name": "Person"}, {"name": "Post"}, {"name": "Place"}],
+  "relations": [
+    {"name": "PERSON_LIKES_POST", "from": "Person", "to": "Post", "directed": true},
+    {"name": "POST_ISLOCATEDIN_PLACE", "from": "Post", "to": "Place", "directed": true},
+    {"name": "POST_HASCREATOR_PERSON", "from": "Post", "to": "Person", "directed": true}
+  ]
+}

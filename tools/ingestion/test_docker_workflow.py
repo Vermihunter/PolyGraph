@@ -77,6 +77,12 @@ class DockerEnvironmentTest(unittest.TestCase):
         self.fake = FakeDocker()
         self.env = DockerEnvironment(Path(self.tmp.name), 'polygraph-test-abc123', runner=self.fake)
 
+    def test_generated_password_cannot_be_interpreted_as_neo4j_option(self):
+        with patch('tools.ingestion.docker_environment.secrets.token_urlsafe', return_value='-option-like-token'):
+            environment = DockerEnvironment(Path(self.tmp.name) / 'password-case', 'polygraph-password-test', runner=self.fake)
+        self.assertTrue(environment.password[0].isalnum())
+        self.assertTrue(environment.password.endswith('-option-like-token'))
+
     @patch('tools.ingestion.docker_environment.request', return_value={'error': False})
     def test_fresh_provisioning_private_credentials_and_owned_cleanup(self, http):
         self.env.provision()

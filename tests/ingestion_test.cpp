@@ -742,3 +742,70 @@ TEST_F(IngestionTest, LdbcUpdateStreamExceptionNeverHidesUnknownSnapshotTables) 
         }
     }
 }
+
+TEST_F(IngestionTest, NativeFailuresIdentifyBackendAndExecutionPhase) {
+    for (const auto &phase: {"preflight", "import", "verify"}) {
+        auto o = fixture();
+        o.output_dir = dir / phase;
+        (void) prepare(o);
+        write(dir / "targets.json",
+              R"({"targets":{"Neo4J":{"database":"bulk-test-neo"},"ArangoDB":{"database":"bulk_test_arango"},"PostgreSQL":{"database":"bulk_test_pg"}}})");
+        ExecutionState state;
+        state.fail_preflight = std::string_view(phase) == "preflight";
+        state.fail_import = std::string_view(phase) == "import";
+        state.fail_verification = std::string_view(phase) == "verify";
+        ExecutorFactory factory = [&](ImportContext c) { return std::make_unique<FakeExecutor>(std::move(c), state); };
+        try {
+            execute(o.output_dir / "manifest.json", dir / "targets.json", true, 1, factory);
+            FAIL() << "Failure was swallowed in " << phase;
+        } catch (const Error &e) {
+            const std::string message = e.what();
+            EXPECT_NE(message.find("backend=ArangoDB"), std::string::npos) << message;
+            EXPECT_NE(message.find(std::string("phase=") + phase), std::string::npos) << message;
+        }
+        if (state.fail_preflight)
+            EXPECT_EQ(state.imports, 0);
+    }
+}
+
+TEST_F(IngestionTest, UnfamiliarMixedSchemaPreservesPropertiesParallelEdgesAndProxies) {
+    const auto fixture_dir = fs::path(POLYGRAPH_PROJECT_ROOT) / "tests/fixtures/schema_agnostic";
+    PrepareOptions o{.adapter = "polygraph-jsonl",
+                     .input = fixture_dir / "graph.jsonl",
+                     .placement_config = fixture_dir / "placement.json",
+                     .output_dir = dir / "out"};
+    const auto manifest = prepare(o);
+    EXPECT_EQ(manifest.at("counts").at("nodes"), 4);
+    EXPECT_EQ(manifest.at("counts").at("edges"), 6);
+    EXPECT_NO_THROW((void) verify(o.output_dir / "manifest.json", true));
+    for (const auto *backend: {"Neo4J", "ArangoDB", "PostgreSQL"}) {
+        EXPECT_GT(manifest["backends"][backend]["counts"]["nodes"].get<int>(), 0);
+        EXPECT_GT(manifest["backends"][backend]["counts"]["edges"].get<int>(), 0);
+        EXPECT_GT(manifest["backends"][backend]["counts"]["proxies"].get<int>(), 0);
+    }
+}
+
+TEST_F(IngestionTest, UnfamiliarSchemaPartitionsUseCanonicalKeys) {
+    const auto fixture_dir = fs::path(POLYGRAPH_PROJECT_ROOT) / "tests/fixtures/schema_agnostic";
+    PrepareOptions o{.adapter = "polygraph-jsonl",
+                     .input = fixture_dir / "graph.jsonl",
+                     .placement_config = fixture_dir / "placement.json",
+                     .output_dir = dir / "out"};
+    o.partition_file = fixture_dir / "assignments.jsonl";
+    o.partition_map = fixture_dir / "partition-map.json";
+    const auto manifest = prepare(o);
+    EXPECT_EQ(manifest["partitioning"]["assignment_artifact"]["records"], 4);
+    EXPECT_EQ(manifest["partitioning"]["partition_cut_relationships"], 4);
+    EXPECT_EQ(manifest["counts"]["edges"], 6);
+    EXPECT_NO_THROW((void) verify(o.output_dir / "manifest.json", true));
+}
+
+TEST_F(IngestionTest, OwnedOutputCannotFollowSymlinksIntoSourceFiles) {
+    const auto o = fixture();
+    fs::create_directories(o.output_dir);
+    const auto source = o.input / "dynamic/person_0_0.csv";
+    const auto original = sha256_file(source);
+    fs::create_symlink(source, o.output_dir / "redirected.csv");
+    EXPECT_THROW((void) prepare(o), Error);
+    EXPECT_EQ(sha256_file(source), original);
+}

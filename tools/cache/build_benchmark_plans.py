@@ -9,7 +9,9 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.workflows.common import canonical_sf, discover_cache_configs, domain_dir, domain_manifest, polygraph, remove_path
+from tools.graphio.domain import load_domain_manifest
+from tools.graphio.workspace import workspace_for, claim_domain_output, claim_domain_index
+from tools.workflows.common import canonical_sf, discover_cache_configs, domain_manifest, polygraph, remove_path
 
 
 def default_config_dir(sf: str) -> Path:
@@ -34,9 +36,12 @@ def main() -> int:
         raise FileNotFoundError(f"Prepared domain is missing: {manifest}")
     config_dir = Path(args.config_dir).expanduser().resolve() if args.config_dir else default_config_dir(args.sf)
     configs = discover_cache_configs(config_dir)
-    root = domain_dir(args.sf, args.distribution)
-    cache_root = root / "caches"
-    planning_db = root / "cache-plan.sqlite3"
+    domain = load_domain_manifest(manifest)
+    workspace = workspace_for(domain)
+    cache_root = workspace.path("caches")
+    planning_db = workspace.path("index") / "cache-plan.sqlite3"
+    claim_domain_output(domain, cache_root, protected=tuple(Path(path) for path in configs))
+    claim_domain_index(domain, planning_db)
     if args.clean:
         remove_path(cache_root)
         remove_path(planning_db)

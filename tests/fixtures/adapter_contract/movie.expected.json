@@ -1,0 +1,393 @@
+{
+  "nodes": [
+    {
+      "ref": "Person:1",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "Person",
+          "idType": "int64",
+          "id": 1
+        }
+      },
+      "type": "Person",
+      "owner": "Neo4J",
+      "properties": {
+        "name": "Ada \"A\" Vale",
+        "birth_year": 1970,
+        "active": true
+      }
+    },
+    {
+      "ref": "Person:2",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "Person",
+          "idType": "int64",
+          "id": 2
+        }
+      },
+      "type": "Person",
+      "owner": "Neo4J",
+      "properties": {
+        "name": "Ben Okoro",
+        "birth_year": 1985,
+        "active": false
+      }
+    },
+    {
+      "ref": "Person:3",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "Person",
+          "idType": "int64",
+          "id": 3
+        }
+      },
+      "type": "Person",
+      "owner": "Neo4J",
+      "properties": {
+        "name": "Cyra Novák",
+        "birth_year": 1990,
+        "active": true
+      }
+    },
+    {
+      "ref": "Person:4",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "Person",
+          "idType": "int64",
+          "id": 4
+        }
+      },
+      "type": "Person",
+      "owner": "Neo4J",
+      "properties": {
+        "name": "Dina Reed",
+        "birth_year": 1978,
+        "active": true
+      }
+    },
+    {
+      "ref": "Film:1",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "Film",
+          "idType": "int64",
+          "id": 1
+        }
+      },
+      "type": "Film",
+      "owner": "ArangoDB",
+      "properties": {
+        "title": "Orbit, One",
+        "release_year": 2001,
+        "rating": 8.5
+      }
+    },
+    {
+      "ref": "Film:2",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "Film",
+          "idType": "int64",
+          "id": 2
+        }
+      },
+      "type": "Film",
+      "owner": "ArangoDB",
+      "properties": {
+        "title": "Harbor Lights",
+        "release_year": 2010,
+        "rating": 7.25
+      }
+    },
+    {
+      "ref": "Film:3",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "Film",
+          "idType": "int64",
+          "id": 3
+        }
+      },
+      "type": "Film",
+      "owner": "ArangoDB",
+      "properties": {
+        "title": "Silent Moon",
+        "release_year": 2020,
+        "rating": 9.0
+      }
+    },
+    {
+      "ref": "Studio:1",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "Studio",
+          "idType": "int64",
+          "id": 1
+        }
+      },
+      "type": "Studio",
+      "owner": "PostgreSQL",
+      "properties": {
+        "name": "North Star",
+        "independent": false
+      }
+    },
+    {
+      "ref": "Studio:2",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "Studio",
+          "idType": "int64",
+          "id": 2
+        }
+      },
+      "type": "Studio",
+      "owner": "PostgreSQL",
+      "properties": {
+        "name": "Pocket Pictures",
+        "independent": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "ref": "ACTED_IN:1",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "ACTED_IN",
+          "idType": "int64",
+          "id": 1
+        }
+      },
+      "type": "ACTED_IN",
+      "owner": "Neo4J",
+      "from": "Person:1",
+      "to": "Film:1",
+      "properties": {
+        "role": "Captain, Navigator",
+        "credited": true
+      }
+    },
+    {
+      "ref": "ACTED_IN:2",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "ACTED_IN",
+          "idType": "int64",
+          "id": 2
+        }
+      },
+      "type": "ACTED_IN",
+      "owner": "Neo4J",
+      "from": "Person:2",
+      "to": "Film:1",
+      "properties": {
+        "role": "Engineer",
+        "credited": true
+      }
+    },
+    {
+      "ref": "ACTED_IN:3",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "ACTED_IN",
+          "idType": "int64",
+          "id": 3
+        }
+      },
+      "type": "ACTED_IN",
+      "owner": "Neo4J",
+      "from": "Person:2",
+      "to": "Film:2",
+      "properties": {
+        "role": "Guest",
+        "credited": false
+      }
+    },
+    {
+      "ref": "ACTED_IN:4",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "ACTED_IN",
+          "idType": "int64",
+          "id": 4
+        }
+      },
+      "type": "ACTED_IN",
+      "owner": "Neo4J",
+      "from": "Person:3",
+      "to": "Film:3",
+      "properties": {
+        "role": "Lead",
+        "credited": true
+      }
+    },
+    {
+      "ref": "DIRECTED:1",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "DIRECTED",
+          "idType": "int64",
+          "id": 1
+        }
+      },
+      "type": "DIRECTED",
+      "owner": "ArangoDB",
+      "from": "Person:4",
+      "to": "Film:1",
+      "properties": {
+        "fee": 100
+      }
+    },
+    {
+      "ref": "DIRECTED:2",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "DIRECTED",
+          "idType": "int64",
+          "id": 2
+        }
+      },
+      "type": "DIRECTED",
+      "owner": "ArangoDB",
+      "from": "Person:3",
+      "to": "Film:2",
+      "properties": {
+        "fee": 0
+      }
+    },
+    {
+      "ref": "PRODUCED_BY:1",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "PRODUCED_BY",
+          "idType": "int64",
+          "id": 1
+        }
+      },
+      "type": "PRODUCED_BY",
+      "owner": "PostgreSQL",
+      "from": "Film:1",
+      "to": "Studio:1",
+      "properties": {
+        "budget": 1500000.0
+      }
+    },
+    {
+      "ref": "PRODUCED_BY:2",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "PRODUCED_BY",
+          "idType": "int64",
+          "id": 2
+        }
+      },
+      "type": "PRODUCED_BY",
+      "owner": "PostgreSQL",
+      "from": "Film:2",
+      "to": "Studio:1",
+      "properties": {
+        "budget": 2000000.0
+      }
+    },
+    {
+      "ref": "PRODUCED_BY:3",
+      "identity": {
+        "source": {
+          "namespace": "movie-graph",
+          "type": "PRODUCED_BY",
+          "idType": "int64",
+          "id": 3
+        }
+      },
+      "type": "PRODUCED_BY",
+      "owner": "PostgreSQL",
+      "from": "Film:3",
+      "to": "Studio:2",
+      "properties": {
+        "budget": 250000.0
+      }
+    }
+  ],
+  "traversals": [
+    {
+      "root": "Person:1",
+      "direction": "undirected",
+      "layers": [
+        [
+          "Person:1"
+        ],
+        [
+          "Film:1"
+        ],
+        [
+          "Person:2",
+          "Person:4",
+          "Studio:1"
+        ],
+        [
+          "Film:2"
+        ]
+      ]
+    },
+    {
+      "root": "Film:2",
+      "direction": "undirected",
+      "layers": [
+        [
+          "Film:2"
+        ],
+        [
+          "Person:2",
+          "Person:3",
+          "Studio:1"
+        ],
+        [
+          "Film:1",
+          "Film:3"
+        ],
+        [
+          "Person:1",
+          "Person:4",
+          "Studio:2"
+        ]
+      ]
+    },
+    {
+      "root": "Person:1",
+      "direction": "directed",
+      "layers": [
+        [
+          "Person:1"
+        ],
+        [
+          "Film:1"
+        ],
+        [
+          "Studio:1"
+        ],
+        []
+      ]
+    }
+  ]
+}

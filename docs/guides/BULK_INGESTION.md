@@ -1,6 +1,79 @@
 # Native bulk ingestion
 
-`polygraph_bulk_import` is a standalone C++23 preparation and native import tool. It does not link the BFS coordinator, query execution, servers, or GPU runtime. Legacy `tools/polygraph.py load` is unchanged.
+`polygraph_bulk_import` is a standalone C++23 preparation and native import tool. It does not link the BFS coordinator, query execution, servers, or GPU runtime. Legacy positional `tools/polygraph.py load DOMAIN` is unchanged.
+
+`validate --graph-manifest domain.json` provides read-only preflight, and
+`prepare --graph-manifest domain.json` uses the same configuration with the
+existing native engine. See [Graph manifests](GRAPH_MANIFESTS.md) for examples,
+path resolution, execution-prerequisite checks and compatibility.
+
+## Generic graph import
+
+Use the same command for each linked adapter; its `domain.json` selects adapter,
+input, schema, placement and output. The C++ engine performs normalization,
+partitioning, ID resolution, proxy generation, native artifact writing and
+execution. The Python entry point forwards to that engine without building or
+provisioning anything.
+
+```bash
+# Both prepare offline and strictly verify their native artifacts.
+build/cpu-tests/bin/polygraph_bulk_import import \
+  --graph-manifest docs/examples/ingestion/ldbc.domain.json
+build/cpu-tests/bin/polygraph_bulk_import import \
+  --graph-manifest docs/examples/ingestion/logical-graph/domain.json
+
+# Equivalent Python-facing entry point; --binary is optional at this build path.
+python3 -B tools/polygraph.py import \
+  --graph-manifest docs/examples/ingestion/logical-graph/domain.json \
+  --binary build/cpu-tests/bin/polygraph_bulk_import
+
+# Read-only configuration/inventory preflight; does not prepare artifacts.
+python3 -B tools/polygraph.py import --dry-run \
+  --graph-manifest docs/examples/ingestion/ldbc.domain.json
+
+# After configuring real, isolated fresh targets and Neo4j operator commands:
+python3 -B tools/polygraph.py import --execute --confirm-create \
+  --graph-manifest path/to/domain.json --concurrency 3
+```
+
+Default **prepare-only** writes to `paths.ingestionArtifacts` and runs strict
+artifact verification. It does not connect to databases, run target commands,
+start/stop services, invoke Docker, or touch database data. Immutable inputs and
+configurations support the existing checkpoint/artifact reuse rules.
+`--dry-run` does not write artifacts, caches or reports: it performs the same
+read-only checks as `validate`, including bounded leading metadata/table
+inspection. It does not validate all records, uniqueness, endpoint closure or
+live target freshness. Invalid record data can pass dry run and fail preparation.
+
+**Execution** requires both `--execute` and `--confirm-create`, and
+`paths.targetConfig` in the graph manifest. Offline executor, target, environment
+and operator-command checks run before preparation. Existing native execution
+then checks every live target before starting any backend import; strict
+verification and exact live verification remain enabled. For Neo4j, execution
+may invoke the configured offline-check, importer and start commands. The new
+command performs no container provisioning or cleanup, volume reset, automatic
+failed-import retry, or credential generation. `--concurrency` is execution-only
+and must be in [1,64]. Dry run cannot be combined with execution flags. The
+checked-in target example contains placeholders and must be configured before
+execution. See the target configuration and recovery sections below.
+
+Success prints one JSON report with `state` (`prepared` or `verified`), graph,
+adapter, generation ID, output directory, prepared manifest path, logical counts
+and per-backend authoritative-node/proxy/replicated-edge counts. Dry run prints a
+`valid` report and its explicit `not_checked` list. Progress and errors go to
+stderr, including adapter/phase and original source file/record context when
+available. Native executor failures identify backend and preflight/import/verify
+phase. Failed execution never emits a successful `verified` report; inspect the
+existing execution journal/logs before provisioning fresh targets. Native import
+exit codes are 2 for argument or JSON-type errors, 3 for manifest validation or
+preparation/verification failure, 4 for execution-mode workflow errors, and 5 for
+unexpected I/O/internal failure. Python forwards the native status and streams unchanged.
+
+Legacy `prepare`, `validate`, `execute`, Python dataset/domain commands and
+`load --docker` remain supported. For automatically managed disposable services,
+continue using the ownership-checked Docker workflow below; choosing `import`
+does not implicitly start it. `import` and the Docker helper both use the same
+native writers and executors.
 
 ## One-command Docker load
 
@@ -62,9 +135,144 @@ flowchart LR
   E --> L[Exact live ID and endpoint checks]
 ```
 
-Reusable interfaces live in `include/ingestion/Import.hpp`. `IGraphInputAdapter` streams nodes and then relationships to a record consumer. A future Parquet adapter implements these two passes and metadata without changing the planner or backend writers. `Placement` validates typed backend routes; the LDBC assigner implements the Python block31 conventions. The SQLite index separates identity, graph records, adjacency replicas and deduplicated proxy sets. Writers own their read connections and buffered files. `IImportExecutor` and an injectable `ExecutorFactory` separate native execution from lifecycle orchestration and allow service-free failure/concurrency tests.
+Reusable interfaces live in `include/ingestion/Import.hpp`. `IGraphInputAdapter` streams nodes and then relationships to a record consumer. Statically linked adapters register through `InputAdapterRegistry`; they reuse the existing planner and writers. New adapters select canonical IDs or typed external-ID allocation through the registry. `Placement` validates typed backend routes; the LDBC assigner implements the Python block31 conventions. The SQLite index separates identity, graph records, adjacency replicas and deduplicated proxy sets. Writers own their read connections and buffered files. `IImportExecutor` and an injectable `ExecutorFactory` separate native execution from lifecycle orchestration and allow service-free failure/concurrency tests.
+
+### Registering a statically linked input adapter
+
+`polygraph_bulk_import adapters` prints available adapter names, one per line.
+The default registry contains `ldbc-snb` and `polygraph-jsonl`. `prepare --adapter`
+and `load --adapter` use these stable, case-sensitive names; an unknown name fails
+with the available names before input scanning or Docker provisioning.
+
+Implement the existing `IGraphInputAdapter` methods and link the implementation
+into the application. Register it during application setup using
+[`InputAdapterRegistry.hpp`](../../include/ingestion/InputAdapterRegistry.hpp):
+
+```cpp
+auto registry = polygraph::ingestion::default_input_adapters();
+registry.add({
+    .name = "my-format",
+    .factory = make_my_input_adapter,
+    .input_files = my_input_files,
+    .version = "1"
+});
+polygraph::ingestion::PrepareOptions options;
+// Set input, placement_config, output_dir and other existing options as usual.
+options.adapter = "my-format";
+options.input_adapters = &registry;
+auto manifest = polygraph::ingestion::prepare(options);
+```
+
+The application supplies `make_my_input_adapter(const PrepareOptions &, const fs::path &)`
+returning `std::unique_ptr<IGraphInputAdapter>`, and `my_input_files(const PrepareOptions &)`
+returning `std::vector<fs::path>`. There
+is no runtime shared-library loading, static-initializer self-registration or
+new import engine. The stock CLI's linked built-ins are assembled in
+`src/ingestion/Input.cpp::default_input_adapters`; an application can assemble its
+own registry without changing normalization, CLI selection or backend writers.
+Its selected registry must be used by each invocation of its import executable.
+Link `polygraph::ingestion_cli` and call `run_bulk_import_cli(argc, argv, registry)`
+from the application composition root to reuse the complete CLI workflow. See the
+[linked movie CSV example](../../examples/movie-graph/README.md) for a working adapter, manifest and repeatable import command.
+The Docker helper forwards adapter names to that executable rather than maintaining
+a separate list. Registry names use lowercase ASCII letters, digits, `-`, `_`,
+or `.`; duplicate names and missing factory/inventory callbacks are errors.
+
+The registry is configured before use. The caller owns a custom registry and
+must keep it and any dependencies captured by its callbacks alive until
+`prepare()` returns, and must not change registrations during preparation.
+A null `PrepareOptions::input_adapters` selects the immutable
+default registry, preserving existing callers and signatures.
+
+The factory creates an adapter for the existing two synchronous streaming passes.
+It may initialize bounded indexes under `scratch`, but must not materialize the
+whole graph. Callbacks are invoked immediately; consumer exceptions must propagate
+and stop the pass. Report parsing errors with source path and record context.
+Partition topology projection may create a second instance, so immutable input
+must yield the same keys and order on replay.
+
+The inventory callback returns **every source file affecting emitted records**,
+including auxiliary files, and must be repeatable without streaming records.
+Paths are resolved against the process working directory, canonicalized, sorted
+and hashed by the engine; duplicate canonical paths are rejected. `options.input`
+must exist and is recorded as the source root. Version defaults to `"1"`; change
+it when parser/translation semantics change. Custom registration rejects empty
+versions. Versions and the selected
+ID strategy participate in generation identity. Empty versions are reserved for
+the two legacy built-ins, whose fingerprint shape and existing checkpoints remain
+unchanged. Inventory or version changes reject reuse of an existing output directory.
+
+The default `InputIdPolicy::canonical` requires a canonical GlobalId on each node
+and edge, resolvable `Record.key/from/to` references, and metadata with matching
+`idRouting` and the 16/48-bit layout. Missing IDs fail explicitly; they do not
+fall back to LDBC allocation. `InputIdPolicy::ldbc_block31` selects the existing
+LDBC numeric-key/catalog conventions for the built-in adapter; it is not a generic
+external-ID allocator. `InputIdPolicy::typed_external` selects generic source-ID
+resolution and allocation (see below). These policies preserve endpoint closure, proxy
+creation, property validation or backend serialization. See the
+[logical graph contract](../architecture/logical-graph-contract.md) for identity
+and validation rules. A linked generated adapter in
+[`tests/input_adapter_registry_test.cpp`](../../tests/input_adapter_registry_test.cpp)
+exercises this registration path through all three native writers and strict verification.
 
 The library uses exceptions of type `ingestion::Error` for domain failures and RAII for connections, prepared statements, files, process descriptors and directory locks. CLI JSON/I/O diagnostics include the source context. POSIX `posix_spawnp` receives an argv vector; configuration strings are never interpolated into a shell command. Complete subprocess output goes to `logs/`, with bounded captured tails and exit status/duration. Inspect or tail those logs for importer progress.
+
+
+### Typed external IDs in a linked adapter
+
+Select `.id_policy = InputIdPolicy::typed_external` in the existing registry
+entry. Emit structured identities rather than inventing canonical UUIDs:
+
+```cpp
+using namespace polygraph::ingestion;
+consume(Record{
+    .type = "Device",
+    .identity = SourceIdentity{"inventory", "Device", Json(std::uint64_t{7})}
+});
+// From relationships(): an ID-less edge is a distinct stream occurrence.
+consume(Record{
+    .type = "INSTALLED_AT",
+    .from_identity = SourceIdentity{"inventory", "Device", Json(std::uint64_t{7})},
+    .to_identity = SourceIdentity{"inventory", "Site", Json(std::uint64_t{7})}
+});
+```
+
+The vertex and referenced Site must both be emitted by `nodes()`. Separate node
+and edge passes allow references to any vertex regardless of source file order.
+For explicit edge source IDs, also set `.identity` with the relationship's logical
+type. Namespace, entity kind, logical type and exact source value type participate
+in identity. Construct signed and unsigned JSON integers explicitly when parsing:
+`Json(std::int64_t{7})`, `Json(std::uint64_t{7})` and `Json("7")` are distinct.
+No trimming or coercion occurs. Empty string IDs are valid; null/boolean/floating
+point/composite IDs and empty namespaces/types are errors.
+
+Leave legacy `.key/.from/.to` empty. The public
+`source_identity_key(identity)` returns the vertex key used for external partition
+assignments; `source_identity_key(identity, true)` encodes an edge identity. The
+versioned JSON array encoding is lossless, including embedded delimiters or NUL
+characters in ID strings. Do not concatenate tuple fields yourself. Partition
+projection/replay uses this same encoding. Partition ownership is chosen before
+allocating a generated node ID.
+
+`typed-external-v1` uses stream-order payloads with a checked 48-bit bound shared
+by both streams. Owners come from existing placement; `.source`, if provided,
+must agree. Explicit `.id` values retain their canonical identity and ownership;
+they share the collision check with generated IDs. Mixing explicit and generated
+payloads can fail on collisions; the engine does not reserve or skip ranges.
+Duplicate source identities (even identical rows), duplicate canonical IDs and
+missing endpoints fail before manifest publication. There is no merge, skip or
+create-missing policy. Parallel ID-less edges receive different IDs.
+
+The SQLite index retains vertex source keys and IDs, and a `source_edges` table
+retains explicit edge identity mappings. No all-nodes map is loaded into RAM.
+Allocation is deterministic for the same adapter/version, immutable inventory,
+stream order and placement, but is not an external stable-ID promise across
+reordering. Change the adapter version when its namespace, normalization, mapping
+or emission-order semantics change. Graph manifests select
+`"identity": {"strategy": "typed-external-v1"}` for such linked adapters. The stock
+CLI still ships only LDBC and canonical JSONL; this adds no third file parser.
+See [`tests/source_identity_test.cpp`](../../tests/source_identity_test.cpp) for a
+complete linked adapter, all three writers and partition/memory regressions.
 
 ## Input and identity compatibility
 
@@ -207,3 +415,9 @@ Current limitations: no weighted partition objectives, no Parquet adapter, no on
 `0` success; `2` argument/configuration JSON error; `3` preparation/artifact verification error; `4` execution/live-verification failure; `5` unexpected I/O/internal error. `--help` documents every CLI option. Invalid operational settings may report code 3/4 with their actionable domain error after parsing.
 
 Measured development results and exact validation commands are recorded in [Native ingestion validation and measurements](../benchmarks/NATIVE_BULK_INGESTION.md) and the [matched SF0.1 concurrency comparison](../benchmarks/INGESTION_THROUGHPUT.md). Import contracts: [Neo4j full import](https://neo4j.com/docs/operations-manual/current/import/), [libpq COPY](https://www.postgresql.org/docs/current/libpq-copy.html), [ArangoDB HTTP import](https://docs.arango.ai/arangodb/stable/develop/http-api/import/).
+
+Python manifest selectors also accept graph directories or IDs under `--data-root`.
+Explicit manifest-mode load aliases forward to this same native import workflow;
+see [Graph-aware Python tools](GRAPH_TOOLS.md) for migration and path rules.
+
+New linked readers can run the [shared offline adapter contracts](ADAPTER_CONTRACT_TESTS.md) against declarative fixtures before live onboarding.

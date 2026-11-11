@@ -92,3 +92,5 @@ endif()
 if(POLYGRAPH_DEPENDENCY_PREFIX)
     list(PREPEND CMAKE_PREFIX_PATH "${POLYGRAPH_DEPENDENCY_PREFIX}")
 endif()
+
+option(POLYGRAPH_BUILD_EXAMPLES "Build statically linked example adapters and applications" ON)

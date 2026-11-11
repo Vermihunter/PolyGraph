@@ -5,36 +5,63 @@
 #include <thread>
 #include "Native.hpp"
 
+namespace polygraph::ingestion::detail {
+    Json checked_targets(const Json &config, std::span<const Backend> backends) {
+        if (!config.is_object() || !config.contains("targets") || !config["targets"].is_object())
+            throw Error("Target configuration requires a targets object");
+        Json result = Json::object();
+        for (const auto backend: backends) {
+            const auto name = backend_name(backend);
+            if (!config["targets"].contains(name) || !config["targets"][name].is_object())
+                throw Error("Missing named target for " + name);
+            auto target = config["targets"][name];
+            const auto database = target.at("database").get<std::string>();
+            static const std::regex safe("[A-Za-z][A-Za-z0-9_.-]{2,62}");
+            if (!std::regex_match(database, safe) || database == "neo4j" || database == "system" ||
+                database == "_system" || database == "postgres" || database == "template0" || database == "template1" ||
+                database == "polygraph")
+                throw Error("Use an explicit isolated named target, not a default/system database: " + database);
+            if (name == "Neo4J" && !std::regex_match(database, std::regex("[a-z][a-z0-9.-]{2,62}")))
+                throw Error("Neo4j database names must use lowercase ASCII letters, digits, dots and dashes (no "
+                            "underscores)");
+            if (target.contains("password") || target.contains("connection_string"))
+                throw Error("Credentials/connection strings must not be embedded in target JSON; use password_env "
+                            "and libpq environment");
+            result[name] = std::move(target);
+        }
+        return result;
+    }
+} // namespace polygraph::ingestion::detail
+
 namespace polygraph::ingestion {
     namespace {
         std::vector<ImportContext> contexts(const fs::path &root, const Json &manifest, const Json &config,
                                             VerificationMode verification = VerificationMode::full) {
-            if (!config.is_object() || !config.contains("targets") || !config["targets"].is_object())
-                throw Error("Target configuration requires a targets object");
-            std::vector<ImportContext> result;
+            std::vector<Backend> backends;
             for (const auto &[name, artifacts]: manifest.at("backends").items()) {
-                if (!config["targets"].contains(name))
-                    throw Error("Missing named target for " + name);
-                auto target = config["targets"][name];
-                const auto database = target.at("database").get<std::string>();
-                static const std::regex safe("[A-Za-z][A-Za-z0-9_.-]{2,62}");
-                if (!std::regex_match(database, safe) || database == "neo4j" || database == "system" ||
-                    database == "_system" || database == "postgres" || database == "template0" ||
-                    database == "template1" || database == "polygraph")
-                    throw Error("Use an explicit isolated named target, not a default/system database: " + database);
-                if (name == "Neo4J" && !std::regex_match(database, std::regex("[a-z][a-z0-9.-]{2,62}")))
-                    throw Error("Neo4j database names must use lowercase ASCII letters, digits, dots and dashes (no "
-                                "underscores)");
-                if (target.contains("password") || target.contains("connection_string"))
-                    throw Error("Credentials/connection strings must not be embedded in target JSON; use password_env "
-                                "and libpq environment");
+                (void) artifacts;
+                backends.push_back(parse_backend(name));
+            }
+            const auto targets = detail::checked_targets(config, backends);
+            std::vector<ImportContext> result;
+            for (const auto &[name, artifacts]: manifest.at("backends").items())
                 result.push_back({.backend = parse_backend(name),
                                   .root = root,
                                   .artifacts = artifacts,
-                                  .target = std::move(target),
+                                  .target = targets.at(name),
                                   .verification = verification});
-            }
             return result;
+        }
+        std::exception_ptr backend_failure(const std::string &name, const std::string &phase,
+                                           std::exception_ptr error) {
+            const auto prefix = "backend=" + name + " phase=" + phase + ": ";
+            try {
+                std::rethrow_exception(error);
+            } catch (const std::exception &cause) {
+                return std::make_exception_ptr(Error(prefix + cause.what()));
+            } catch (...) {
+                return std::make_exception_ptr(Error(prefix + "unknown executor failure"));
+            }
         }
         ExecutorFactory effective_factory(const ExecutorFactory &factory) {
             return factory ? factory : ExecutorFactory(detail::native_executor);
@@ -79,12 +106,19 @@ namespace polygraph::ingestion {
         std::vector<std::unique_ptr<IImportExecutor>> executors;
         // Entire preflight is read-only. A failure prevents every backend import.
         for (const auto &context: configurations) {
-            auto executor = create(context);
-            if (journal["backends"].contains(backend_name(context.backend)))
-                (void) executor->verify();
-            else
-                executor->preflight();
-            executors.push_back(std::move(executor));
+            const auto name = backend_name(context.backend);
+            const bool already_verified = journal["backends"].contains(name);
+            try {
+                auto executor = create(context);
+                if (already_verified)
+                    (void) executor->verify();
+                else
+                    executor->preflight();
+                executors.push_back(std::move(executor));
+            } catch (...) {
+                std::rethrow_exception(
+                        backend_failure(name, already_verified ? "verify" : "preflight", std::current_exception()));
+            }
         }
         write_json_atomic(journal_path, journal);
         const auto started = detail::Clock::now();
@@ -97,6 +131,7 @@ namespace polygraph::ingestion {
                 if (index >= executors.size())
                     return;
                 const auto name = backend_name(configurations[index].backend);
+                std::string phase = "journal";
                 try {
                     {
                         std::scoped_lock guard(journal_mutex);
@@ -106,6 +141,7 @@ namespace polygraph::ingestion {
                         journal["backends"][name] = {{"state", "importing"}};
                         write_json_atomic(journal_path, journal);
                     }
+                    phase = "import";
                     auto imported = executors[index]->run();
                     const auto seconds = imported.value("native_import_seconds", 0.0);
                     if (seconds > 0) {
@@ -118,8 +154,11 @@ namespace polygraph::ingestion {
                                 configurations[index].artifacts.at("bytes").get<double>() / seconds;
                     }
                     Json validated;
-                    if (full_verification)
+                    if (full_verification) {
+                        phase = "verify";
                         validated = executors[index]->verify();
+                    }
+                    phase = "journal";
                     std::scoped_lock guard(journal_mutex);
                     journal["backends"][name] = {{"state", full_verification ? "verified" : "imported"},
                                                  {"import", std::move(imported)}};
@@ -129,7 +168,7 @@ namespace polygraph::ingestion {
                 } catch (...) {
                     std::scoped_lock guard(journal_mutex);
                     if (!error)
-                        error = std::current_exception();
+                        error = backend_failure(name, phase, std::current_exception());
                     // A journal I/O failure must propagate through the main thread, never terminate a worker.
                     try {
                         journal["backends"][name] = {{"state", "failed"}};
@@ -169,7 +208,11 @@ namespace polygraph::ingestion {
         Json report = {{"generation_id", manifest.at("generation_id")}, {"backends", Json::object()}};
         for (auto &context: contexts(root, manifest, read_json(target_path))) {
             const auto name = backend_name(context.backend);
-            report["backends"][name] = create(std::move(context))->verify();
+            try {
+                report["backends"][name] = create(std::move(context))->verify();
+            } catch (...) {
+                std::rethrow_exception(backend_failure(name, "verify", std::current_exception()));
+            }
         }
         report["state"] = "verified";
         write_json_atomic(root / "live-verification.json", report);

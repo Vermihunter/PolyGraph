@@ -106,7 +106,7 @@ class DockerEnvironment:
         self.target_path = self.output / 'targets.json'
         self.credentials_path = self.output / 'credentials.json'
         self.runtime_config_path = self.output / 'runtime.secret.json'
-        self.password = secrets.token_urlsafe(32)
+        self.password = "polygraph_" + secrets.token_urlsafe(32)
         self.runner = runner
         self.timeout = timeout
         self.memory_mb = memory_mb

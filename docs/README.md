@@ -10,6 +10,7 @@ PolyGraph is a C++23 research runtime that executes graph traversals over a **si
 
 | I want to… | Read |
 |:--|:--|
+| Onboard a graph or implement a source reader | [Graph quickstart](graphs/quickstart.md) → [Adding a dataset](graphs/adding-a-dataset.md) |
 | Build the project and run my first BFS | [Getting started](guides/GETTING_STARTED.md) → [Build presets](guides/BUILDING.md) |
 | Understand the request and data paths | [Architecture](architecture/ARCHITECTURE.md) → [Backend scheduling](architecture/BACKEND_REQUEST_SCHEDULING.md) |
 | Understand ownership and caching | [Storage](architecture/STORAGE.md) → [Caching and residency](architecture/CACHING.md) |
@@ -24,6 +25,12 @@ PolyGraph is a C++23 research runtime that executes graph traversals over a **si
 [Getting started](guides/GETTING_STARTED.md) · [Building](guides/BUILDING.md) · [Data loading](guides/DATA_LOADING.md) · [Native bulk ingestion](guides/BULK_INGESTION.md) · [Docker load](guides/DOCKER_INGESTION.md) · [Graph partitioning](guides/GRAPH_PARTITIONING.md) · [LDBC fast preparation](guides/FAST_LDBC_PREPARATION.md) · [Benchmarking](guides/BENCHMARKING.md) · [Scripts](guides/SCRIPTS.md) · [Testing](guides/TESTING.md) · [Troubleshooting](guides/TROUBLESHOOTING.md)
 
 ### Architecture · understand how it works
+
+[Graph extensibility audit (issue 28)](architecture/graph-extensibility-audit.md)
+[Logical graph and adapter contract (issue 29)](architecture/logical-graph-contract.md)
+[Graph manifests and preflight (issue 31)](guides/GRAPH_MANIFESTS.md)
+[Runtime metadata and source roots (issue 34)](guides/RUNTIME_GRAPH_METADATA.md)
+[Graph-aware Python tools (issue 35)](guides/GRAPH_TOOLS.md)
 
 [Runtime architecture](architecture/ARCHITECTURE.md) · [Storage model](architecture/STORAGE.md) · [Insertion](architecture/INSERTION.md) · [Backend request scheduling](architecture/BACKEND_REQUEST_SCHEDULING.md) · [Caching](architecture/CACHING.md) · [Direction-optimized BFS](algorithms/DIRECTION_OPTIMIZED_BFS.md)
 

@@ -133,6 +133,17 @@ set_tests_properties(python.developer_quality PROPERTIES
 )
 
 if(TARGET polygraph_ingestion)
+    if(TARGET polygraph_runtime)
+        polygraph_add_unit_test(polygraph_runtime_source_test runtime_source_test.cpp polygraph::runtime)
+        target_link_libraries(polygraph_runtime_source_test PRIVATE polygraph::ingestion polygraph_scripted_graph_store)
+        if(TARGET polygraph_bfs)
+            target_compile_definitions(polygraph_runtime_source_test PRIVATE POLYGRAPH_TEST_BFS_BINARY="$<TARGET_FILE:polygraph_bfs>")
+            add_dependencies(polygraph_runtime_source_test polygraph_bfs)
+        endif()
+    endif()
+    polygraph_add_unit_test(polygraph_source_identity_test source_identity_test.cpp polygraph::ingestion)
+    polygraph_add_unit_test(polygraph_graph_manifest_test graph_manifest_test.cpp polygraph::ingestion)
+    polygraph_add_unit_test(polygraph_input_adapter_registry_test input_adapter_registry_test.cpp polygraph::ingestion)
     polygraph_add_unit_test(polygraph_ingestion_test ingestion_test.cpp polygraph::ingestion)
     polygraph_add_unit_test(polygraph_ingestion_batch_test ingestion_batch_test.cpp polygraph::ingestion)
     target_compile_definitions(polygraph_ingestion_batch_test PRIVATE _GLIBCXX_ASSERTIONS)
@@ -142,6 +153,18 @@ if(TARGET polygraph_ingestion)
     target_include_directories(polygraph_ingestion_partition_test PRIVATE "${PROJECT_SOURCE_DIR}/src/ingestion")
 endif()
 if(TARGET polygraph_bulk_import)
+    add_test(NAME python.graph_tools
+        COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
+                "${Python3_EXECUTABLE}" -m unittest tools.test_graph_tools -v)
+    set_tests_properties(python.graph_tools PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 60)
+    add_test(NAME python.import_workflow
+        COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
+                "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_import_workflow -v)
+    set_tests_properties(python.import_workflow PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 60)
+    add_test(NAME python.graph_manifest
+        COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
+                "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_graph_manifest -v)
+    set_tests_properties(python.graph_manifest PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 60)
     add_test(NAME python.ingestion_semantics
         COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
                 "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_semantics -v)
@@ -160,6 +183,19 @@ if(POLYGRAPH_INGESTION_LIVE_TESTS)
         set_tests_properties("integration.ingestion.${adapter}" PROPERTIES LABELS "integration;live;ingestion" TIMEOUT 300 RUN_SERIAL TRUE)
     endforeach()
 endif()
+if(POLYGRAPH_INGESTION_LIVE_TESTS AND TARGET polygraph_movie_import)
+    add_test(NAME integration.ingestion.movie-graph
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/ingestion/disposable_live.py"
+            --run --unique-output --adapter movie-graph
+            --binary "$<TARGET_FILE:polygraph_movie_import>" --bfs "$<TARGET_FILE:polygraph_bfs>"
+            --output-dir "${CMAKE_BINARY_DIR}/ingestion-live/movie")
+    set_tests_properties(integration.ingestion.movie-graph PROPERTIES
+        LABELS "integration;live;ingestion" TIMEOUT 600 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+endif()
+add_test(NAME python.ingestion_live_graph
+    COMMAND "${Python3_EXECUTABLE}" -m unittest tools.ingestion.test_live_graph -v)
+set_tests_properties(python.ingestion_live_graph PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion" TIMEOUT 20)
 if(TARGET polygraph_bulk_import)
     add_test(NAME python.ingestion_docker_workflow
         COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>"
@@ -184,4 +220,49 @@ if(POLYGRAPH_INGESTION_LIVE_TESTS)
                 --output-dir "${CMAKE_BINARY_DIR}/ingestion-partition/ctest")
         set_tests_properties(integration.ingestion.kaminpar PROPERTIES LABELS "integration;live;ingestion;kaminpar" TIMEOUT 600 RUN_SERIAL TRUE)
     endif()
+endif()
+
+polygraph_add_unit_test(polygraph_storage_type_names_test storage_type_names_test.cpp polygraph::core)
+if(TARGET polygraph_backends)
+    polygraph_add_unit_test(polygraph_neo4j_storage_names_test neo4j_storage_names_test.cpp polygraph::backends)
+endif()
+if(TARGET polygraph_runtime)
+    polygraph_add_unit_test(polygraph_schema_backend_live_test schema_backend_live_test.cpp polygraph::runtime)
+endif()
+
+add_test(NAME python.schema_agnostic_cache
+    COMMAND "${Python3_EXECUTABLE}" -m unittest tests.test_schema_agnostic_cache)
+set_tests_properties(python.schema_agnostic_cache PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;cache" TIMEOUT 30)
+
+add_test(NAME python.graph_workspace
+    COMMAND "${Python3_EXECUTABLE}" -m unittest tools.graphio.test_workspace)
+set_tests_properties(python.graph_workspace PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;workspace" TIMEOUT 30)
+
+if(TARGET polygraph_bulk_import)
+    polygraph_add_unit_test(polygraph_bulk_import_cli_test bulk_import_cli_test.cpp polygraph::ingestion_cli)
+endif()
+if(TARGET polygraph_movie_input)
+    polygraph_add_unit_test(polygraph_movie_adapter_test movie_adapter_test.cpp polygraph_movie_input)
+endif()
+
+if(TARGET polygraph_movie_import)
+    add_test(NAME python.movie_graph_example
+        COMMAND "${CMAKE_COMMAND}" -E env "POLYGRAPH_MOVIE_IMPORT=$<TARGET_FILE:polygraph_movie_import>"
+                "${Python3_EXECUTABLE}" -m unittest tests.test_movie_example -v)
+    set_tests_properties(python.movie_graph_example PROPERTIES
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion;example" TIMEOUT 90)
+endif()
+
+if(TARGET polygraph_bulk_import)
+    set(adapter_contract_environment "POLYGRAPH_BULK_IMPORT=$<TARGET_FILE:polygraph_bulk_import>")
+    if(TARGET polygraph_movie_import)
+        list(APPEND adapter_contract_environment "POLYGRAPH_MOVIE_IMPORT=$<TARGET_FILE:polygraph_movie_import>")
+    endif()
+    add_test(NAME python.adapter_contracts
+        COMMAND "${CMAKE_COMMAND}" -E env ${adapter_contract_environment}
+                "${Python3_EXECUTABLE}" -m unittest tests.test_adapter_contract -v)
+    set_tests_properties(python.adapter_contracts PROPERTIES
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "unit;python;ingestion;contract" TIMEOUT 90)
 endif()

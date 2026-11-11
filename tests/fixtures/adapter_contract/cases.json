@@ -1,0 +1,148 @@
+[
+  {
+    "name": "LdbcCsv",
+    "adapter": "ldbc-snb",
+    "binary_env": "POLYGRAPH_BULK_IMPORT",
+    "input": "tests/fixtures/ingestion/raw",
+    "placement": "tests/fixtures/ingestion/placement.json",
+    "expected": "snb.expected.json",
+    "id_strategy": "ldbc-block31-v3",
+    "mutations": {
+      "duplicate_node": {
+        "file": "dynamic/person_0_0.csv",
+        "append_line": 1,
+        "error": "collision"
+      },
+      "duplicate_edge": {
+        "file": "dynamic/person_likes_post_0_0.csv",
+        "append_line": 1,
+        "policy": "preserve",
+        "edge": "edge-0"
+      },
+      "missing_reference": {
+        "file": "dynamic/person_likes_post_0_0.csv",
+        "replace": [
+          "1|2|",
+          "1|999|"
+        ],
+        "error": "Unresolved relationship endpoint"
+      },
+      "malformed": {
+        "file": "dynamic/person_0_0.csv",
+        "replace": [
+          "1|\"Zoë|😀\"|2000-01-01",
+          "1|\"unclosed"
+        ],
+        "error": "Unterminated"
+      }
+    }
+  },
+  {
+    "name": "CanonicalSnbJsonl",
+    "adapter": "polygraph-jsonl",
+    "binary_env": "POLYGRAPH_BULK_IMPORT",
+    "input": "tests/fixtures/ingestion/canonical.jsonl",
+    "placement": "tests/fixtures/ingestion/placement.json",
+    "expected": "snb.expected.json",
+    "id_strategy": "preserve-canonical-v2",
+    "mutations": {
+      "duplicate_node": {
+        "file": "canonical.jsonl",
+        "append_line": 1,
+        "error": "collision"
+      },
+      "duplicate_edge": {
+        "file": "canonical.jsonl",
+        "append_line": 4,
+        "policy": "reject",
+        "error": "collision"
+      },
+      "missing_reference": {
+        "file": "canonical.jsonl",
+        "json_line": 4,
+        "patch": {
+          "to": 281474976710799
+        },
+        "error": "Unresolved relationship endpoint"
+      },
+      "malformed": {
+        "file": "canonical.jsonl",
+        "append": "{broken\n",
+        "error": "parse"
+      }
+    }
+  },
+  {
+    "name": "MixedJsonl",
+    "adapter": "polygraph-jsonl",
+    "binary_env": "POLYGRAPH_BULK_IMPORT",
+    "input": "docs/examples/ingestion/logical-graph/graph.jsonl",
+    "placement": "docs/examples/ingestion/logical-graph/placement.json",
+    "expected": "mixed.expected.json",
+    "id_strategy": "preserve-canonical-v2",
+    "mutations": {
+      "duplicate_node": {
+        "file": "graph.jsonl",
+        "append_line": 1,
+        "error": "collision"
+      },
+      "duplicate_edge": {
+        "file": "graph.jsonl",
+        "append_line": 5,
+        "policy": "reject",
+        "error": "collision"
+      },
+      "missing_reference": {
+        "file": "graph.jsonl",
+        "json_line": 5,
+        "patch": {
+          "to": 281474976710799
+        },
+        "error": "Unresolved relationship endpoint"
+      },
+      "malformed": {
+        "file": "graph.jsonl",
+        "append": "{broken\n",
+        "error": "parse"
+      }
+    }
+  },
+  {
+    "name": "MovieCsv",
+    "adapter": "movie-graph",
+    "binary_env": "POLYGRAPH_MOVIE_IMPORT",
+    "input": "examples/movie-graph/csv",
+    "placement": "examples/movie-graph/placement.json",
+    "expected": "movie.expected.json",
+    "id_strategy": "typed-external-v1",
+    "mutations": {
+      "duplicate_node": {
+        "file": "people.csv",
+        "append_line": 1,
+        "error": "Duplicate/colliding vertex"
+      },
+      "duplicate_edge": {
+        "file": "acted_in.csv",
+        "append_line": 1,
+        "policy": "reject",
+        "error": "Duplicate/colliding relationship"
+      },
+      "missing_reference": {
+        "file": "acted_in.csv",
+        "replace": [
+          "1,1,1,",
+          "1,1,999,"
+        ],
+        "error": "Unresolved relationship endpoint"
+      },
+      "malformed": {
+        "file": "people.csv",
+        "replace": [
+          "1970,true",
+          "1970,yes"
+        ],
+        "error": "true or false"
+      }
+    }
+  }
+]

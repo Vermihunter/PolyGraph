@@ -5,36 +5,37 @@
 #include <thread>
 #include <unistd.h>
 #include "Internal.hpp"
+#include "utilities/GraphWorkspace.hpp"
 
 namespace polygraph::ingestion {
+    void detail::check_prepare_options(const PrepareOptions &o) {
+        if (o.partitioner != "none" && o.partitioner != "kaminpar")
+            throw Error("--partitioner must be none or kaminpar");
+        if (o.partitioner == "kaminpar") {
+            if (!kaminpar_available())
+                throw Error("KaMinPar is unavailable; build with POLYGRAPH_INGESTION_KAMINPAR=ON");
+            validate_partition_options(o.partition_options, o.seed);
+            if (!o.partition_file.empty())
+                throw Error("Generated KaMinPar partitions and --partition-file are mutually exclusive");
+        } else if (o.partition_options.count != 0 || o.partition_options.threads != 1 ||
+                   o.partition_options.imbalance != 0.03 || o.partition_options.preset != "default")
+            throw Error("Partition count/threads/imbalance/preset require --partitioner kaminpar");
+        if (o.threads < 1 || o.threads > 256)
+            throw Error("--threads must be in [1,256]");
+        if (o.memory_limit_mb < 16 || o.memory_limit_mb > 1048576)
+            throw Error("--memory-limit-mb must be in [16,1048576]");
+        if (o.chunk_size_mb < 1 || o.chunk_size_mb > 4096)
+            throw Error("--chunk-size-mb must be in [1,4096]");
+        if (o.max_record_mb < 1 || o.max_record_mb > o.memory_limit_mb / 4)
+            throw Error("--max-record-mb must fit within one quarter of --memory-limit-mb");
+        if (o.input.empty() || o.output_dir.empty() || o.placement_config.empty())
+            throw Error("prepare requires --input, --output-dir and --placement-config");
+        const auto input = fs::weakly_canonical(o.input), output = fs::weakly_canonical(o.output_dir);
+        if (output == input || (fs::is_directory(input) && !output.lexically_relative(input).empty() &&
+                                *output.lexically_relative(input).begin() != ".."))
+            throw Error("Artifact directory must be outside the input dataset");
+    }
     namespace {
-        void check_options(const PrepareOptions &o) {
-            if (o.partitioner != "none" && o.partitioner != "kaminpar")
-                throw Error("--partitioner must be none or kaminpar");
-            if (o.partitioner == "kaminpar") {
-                if (!kaminpar_available())
-                    throw Error("KaMinPar is unavailable; build with POLYGRAPH_INGESTION_KAMINPAR=ON");
-                validate_partition_options(o.partition_options, o.seed);
-                if (!o.partition_file.empty())
-                    throw Error("Generated KaMinPar partitions and --partition-file are mutually exclusive");
-            } else if (o.partition_options.count != 0 || o.partition_options.threads != 1 ||
-                       o.partition_options.imbalance != 0.03 || o.partition_options.preset != "default")
-                throw Error("Partition count/threads/imbalance/preset require --partitioner kaminpar");
-            if (o.threads < 1 || o.threads > 256)
-                throw Error("--threads must be in [1,256]");
-            if (o.memory_limit_mb < 16 || o.memory_limit_mb > 1048576)
-                throw Error("--memory-limit-mb must be in [16,1048576]");
-            if (o.chunk_size_mb < 1 || o.chunk_size_mb > 4096)
-                throw Error("--chunk-size-mb must be in [1,4096]");
-            if (o.max_record_mb < 1 || o.max_record_mb > o.memory_limit_mb / 4)
-                throw Error("--max-record-mb must fit within one quarter of --memory-limit-mb");
-            if (o.input.empty() || o.output_dir.empty() || o.placement_config.empty())
-                throw Error("prepare requires --input, --output-dir and --placement-config");
-            const auto input = fs::weakly_canonical(o.input), output = fs::weakly_canonical(o.output_dir);
-            if (output == input || (fs::is_directory(input) && !output.lexically_relative(input).empty() &&
-                                    *output.lexically_relative(input).begin() != ".."))
-                throw Error("Artifact directory must be outside the input dataset");
-        }
         Json configuration(const PrepareOptions &o, const Placement &p) {
             Json j = {{"engine_version", 1}, {"placement", p.configuration},     {"partitioner", o.partitioner},
                       {"seed", o.seed},      {"chunk_size_mb", o.chunk_size_mb}, {"max_record_mb", o.max_record_mb}};
@@ -62,7 +63,28 @@ namespace polygraph::ingestion {
         }
     } // namespace
     Json prepare(const PrepareOptions &o, const ProgressObserver &progress) {
-        check_options(o);
+        const auto &adapter_definition = detail::input_adapters(o).get(o.adapter);
+        detail::check_prepare_options(o);
+        if (fs::is_directory(o.output_dir))
+            for (const auto &entry: fs::recursive_directory_iterator(o.output_dir))
+                if (fs::is_symlink(entry.symlink_status()))
+                    throw Error("Artifact directory contains symlinks: " + entry.path().string());
+        if (o.workspace) {
+            const auto &workspace = *o.workspace;
+            const auto marker = workspace_reservation_path(workspace.root);
+            const auto expected = workspace_owner(workspace.manifest, workspace.graph);
+            if (fs::exists(marker) && read_json(marker) != expected)
+                throw Error("Artifact workspace ownership collision: " + marker.string());
+            detail::DirectoryLock workspace_lock(workspace.root);
+            if (fs::exists(marker)) {
+                if (read_json(marker) != expected)
+                    throw Error("Artifact workspace ownership collision: " + marker.string());
+            } else {
+                if (fs::is_symlink(fs::symlink_status(marker.string() + ".tmp")))
+                    throw Error("Workspace reservation temporary path is a symlink");
+                write_json_atomic(marker, expected);
+            }
+        }
         const auto started = detail::Clock::now();
         detail::DirectoryLock lock(o.output_dir);
         const auto placement = load_placement(o.placement_config);
@@ -178,7 +200,7 @@ namespace polygraph::ingestion {
                          {"source", input},
                          {"configuration", config},
                          {"configuration_sha256", sha256_text(config.dump())},
-                         {"id_strategy", o.adapter == "ldbc-snb" ? "ldbc-block31-v3" : "preserve-canonical-v2"},
+                         {"id_strategy", input_id_strategy(adapter_definition.id_policy)},
                          {"counts", normalized.at("counts")},
                          {"metadata", normalized.at("metadata")},
                          {"node_prefixes", normalized.at("node_prefixes")},

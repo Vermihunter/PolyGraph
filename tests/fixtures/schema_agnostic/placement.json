@@ -1,0 +1,20 @@
+{
+  "storageBackends": [
+    "Neo4J",
+    "ArangoDB",
+    "PostgreSQL"
+  ],
+  "nodeSources": {
+    "Device-unit": "Neo4J",
+    "Site/office": "ArangoDB",
+    "Gateway:router": "PostgreSQL",
+    "Sensor\u00b5": "PostgreSQL"
+  },
+  "relationshipSources": {
+    "INSTALLED-AT": "Neo4J",
+    "REPORTS:TO": "ArangoDB",
+    "CONNECTS.to": "PostgreSQL",
+    "LOOPS.\u00b5": "ArangoDB",
+    "HOSTS/at": "ArangoDB"
+  }
+}

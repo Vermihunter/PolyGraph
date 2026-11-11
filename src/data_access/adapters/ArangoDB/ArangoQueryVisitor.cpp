@@ -4,6 +4,7 @@
  */
 
 #include "data_access/adapters/ArangoDB/ArangoQueryVisitor.hpp"
+#include "data_access/adapters/StorageTypeNames.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -44,6 +45,7 @@ namespace polygraph {
 
     struct ArangoQueryVisitor::Impl final : QueryVisitor {
         const BackendConnectionConfig &config_;
+        StorageTypeNames storage_names_;
         std::shared_ptr<BackendRequestScheduler> scheduler_;
         DataModelJsonSerializer serializer_;
         mutable CurlHttpClient http_;
@@ -56,9 +58,11 @@ namespace polygraph {
     public:
         Impl(DatabaseContext &db_context, const BackendConnectionConfig &config,
              std::shared_ptr<BackendRequestScheduler> scheduler) :
-            QueryVisitor(db_context), config_(config), scheduler_(std::move(scheduler)),
+            QueryVisitor(db_context), config_(config), storage_names_(*db_context.schema),
+            scheduler_(std::move(scheduler)),
             http_(config.credentials.has_value() ? config.credentials->username + ":" + config.credentials->password
                                                  : "") {
+            storage_names_.validate_shared_namespace();
             if (!scheduler_) {
                 throw std::invalid_argument("ArangoQueryVisitor requires a backend request scheduler");
             }
@@ -89,7 +93,7 @@ namespace polygraph {
         query_result_t visit(const GetVertexByIdQuery &q) override {
             const Node &node = q.node();
 
-            const std::string collection = db_context_.schema->node_type(node.type).name;
+            const std::string collection = storage_names_.node_name(node.type);
 
             const std::string query = "LET doc = DOCUMENT(@@collection, @key) "
                                       "FILTER doc != null RETURN doc";
@@ -132,7 +136,7 @@ namespace polygraph {
                     const std::string bindName = "edgeCollection" + std::to_string(i);
                     const std::string bindKey = "@" + bindName;
 
-                    bindVars[bindKey] = db_context_.schema->edge_type(edge_type_ids[i]).name;
+                    bindVars[bindKey] = storage_names_.edge_name(edge_type_ids[i]);
 
                     if (i > 0) {
                         edgeCollectionsAql += ", ";
@@ -499,7 +503,7 @@ namespace polygraph {
                         "    }) INTO @@collection "
                         "    RETURN 1"
                         ") RETURN LENGTH(inserted)";
-                const json bind_vars{{"rows", rows}, {"@collection", db_context_.schema->node_type(node_type).name}};
+                const json bind_vars{{"rows", rows}, {"@collection", storage_names_.node_name(node_type)}};
                 execute_write(query_text, bind_vars, rows.size());
             }
 
@@ -517,9 +521,9 @@ namespace polygraph {
                                                "    RETURN 1"
                                                ") RETURN LENGTH(inserted)";
                 const json bind_vars{{"rows", rows},
-                                     {"@sourceCollection", db_context_.schema->node_type(schema_edge.from).name},
-                                     {"@targetCollection", db_context_.schema->node_type(schema_edge.to).name},
-                                     {"@edgeCollection", schema_edge.name}};
+                                     {"@sourceCollection", storage_names_.node_name(schema_edge.from)},
+                                     {"@targetCollection", storage_names_.node_name(schema_edge.to)},
+                                     {"@edgeCollection", storage_names_.edge_name(edge_type)}};
                 execute_write(query_text, bind_vars, rows.size());
             }
 
@@ -582,7 +586,7 @@ namespace polygraph {
 
                 for (std::size_t edge_index = 0; edge_index < edge_type_ids.size(); ++edge_index) {
                     const std::string bind_name = "edgeCollection" + std::to_string(edge_index);
-                    bind_vars["@" + bind_name] = db_context_.schema->edge_type(edge_type_ids[edge_index]).name;
+                    bind_vars["@" + bind_name] = storage_names_.edge_name(edge_type_ids[edge_index]);
 
                     subqueries.push_back(build_edge_index_subquery(bind_name, true));
 
@@ -648,7 +652,7 @@ namespace polygraph {
                 std::string edge_collections;
                 for (std::size_t edge_index = 0; edge_index < edge_type_ids.size(); ++edge_index) {
                     const std::string bind_name = "edgeCollection" + std::to_string(edge_index);
-                    bind_template["@" + bind_name] = db_context_.schema->edge_type(edge_type_ids[edge_index]).name;
+                    bind_template["@" + bind_name] = storage_names_.edge_name(edge_type_ids[edge_index]);
                     if (!edge_collections.empty()) {
                         edge_collections += ", ";
                     }
@@ -704,18 +708,18 @@ namespace polygraph {
         [[nodiscard]] std::vector<ArangoEdgeIndexScan> edge_index_scans_for_source_collection(
                 const std::string &source_collection, const ExpandSpec &spec,
                 const std::unordered_set<std::string> &available_edge_collections) const {
-            const TypeId source_type = db_context_.schema->node_type_id(source_collection);
+            const TypeId source_type = storage_names_.node_type(source_collection);
             std::vector<ArangoEdgeIndexScan> scans;
 
             const auto append_scans = [&](const TypeId edge_type_id) {
                 const auto &edge_type = db_context_.schema->edge_type(edge_type_id);
-                if (!available_edge_collections.contains(edge_type.name)) {
+                if (!available_edge_collections.contains(storage_names_.edge_name(edge_type_id))) {
                     return;
                 }
 
                 if (edge_type.from == source_type && spec.allows_target_type(edge_type.to)) {
                     scans.push_back(
-                            ArangoEdgeIndexScan{.edge_collection = edge_type.name,
+                            ArangoEdgeIndexScan{.edge_collection = storage_names_.edge_name(edge_type_id),
                                                 .outbound = true,
                                                 .target_type = db_context_.schema->node_type(edge_type.to).name});
                 }
@@ -723,7 +727,7 @@ namespace polygraph {
                 if (spec.direction != Direction::Directed && edge_type.to == source_type &&
                     spec.allows_target_type(edge_type.from)) {
                     scans.push_back(
-                            ArangoEdgeIndexScan{.edge_collection = edge_type.name,
+                            ArangoEdgeIndexScan{.edge_collection = storage_names_.edge_name(edge_type_id),
                                                 .outbound = false,
                                                 .target_type = db_context_.schema->node_type(edge_type.from).name});
                 }
@@ -1320,7 +1324,7 @@ namespace polygraph {
                 return;
             }
 
-            const TypeId neighbor_type = db_context_.schema->node_type_id(logical_type_name);
+            const TypeId neighbor_type = storage_names_.node_type(logical_type_name);
             if (!spec.allows_target_type(neighbor_type) || !seen_by_source[source_id].insert(neighbor_id).second) {
                 return;
             }
@@ -1350,10 +1354,10 @@ namespace polygraph {
                 const auto materialized = available_node_collections();
                 for (const auto &[type_id, node_type]: db_context_.schema->node_types()) {
                     (void) type_id;
-                    if (!materialized.contains(node_type.name)) {
+                    if (!materialized.contains(storage_names_.node_name(type_id))) {
                         continue;
                     }
-                    auto &group = grouped[node_type.name];
+                    auto &group = grouped[storage_names_.node_name(type_id)];
                     group.insert(group.end(), unresolved.begin(), unresolved.end());
                 }
             }
@@ -1365,7 +1369,7 @@ namespace polygraph {
             // Frontier vertices are always sent to the home backend decoded from
             // their global ID. Therefore an Arango-routed frontier vertex is a real
             // document in its logical-type collection, never a cross-backend proxy.
-            return db_context_.schema->node_type(node.type).name;
+            return storage_names_.node_name(node.type);
         }
 
         [[nodiscard]] std::unordered_set<std::string> available_node_collections() const {
@@ -1387,8 +1391,7 @@ namespace polygraph {
             std::vector<TypeId> result;
 
             const auto append_if_materialized = [&](const TypeId edge_type_id) {
-                const auto &edge_type = db_context_.schema->edge_type(edge_type_id);
-                if (available_collections.contains(edge_type.name)) {
+                if (available_collections.contains(storage_names_.edge_name(edge_type_id))) {
                     result.push_back(edge_type_id);
                 }
             };
@@ -1627,7 +1630,7 @@ namespace polygraph {
                 }
             }
 
-            const TypeId neighbor_type = db_context_.schema->node_type_id(logical_type_name);
+            const TypeId neighbor_type = storage_names_.node_type(logical_type_name);
             if (!spec.allows_target_type(neighbor_type)) {
                 return std::nullopt;
             }
@@ -2024,6 +2027,17 @@ namespace polygraph {
              */
             auto collectionNames = fetchAndSortCollections(collections_endpoint(), auth, collection_type);
 
+            // Administrative and unrelated collections are outside this logical graph.
+            std::unordered_set<std::string> declared;
+            if (collection_type == collection_t::NODE) {
+                declared.insert("Proxy");
+                for (const auto &[id, type]: db_context_.schema->node_types())
+                    declared.insert(storage_names_.node_name(id));
+            } else {
+                for (const auto &[id, type]: db_context_.schema->edge_types())
+                    declared.insert(storage_names_.edge_name(id));
+            }
+            std::erase_if(collectionNames, [&](const auto &name) { return !declared.contains(name); });
             return get_union_query_for_collections(collectionNames);
         }
 
@@ -2130,7 +2144,7 @@ namespace polygraph {
             }
 
             return Node{.global_id = global_id,
-                        .type = db_context_.schema->node_type_id(logical_type_name),
+                        .type = storage_names_.node_type(logical_type_name),
                         .labels = {logical_type_name},
                         .properties = arango_document_properties(row)};
         }
@@ -2244,7 +2258,7 @@ namespace polygraph {
             }
 
             return Edge{.global_id = global_id,
-                        .type = db_context_.schema->edge_type_id(logical_edge_type_name),
+                        .type = storage_names_.edge_type(logical_edge_type_name),
                         .src = start_id,
                         .dst = end_id,
                         .properties = arango_edge_properties(row)};

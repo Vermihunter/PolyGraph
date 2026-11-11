@@ -1,0 +1,9 @@
+{"kind":"metadata","domain":"logical-contract-example","idRouting":["Neo4J","ArangoDB","PostgreSQL"],"idRoutingBits":16,"idPayloadBits":48}
+{"kind":"node","uuid":281474976710657,"type":"Device","source":"Neo4J","properties":{"external_id":7,"enabled":true,"temperature":21.5,"note":null,"tags":["indoor","primary"]}}
+{"kind":"node","uuid":281474976710658,"type":"Site","source":"Neo4J","properties":{"external_id":7,"name":"Lab"}}
+{"kind":"node","uuid":562949953421313,"type":"Gateway","source":"ArangoDB","properties":{"external_id":7,"name":"G1"}}
+{"kind":"node","uuid":"9223372036854775809","type":"Sensor","source":"PostgreSQL","properties":{"external_id":7,"name":"S1"}}
+{"kind":"relationship","uuid":281474976710659,"type":"INSTALLED_AT","source":"Neo4J","from":281474976710657,"to":281474976710658,"properties":{"since":"2026-11-07"}}
+{"kind":"relationship","uuid":281474976710660,"type":"INSTALLED_AT","source":"Neo4J","from":281474976710657,"to":281474976710658,"properties":{"since":"2026-11-07"}}
+{"kind":"relationship","uuid":"9223372036854775810","type":"REPORTS_TO","source":"PostgreSQL","from":"9223372036854775809","to":562949953421313,"properties":{}}
+{"kind":"relationship","uuid":562949953421314,"type":"CONNECTS","source":"ArangoDB","from":562949953421313,"to":281474976710657,"properties":{}}

@@ -68,7 +68,19 @@ namespace polygraph::ingestion::detail {
         const auto partition_map = load_partition_mapping(o, placement);
         auto partitioning = prepare_partition_assignments(o, db, scratch);
         auto adapter = make_adapter(o, scratch);
+        const auto id_policy = input_adapters(o).get(o.adapter).id_policy;
+        if (id_policy == InputIdPolicy::typed_external)
+            db.exec("CREATE TABLE source_edges(key TEXT PRIMARY KEY,id INTEGER NOT NULL UNIQUE) WITHOUT ROWID");
         auto entity = db.statement("INSERT INTO identities VALUES(?)");
+        const auto register_id = [&](Id id, const Record &record, bool edge) {
+            entity.bind(1, signed_id(id));
+            try {
+                entity.run();
+            } catch (const Error &e) {
+                throw Error("GlobalId collision/error " + std::to_string(id) + " on " +
+                            (edge ? "relationship " : "vertex ") + record.type + " " + record.key + ": " + e.what());
+            }
+        };
         auto node_insert = db.statement("INSERT INTO nodes VALUES(?,?,?,?,?,?,?)");
         auto edge_insert = db.statement("INSERT INTO edges VALUES(?,?,?,?,?,?,?)");
         auto lookup =
@@ -78,7 +90,15 @@ namespace polygraph::ingestion::detail {
         auto partition = db.statement("SELECT partition FROM partitions WHERE key=?");
         auto replica = db.statement("INSERT INTO replicas VALUES(?,?)");
         auto proxy = db.statement("INSERT OR IGNORE INTO proxies VALUES(?,?)");
-        LdbcIds ids;
+        LdbcIds ids; // Explicit legacy compatibility policy only; never a generic fallback.
+        auto source_edge = db.statement(
+                id_policy == InputIdPolicy::typed_external ? "INSERT INTO source_edges VALUES(?,?)" : "SELECT 1");
+        Id next_payload = 0;
+        const auto generated_id = [&](Backend home) {
+            if (next_payload >= (Id{1} << 48))
+                throw Error("Typed external ID payload space exhausted (48 bits)");
+            return make_id(home, next_payload++);
+        };
         std::uint64_t nodes = 0, edges = 0, cut = 0;
         std::map<std::string, std::string> safe_types;
         std::size_t type_bytes = 0;
@@ -100,6 +120,9 @@ namespace polygraph::ingestion::detail {
         const auto node_start = Clock::now();
         db.exec("BEGIN");
         adapter->nodes([&](Record r) {
+            resolve_record_keys(r, id_policy, false);
+            if (!r.id && id_policy == InputIdPolicy::canonical)
+                throw Error("Adapter " + o.adapter + " requires canonical GlobalId on node " + r.key);
             validate_record(r);
             check_type(r.type);
             auto home = placement.route(r, false);
@@ -122,10 +145,13 @@ namespace polygraph::ingestion::detail {
                     home = assigned;
                 }
             }
-            const auto id = r.id ? *r.id : ids.node(r, home);
+            if (r.source && *r.source != home)
+                throw Error("Record source disagrees with placement on node " + r.key);
+            const auto id = r.id                                         ? *r.id
+                            : id_policy == InputIdPolicy::typed_external ? generated_id(home)
+                                                                         : ids.node(r, home);
             const auto canonical = canonical_id(id);
-            entity.bind(1, signed_id(canonical));
-            entity.run();
+            register_id(canonical, r, false);
             node_insert.bind(1, signed_id(canonical));
             node_insert.bind(2, signed_id(id));
             node_insert.bind(3, r.key);
@@ -133,7 +159,11 @@ namespace polygraph::ingestion::detail {
             node_insert.bind(5, backend_name(home));
             node_insert.bind(6, r.properties.dump());
             node_insert.bind(7, static_cast<std::int64_t>((id >> 48) ^ (canonical >> 48)));
-            node_insert.run();
+            try {
+                node_insert.run();
+            } catch (const Error &e) {
+                throw Error("Duplicate/colliding vertex source identity " + r.key + ": " + e.what());
+            }
             if (++nodes % 50000 == 0)
                 db.exec("COMMIT; BEGIN");
         });
@@ -141,13 +171,28 @@ namespace polygraph::ingestion::detail {
         const auto node_seconds = elapsed(node_start);
         const auto edge_start = Clock::now();
         adapter->relationships([&](Record r) {
+            resolve_record_keys(r, id_policy, true);
+            if (!r.id && id_policy == InputIdPolicy::canonical)
+                throw Error("Adapter " + o.adapter + " requires canonical GlobalId on relationship " + r.type);
             validate_record(r);
             check_type(r.type);
             const auto home = placement.route(r, true);
-            const auto id = r.id ? *r.id : ids.edge(r, home);
+            if (r.source && *r.source != home)
+                throw Error("Record source disagrees with placement on relationship " + r.type);
+            const auto id = r.id                                         ? *r.id
+                            : id_policy == InputIdPolicy::typed_external ? generated_id(home)
+                                                                         : ids.edge(r, home);
             const auto canonical = canonical_id(id);
-            entity.bind(1, signed_id(canonical));
-            entity.run();
+            register_id(canonical, r, true);
+            if (id_policy == InputIdPolicy::typed_external && r.identity) {
+                source_edge.bind(1, r.key);
+                source_edge.bind(2, signed_id(canonical));
+                try {
+                    source_edge.run();
+                } catch (const Error &e) {
+                    throw Error("Duplicate/colliding relationship source identity " + r.key + ": " + e.what());
+                }
+            }
             struct Endpoint {
                 std::int64_t id;
                 std::string home;
@@ -199,9 +244,9 @@ namespace polygraph::ingestion::detail {
         db.exec("COMMIT");
         const auto edge_seconds = elapsed(edge_start);
         const auto metadata = adapter->metadata();
-        if (o.adapter == "polygraph-jsonl") {
+        if (id_policy == InputIdPolicy::canonical) {
             if (!metadata.contains("idRouting") || !metadata["idRouting"].is_array())
-                throw Error("Canonical JSONL metadata requires idRouting array");
+                throw Error("Canonical adapter " + o.adapter + " metadata requires idRouting array");
             std::set<Backend> configured;
             for (const auto &name: metadata["idRouting"]) {
                 const auto backend = parse_backend(name.get<std::string>());
@@ -210,9 +255,10 @@ namespace polygraph::ingestion::detail {
                     throw Error("Duplicate idRouting entry");
             }
             if (configured != std::set<Backend>(placement.backends.begin(), placement.backends.end()))
-                throw Error("JSONL idRouting differs from placement storageBackends");
+                throw Error("Canonical adapter " + o.adapter + " idRouting differs from placement storageBackends");
             if (metadata.value("idRoutingBits", 16) != 16 || metadata.value("idPayloadBits", 48) != 48)
-                throw Error("Unsupported JSONL ID layout; expected 16 location / 48 payload bits");
+                throw Error("Unsupported canonical ID layout for adapter " + o.adapter +
+                            "; expected 16 location / 48 payload bits");
         }
         finish_partition_metadata(o, db, scratch, partitioning);
         partitioning["backend_cross_edges"] = cut;

@@ -1,0 +1,11 @@
+{"kind": "metadata", "idRouting": ["Neo4J", "ArangoDB", "PostgreSQL"], "idRoutingBits": 16, "idRoutingPosition": "msb", "idLocationEncoding": "bitmask-msb-v1", "idLocationBits": 16, "idPayloadBits": 48, "idType": "uint64", "idLocations": {"Neo4J": 0, "ArangoDB": 1, "Memgraph": 2, "Redis": 3, "MMap": 4, "GPUBase": 5, "maxGpuDevices": 10}}
+{"kind": "node", "uuid": 281474976710657, "type": "Device-unit", "source": "Neo4J", "properties": {"serial-code": "0", "active": true, "gain-value": 1.5}}
+{"kind": "node", "uuid": 562949953421314, "type": "Site/office", "source": "ArangoDB", "properties": {"serial-code": "1", "active": true, "gain-value": 1.5}}
+{"kind": "node", "uuid": 9223372036854775811, "type": "Gateway:router", "source": "PostgreSQL", "properties": {"serial-code": "2", "active": true, "gain-value": 1.5}}
+{"kind": "node", "uuid": 9223372036854775812, "type": "Sensorµ", "source": "PostgreSQL", "properties": {"serial-code": "3", "active": true, "gain-value": 1.5}}
+{"kind": "relationship", "uuid": 281474976710756, "type": "INSTALLED-AT", "source": "Neo4J", "from": 281474976710657, "to": 562949953421314, "properties": {"port-number": 0}}
+{"kind": "relationship", "uuid": 281474976710757, "type": "INSTALLED-AT", "source": "Neo4J", "from": 281474976710657, "to": 562949953421314, "properties": {"port-number": 1}}
+{"kind": "relationship", "uuid": 562949953421414, "type": "REPORTS:TO", "source": "ArangoDB", "from": 9223372036854775812, "to": 9223372036854775811, "properties": {"port-number": 2}}
+{"kind": "relationship", "uuid": 9223372036854775911, "type": "CONNECTS.to", "source": "PostgreSQL", "from": 9223372036854775811, "to": 281474976710657, "properties": {"port-number": 3}}
+{"kind": "relationship", "uuid": 562949953421416, "type": "LOOPS.µ", "source": "ArangoDB", "from": 562949953421314, "to": 562949953421314, "properties": {"port-number": 4}}
+{"kind": "relationship", "uuid": 562949953421417, "type": "HOSTS/at", "source": "ArangoDB", "from": 562949953421314, "to": 9223372036854775811, "properties": {"slot-number": 7}}

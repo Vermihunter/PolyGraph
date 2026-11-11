@@ -1,0 +1,20 @@
+{
+  "format": "polygraph.domain",
+  "version": 1,
+  "id": "logical-contract-example",
+  "name": "Logical graph contract example",
+  "paths": {
+    "schema": "schema.json",
+    "data": "graph.jsonl",
+    "backendConfig": "backends.json",
+    "placementConfig": "placement.json",
+    "ingestionArtifacts": "../../../../build/graph-manifests/logical-contract",
+    "targetConfig": "../targets.example.json"
+  },
+  "ingestion": {
+    "adapter": "polygraph-jsonl",
+    "identity": {"strategy": "preserve-canonical-v2"},
+    "options": {"memory-limit-mb": 32, "max-record-mb": 4, "chunk-size-mb": 1}
+  },
+  "defaults": {"bfs": {"startUuid": "281474976710657", "maxDepth": 2, "direction": "undirected"}}
+}

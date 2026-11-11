@@ -4,6 +4,7 @@
  */
 
 #include "data_access/adapters/Neo4J/Neo4JQueryVisitor.hpp"
+#include "data_access/adapters/StorageTypeNames.hpp"
 
 #include "data_access/adapters/Neo4J/response_processors/LocallyDeployedNeo4JResponseProcessor.hpp"
 #include "data_model/AdjacencyRow.hpp"
@@ -52,6 +53,7 @@ namespace polygraph {
 
     struct Neo4JQueryVisitor::Impl final : QueryVisitor {
         const BackendConnectionConfig &config_;
+        StorageTypeNames storage_names_;
         std::shared_ptr<BackendRequestScheduler> scheduler_;
         LocallyDeployedNeo4JResponseProcessor response_processor_;
         bool use_bolt_ = true;
@@ -114,8 +116,8 @@ namespace polygraph {
     public:
         Impl(DatabaseContext &db_context, const BackendConnectionConfig &config,
              std::shared_ptr<BackendRequestScheduler> scheduler) :
-            QueryVisitor(db_context), config_(config), scheduler_(std::move(scheduler)),
-            response_processor_(db_context), use_bolt_(should_use_bolt(config)),
+            QueryVisitor(db_context), config_(config), storage_names_(*db_context.schema),
+            scheduler_(std::move(scheduler)), response_processor_(db_context), use_bolt_(should_use_bolt(config)),
             bolt_endpoint_(resolve_bolt_endpoint(config)) {
             if (!scheduler_) {
                 throw std::invalid_argument("Neo4JQueryVisitor requires a backend request scheduler");
@@ -218,7 +220,7 @@ namespace polygraph {
             }
 
             for (const auto &[node_type, rows]: native_node_groups) {
-                const std::string label = escape_cypher_identifier(db_context_.schema->node_type(node_type).name);
+                const std::string label = escape_cypher_identifier(storage_names_.node_name(node_type));
                 const std::string cypher = "UNWIND $rows AS row "
                                            "MERGE (n:POLYGRAPHVertex {localId: row.local_id}) "
                                            "SET n:" +
@@ -241,8 +243,7 @@ namespace polygraph {
 
             const auto insert_edges = [this](const std::unordered_map<TypeId, json> &groups, const bool native) {
                 for (const auto &[edge_type, rows]: groups) {
-                    const std::string relationship =
-                            escape_cypher_identifier(db_context_.schema->edge_type(edge_type).name);
+                    const std::string relationship = escape_cypher_identifier(storage_names_.edge_name(edge_type));
                     const std::string id_assignment = native ? "SET r.localId = row.local_id, r.type = row.type"
                                                              : "SET r.uuid = row.uuid, r.type = row.type";
                     // NOLINTBEGIN(performance-inefficient-string-concatenation)
@@ -962,7 +963,7 @@ namespace polygraph {
                 return;
             }
 
-            const TypeId neighbor_type = db_context_.schema->node_type_id(neighbor_type_name);
+            const TypeId neighbor_type = storage_names_.node_type(neighbor_type_name);
 
             if (!spec.allows_target_type(neighbor_type) || !seen_by_source[source_id].insert(neighbor_id).second) {
                 return;
@@ -1126,13 +1127,13 @@ namespace polygraph {
                 names.reserve(descriptor.coverage.edge_types.size());
 
                 for (TypeId edge_type_id: descriptor.coverage.edge_types) {
-                    names.push_back(db_context_.schema->edge_type(edge_type_id).name);
+                    names.push_back(storage_names_.edge_name(edge_type_id));
                 }
             } else {
                 names.reserve(spec.allowed_edge_types.size());
 
                 for (TypeId edge_type_id: spec.allowed_edge_types) {
-                    names.push_back(db_context_.schema->edge_type(edge_type_id).name);
+                    names.push_back(storage_names_.edge_name(edge_type_id));
                 }
             }
 
@@ -1191,7 +1192,7 @@ namespace polygraph {
             if (node.type == unresolved_type_id) {
                 throw std::logic_error("Cannot choose a Neo4j source label for an unresolved node type");
             }
-            return db_context_.schema->node_type(node.type).name;
+            return storage_names_.node_name(node.type);
         }
 
         std::unordered_map<std::string, std::vector<NodeRef>>
@@ -1215,7 +1216,7 @@ namespace polygraph {
                 // by the backend response and subsequent layers use one label.
                 for (const auto &[type_id, node_type]: db_context_.schema->node_types()) {
                     (void) type_id;
-                    auto &group = grouped[node_type.name];
+                    auto &group = grouped[storage_names_.node_name(type_id)];
                     group.insert(group.end(), unresolved.begin(), unresolved.end());
                 }
             }
@@ -1392,13 +1393,13 @@ namespace polygraph {
                     continue;
                 }
 
-                const TypeId neighbor_type = db_context_.schema->node_type_id(neighbor_type_name);
+                const TypeId neighbor_type = storage_names_.node_type(neighbor_type_name);
                 if (!spec.allows_target_type(neighbor_type)) {
                     continue;
                 }
 
                 const std::string edge_type_name = r[9].get<std::string>();
-                const TypeId edge_type = db_context_.schema->edge_type_id(edge_type_name);
+                const TypeId edge_type = storage_names_.edge_type(edge_type_name);
                 if (!spec.allows_edge_type(edge_type)) {
                     continue;
                 }

@@ -12,14 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tools.graphio import open_graph_reader
-from tools.graphio.id_codec import (
-    BackendLayout,
-    parse_global_id,
-    read_native_node_id_map,
-    resolve_native_node_id,
-)
-from tools.ldbc_snb.convert import Placement, csv_rows, discover_csv_files
-from tools.ldbc_snb.spec import EDGE_SPECS, NODE_SPECS
+from tools.graphio.id_codec import parse_global_id
 
 
 class Graph:
@@ -67,116 +60,18 @@ def load_graph(path: str | Path, *, undirected: bool = True) -> Graph:
     return graph
 
 
-def placement_from_schema(schema_path: str | Path) -> Placement:
-    """Reconstruct schema-based authoritative placement without reading graph.jsonl.
-
-    The generated LDBC graph-shape schema contains the authoritative source for
-    every node and relationship type.  That is sufficient for schema-based data
-    because PolyGraph's owner bits are backend-name based.  A genuinely
-    per-object distributed placement cannot be reconstructed from the schema
-    alone, so fail loudly rather than generating incorrect reference IDs.
-    """
-    path = Path(schema_path).expanduser().resolve()
-    raw = json.loads(path.read_text(encoding="utf-8"))
-
-    node_sources: dict[str, str] = {}
-    relationship_sources: dict[str, str] = {}
-    used_sources: set[str] = set()
-    distributed: list[str] = []
-
-    def source_for(record: dict, kind: str) -> str:
-        name = str(record.get("name", "<unknown>"))
-        source = str(record.get("source", "")).strip()
-        if not source or source == "Distributed":
-            distributed.append(f"{kind}:{name}")
-            return ""
-        used_sources.add(source)
-        return source
-
-    for record in raw.get("nodeTypes", []):
-        source = source_for(record, "node")
-        if source:
-            node_sources[str(record["name"])] = source
-
-    for record in raw.get("relations", []):
-        source = source_for(record, "relationship")
-        if source:
-            relationship_sources[str(record["name"])] = source
-
-    if distributed:
-        examples = ", ".join(distributed[:5])
-        suffix = " ..." if len(distributed) > 5 else ""
-        raise ValueError(
-            "Raw-CSV reference BFS cannot reconstruct per-object distributed placement "
-            f"from the graph schema alone ({examples}{suffix}). Use a schema-based domain "
-            "with explicit type placement or extend the reference configuration with the "
-            "original placement routing order."
-        )
-    if not used_sources:
-        raise ValueError(f"Graph schema contains no authoritative placement sources: {path}")
-
-    layout = BackendLayout.from_sources(used_sources)
-    return Placement(
-        storage_backends=layout.backends,
-        node_sources=node_sources,
-        relationship_sources=relationship_sources,
-    )
+def placement_from_schema(schema_path: str | Path):
+    """Compatibility alias; LDBC reconstruction belongs to the support package."""
+    from tools.ldbc_snb.reference_bfs import placement_from_schema as implementation
+    return implementation(schema_path)
 
 
-def load_ldbc_snb_graph(
-    input_dir: str | Path,
-    *,
-    schema_path: str | Path,
-    native_id_map_path: str | Path | None = None,
-    undirected: bool = True,
-) -> Graph:
-    """Load an LDBC SNB CsvBasic snapshot directly into reference adjacency.
-
-    No PolyGraph JSON/JSONL data is read.  IDs are regenerated using the same
-    bounded-memory node payload allocation as the LDBC converter.  Nodes must be
-    visited before relationships because the converter assigns compact prefix
-    codes in that deterministic order as well.
-    """
-    source = Path(input_dir).expanduser().resolve()
-    if not source.is_dir():
-        raise FileNotFoundError(f"LDBC CsvBasic input directory does not exist: {source}")
-
-    grouped = discover_csv_files(source)
-    placement = placement_from_schema(schema_path)
-    native_ids = read_native_node_id_map(native_id_map_path)
-    graph = Graph()
-
-    # First pass: reproduce the converter's deterministic node-prefix allocation.
-    for prefix, spec in NODE_SPECS.items():
-        for path in grouped.get(prefix, []):
-            for _header, row in csv_rows(path):
-                if not row:
-                    continue
-                external_id = row[0].strip()
-                if not external_id:
-                    continue
-                node_uuid, _ = placement.node_route(spec.type_name, external_id)
-                graph.add_node_uuid(resolve_native_node_id(node_uuid, native_ids))
-
-    # Second pass: construct adjacency directly from the original relationships.
-    for prefix, spec in EDGE_SPECS.items():
-        for path in grouped.get(prefix, []):
-            for _header, row in csv_rows(path):
-                if len(row) < 2:
-                    continue
-                from_id = row[0].strip()
-                to_id = row[1].strip()
-                if not from_id or not to_id:
-                    continue
-                from_uuid, _ = placement.node_route(spec.from_type, from_id)
-                to_uuid, _ = placement.node_route(spec.to_type, to_id)
-                graph.add_edge(
-                    resolve_native_node_id(from_uuid, native_ids),
-                    resolve_native_node_id(to_uuid, native_ids),
-                    undirected=undirected,
-                )
-
-    return graph
+def load_ldbc_snb_graph(input_dir: str | Path, *, schema_path: str | Path,
+                        native_id_map_path: str | Path | None = None, undirected: bool = True) -> Graph:
+    """Compatibility alias for the LDBC reference adapter."""
+    from tools.ldbc_snb.reference_bfs import load_ldbc_snb_graph as implementation
+    return implementation(input_dir, schema_path=schema_path, native_id_map_path=native_id_map_path,
+                          undirected=undirected, graph_factory=Graph)
 
 
 def save_depths_to_csv(depths: dict[int, int], path: str | Path) -> None:
@@ -191,6 +86,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run reference BFS over PolyGraph graph data or original LDBC SNB CsvBasic files."
     )
+    parser.add_argument("--graph-manifest", "--domain", dest="graph_manifest", help="Graph manifest, directory or domain ID; uses normalized data.")
+    parser.add_argument("--data-root", help="Search directory for graph IDs.")
     parser.add_argument("--input", help="Path to .json/.jsonl PolyGraph graph data")
     parser.add_argument("--input-json", dest="input_json", help="Backward-compatible alias for --input")
     parser.add_argument("--ldbc-input-dir", help="Original extracted LDBC CsvBasic directory containing static/ and dynamic/")
@@ -200,12 +97,40 @@ def parse_args() -> argparse.Namespace:
         help="Optional native node-ID map from the loaded domain; applied after reconstructing CSV IDs",
     )
     parser.add_argument("--output-csv", required=True)
-    parser.add_argument("--start-uuid", required=True, type=parse_global_id)
-    parser.add_argument("--max-depth", type=int, default=7, help="Use -1 for unlimited")
-    parser.add_argument("--directed", action="store_true", help="Treat relationships as directed")
+    parser.add_argument("--start-uuid", type=parse_global_id)
+    parser.add_argument("--max-depth", type=int, help="Defaults to graph config or 7; use -1 for unlimited")
+    direction = parser.add_mutually_exclusive_group()
+    direction.add_argument("--directed", dest="directed", action="store_const", const=True, default=None,
+                           help="Treat relationships as directed; overrides graph default.")
+    direction.add_argument("--undirected", dest="directed", action="store_const", const=False,
+                           help="Traverse both ways; overrides graph default.")
     args = parser.parse_args()
 
     args.input_path = args.input or args.input_json
+    if args.input and args.input_json:
+        parser.error("choose either --input or legacy --input-json")
+    if args.graph_manifest:
+        if args.input_path or args.ldbc_input_dir:
+            parser.error("--graph-manifest cannot be combined with input aliases")
+        from tools.graphio.domain import resolve_domain
+        domain = resolve_domain(args.graph_manifest, args.data_root)
+        args.input_path = str(domain.paths.data)
+        if args.max_depth is None:
+            args.max_depth = domain.max_depth
+        if args.directed is None:
+            if domain.direction not in {"directed", "undirected", "both"}:
+                parser.error("domain BFS direction must be directed, undirected or both")
+            args.directed = domain.direction == "directed"
+        if args.start_uuid is None:
+            if domain.start_uuid is None:
+                parser.error("Reference BFS requires a canonical --start-uuid; use polygraph.py run for typed --start-source roots")
+            args.start_uuid = parse_global_id(domain.start_uuid)
+    if args.max_depth is None:
+        args.max_depth = 7
+    if args.directed is None:
+        args.directed = False
+    if args.start_uuid is None:
+        parser.error("provide --start-uuid or a graph manifest with startUuid")
     if bool(args.input_path) == bool(args.ldbc_input_dir):
         parser.error("choose exactly one reference source: --input/--input-json or --ldbc-input-dir")
     if args.ldbc_input_dir and not args.schema:
