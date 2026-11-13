@@ -1,0 +1,113 @@
+\documentclass[a4paper]{article}
+
+\usepackage[a-2u]{pdfx}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{array}
+\usepackage[ddmmyyyy]{datetime}
+\usepackage{geometry}
+\hypersetup{hidelinks}
+\emergencystretch=1.5em
+
+\renewcommand{\dateseparator}{.}
+\renewcommand{\baselinestretch}{1.5}
+\geometry{margin=2cm}
+
+\def\ResearchProject{Research project}
+\def\CompanyProject{Company project}
+\def\SoftwareProject{Software project}
+
+% METADATA SECTION START
+\def\StudentsFullName{Ákos Vermes}
+\def\Obor{Computer Science - Software and Data Engineering}
+\def\ProjetTitle{Design and Implementation of PolyGraph for Heterogeneous Distributed Clusters}
+\def\ProjectType{\ResearchProject}
+\def\SupervisorFullName{Mgr. Tomáš Faltín, Ph.D.}
+\def\ConsultantsFullName{Ing. Pavel Koupil, Ph.D.}
+\def\ExpectedStart{2026-11-09}
+\def\ExpectedEnd{2027-05-31}
+% METADATA SECTION END
+
+\title{\ProjetTitle}
+\author{\StudentsFullName}
+
+\begin{document}
+
+\centerline{\Large \textbf{Proposal of team software project}}
+\centerline{\textbf{Department of Software Engineering}}
+\centerline{\textbf{Faculty of Mathematics and Physics, Charles University}}
+\bigskip
+
+{\noindent\begin{tabular}{@{}>{\raggedleft\arraybackslash}p{4cm}@{\hspace{0.8em}}>{\raggedright\arraybackslash}p{\dimexpr\textwidth-4cm-0.8em\relax}@{}}
+  {\bf Solvers:} & \StudentsFullName \\
+  {\bf Study program:} & \Obor \\
+  & \\
+  {\bf Project title:} & \ProjetTitle \\
+  {\bf Project type:} & \ProjectType \\
+  & \\
+  {\bf Supervisor:} & \SupervisorFullName \\
+  {\bf Consultants:} & \ConsultantsFullName \\
+  & \\
+  {\bf Expected start:} & \ExpectedStart \\
+  {\bf Expected end:} & \ExpectedEnd \\
+\end{tabular}}
+
+\section{Introduction}
+
+Graph databases store entities as nodes and relationships as edges connecting them. They are useful when a question concerns connections rather than individual records. For example, a social network may need to find users reachable through several friendship links. Answering such a query requires following relationships through the graph, potentially across millions of users.
+
+As graphs grow, a single computer may not have enough memory or processing power to analyze them efficiently. Using multiple machines offers more resources, but introduces a new difficulty: related parts of a graph may be stored on different machines, requiring communication over the network during a traversal. Moreover, machines may differ in their available memory and whether they have a graphics processing unit (GPU). Choosing where to place data and execute work therefore has a direct impact on performance.
+
+This project proposes PolyGraph, a distributed framework for graph processing over heterogeneous database systems using CPU and GPU resources. Its goal is to coordinate graph execution across multiple machines while reducing unnecessary data transfers. The project is related to the research of the Adaptive Data Management (ADaM) Research Group at Charles University~\cite{adam}, which studies database systems and the management of heterogeneous data.
+
+\subsection{Relation to other projects}
+
+The project is related to MM-Cat~\cite{mmcat}, a framework for modeling and transforming data across different database models and systems, including combinations of several database systems (polystores). Both projects address the challenge of working with data stored in multiple database systems. However, MM-Cat takes a broader multi-model perspective, whereas PolyGraph will specialize in graph data and the distributed execution of graph algorithms. Since this requires graph-specific partitioning, traversal, and resource management, PolyGraph will be developed as a separate system.
+
+\section{Project description}
+
+The proposed system will consist of three architectural planes:
+
+\noindent\textbf{Control plane.} It will track available machines, assign parts of the graph to workers, and schedule computation. It will consider the resources of individual workers and support redistribution of graph partitions when cluster conditions change.
+
+\medskip
+\noindent\textbf{Execution plane.} It will run graph algorithms across workers, initially focusing on breadth-first search, which visits nodes in increasing order of their distance from a starting node. Workers will process their local graph data and exchange work when a traversal reaches another worker's partition. GPU acceleration will be used where it is available and beneficial.
+
+\medskip
+\noindent\textbf{Storage plane.} It will provide a common interface for reading graph data regardless of the database in use. Separate adapters for PostgreSQL, ArangoDB, and Neo4j will translate graph operations into requests understood by each system. Additional databases could later be supported by implementing the same interface.
+
+The graph will be divided into partitions and smaller blocks so that only the data needed for a computation must be loaded. When an edge crosses a partition boundary, the system will use partition metadata to find the responsible worker and forward the corresponding work. Combining several requests into a single message may reduce network overhead.
+
+Caching will help avoid repeated database reads and remote data transfers. The design will consider RAM caches for frequently accessed graph blocks, GPU-memory caches for data used by accelerated operations, and metadata caches for locating partitions and their copies. Loading, replacement, and placement policies will take memory limits, access patterns, and transfer costs into account.
+
+\section{Expected results}
+
+The main deliverable will be a C++ prototype demonstrating distributed graph traversal over heterogeneous database backends. It will include the necessary worker coordination, database adapters, graph partitioning, and basic caching mechanisms. A working demonstration, source code, tests, and technical documentation will accompany the prototype.
+
+The system will be evaluated experimentally using representative graph workloads, including LDBC Social Network Benchmark data. Measurements will examine query latency, scaling efficiency, network traffic, and memory usage under different partition placements, cluster sizes, and CPU/GPU configurations. The results will help identify when distribution and acceleration are beneficial and where communication or caching becomes a bottleneck. The prototype and findings may also provide a basis for a research demonstration or publication.
+
+\section{Solver's tasks}
+
+The solver will first define the common graph-access interface and develop database adapters. The next task is to implement worker coordination and distributed breadth-first search. Further work will address partition handling, caching, and GPU acceleration where feasible. Finally, the solver will prepare tests, benchmarking scripts, documentation, and a demonstration.
+
+\section{Project implementation}
+
+Development will begin by defining the graph-access interface, preparing test data, and validating a single-worker baseline. The next stage will introduce communication between workers, distributed graph traversal, and database adapters. Caching and GPU support will then be added incrementally, followed by integration testing, benchmarking, and preparation of the final demonstration.
+
+To keep the scope achievable, the first distributed version may use fixed partition placement and simple caching policies. More advanced rebalancing and cache optimization will be explored after a correct and reproducible baseline is available. The initial implementation will focus on read-oriented graph processing; distributed updates and transactions are outside the project scope.
+
+\begin{thebibliography}{2}
+\bibitem{adam}
+CNAIP, ``Adaptive Data Management Research Group,''
+\url{https://www.cnaip.cz/cs/entity/adaptive-data-management-research-group} (accessed November 5, 2026).
+
+\bibitem{mmcat}
+P. Koupil, M. Svoboda, and I. Holubov\'{a},
+``MM-cat: A Tool for Modeling and Transformation of Multi-Model Data using Category Theory,''
+in \emph{2021 ACM/IEEE International Conference on Model Driven Engineering Languages and Systems Companion (MODELS-C)},
+pp.~635--639, 2021.
+\url{https://doi.org/10.1109/MODELS-C53483.2021.00098}.
+\end{thebibliography}
+
+\end{document}

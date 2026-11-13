@@ -1,0 +1,134 @@
+\documentclass{article}
+
+% Frequently Asked Questions, Notes, ....
+% 01) You can use Czech or English to fill in the template.
+% 02) Fill in the metadata section.
+%
+
+\usepackage[a-2u]{pdfx}
+\usepackage[utf8]{inputenc}
+\usepackage{array}
+\usepackage[ddmmyyyy]{datetime}
+\usepackage{geometry}
+
+\renewcommand{\dateseparator}{.}
+\renewcommand{\baselinestretch}{1.5}
+
+\geometry{margin=2cm}
+
+\def\ResearchProject{Research project}
+\def\CompanyProject{Company project}
+\def\SoftwareProject{Software project}
+
+% METADATA SECTION START
+\def\StudentsFullName{Ailish Stormwind, Johny Colaborator}
+\def\StudyProgram{Computer Science --- Software and Data Engineering}
+\def\ProjectTitle{My research project}
+% Use "\ResearchProject", "\CompanyProject", \SoftwareProject"
+\def\ProjectType{\ResearchProject}
+\def\SupervisorFullName{Chuck Norris}
+\def\ConsultantsFullName{Somemebody Else}
+% METADATA SECTION END
+
+\title{\ProjectTitle}
+\author{\StudentFullName}
+
+\begin{document}
+
+\centerline{\Large \textbf{Specification of team software project}}
+\centerline{ \textbf{Department of Software Engineering}}
+\centerline{ \textbf{Faculty of Mathematics and Physics, Charles University}}
+\bigskip
+{\noindent\begin{tabular*}{\textwidth}{ >{\raggedleft}m{4cm} l}
+ \textbf{Solvers:} & \StudentsFullName \\
+ \textbf{Study program:} & \StudyProgram \\[1em]
+ \textbf{Project title:} & \ProjectTitle \\
+ \textbf{Project type:} & \ProjectType \\[1em]
+ \textbf{Supervisor:} & \SupervisorFullName \\  
+ \textbf{Consultants:} & \ConsultantsFullName \\
+\end{tabular*}}
+
+\section{Introduction}
+In this section, introduce the research team that you are going to be part of.
+Next, introduce the project in which you want to participate.
+Explain the objectives of the projects; you may also elaborate on drawbacks, especially if you plan to address any of them.
+
+In a separate paragraph, introduce your project, i.e. your contribution.
+Do not venture into details; we get to them later.
+
+\subsection{Relation to other projects}
+In this section, explain how your contribution is connected to other projects.
+
+You can also draft the architecture of the existing projects.
+Do not describe the architecture of your solution here.
+
+You should also comment on the expected scope and forms of cooperation with other team members.
+
+\section{Project description}
+Describe your project in detail.
+Most likely the project is not set in stone, and you may need to change things as the project goes.
+If that is the case, just provide us with the plan and comment on possible changes.
+
+\subsection{Functional requirements}
+List known functional requirements or use-cases.
+
+\subsection{Non-Functional requirements}
+List known non-functional requirements.
+
+\subsection{Mockups}
+Here, you can showcase mockups, or storyboards (preferred option), and describe the functionality of the screens you plan to implement.
+
+\subsection{Architecture}
+Describe the high-level architecture of your solution.
+Use a well-known visual notation to describe architecture.
+We recommend the first two levels of C4 model --- \url{https://c4model.com/}.
+
+\section{Platform and technologies}
+List technologies, languages, and libraries that you plan to utilize.
+This is not a definitive list; later changes are possible.
+
+\section{Evaluation}
+In this section, you should elaborate on how you plan to test and evaluate the software.
+If your software is primarily designed to run an experiment, you should present results of the experiment.
+If your software aims to support users in a given activity, you should present the results of a user study demonstrating the benefits for said users.
+
+\section{Risks}
+Comment on any uncertainty about the project.
+How do you plan to tackle the uncertainty and what are the alternative solutions?
+
+\section{Milestones / Deliverables}
+What will be created, what will be presented to the commission, and how?
+Is there a demonstration scheduled for the research group?
+If the project is closed source, how do you provide access to the source code?
+
+\section{Time Schedule}
+Here you can comment on the schedule, and reflection of risks, iterations, overlaps, synchronization points, etc..
+Do not forget to plan your deployment and especially reserve enough time to create necessary documentation.
+
+\hskip-0.5cm
+\begin{tabular}{ | m{11em} | m{23em} | m{2.5cm} | m{1.3cm} | }
+   \hline
+ Milestone / Deliverable & Activity & Time schedule & Man-days \\
+ \hline
+ Prototype & Implementation & Month 1 & 20 \\
+           & Testing & Month 2 & 4 \\
+ \hline
+ First version & Implementation & Months 3 -- 4 & 40 \\
+               & Deployment & Month 4 & 2 \\
+               & Documentation & Month 4 & 6 \\
+ \hline
+ Evaluation & & Months 4 -- 5 & 5 \\
+ \hline
+\end{tabular}
+
+\section{Form of collaboration}
+In this section, you should elaborate on how you plan to collaborate with your supervisor as well as other team members.
+
+\subsection{Consulting plan}
+Explain the expected time frame for team meetings, that is, how often and how long.
+You can also comment on the expected content of the meeting.
+
+\subsection{Collaboration with other team members}
+Describe expected interactions with other team members.
+
+\end{document}
